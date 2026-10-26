@@ -1,0 +1,167 @@
+{
+  "title": "Claude Developer Foundations",
+  "subtitle": "ฉบับภาษาไทย",
+  "description": "พื้นฐานการพัฒนาด้วย Claude: agent, Messages API, Claude Code, prompt engineering, security และ MCP",
+  "source": {
+    "name": "CertSafari: Claude Developer Foundations",
+    "url": "https://www.certsafari.com/anthropic/claude-developer-foundations/learn"
+  },
+  "domains": [
+    {
+      "num": "1",
+      "name": "Agents and Workflows",
+      "weight": 15,
+      "lessons": [
+        {
+          "num": "1.1",
+          "title": "Agent architecture: workflows, agents, orchestrator–subagent"
+        },
+        {
+          "num": "1.2",
+          "title": "Ways to build and host a Claude agent"
+        },
+        {
+          "num": "1.3",
+          "title": "Agent patterns: workflows, subagents, memory"
+        }
+      ]
+    },
+    {
+      "num": "2",
+      "name": "Applications and Integration",
+      "weight": 33,
+      "lessons": [
+        {
+          "num": "2.1",
+          "title": "Functional requirements → model choice"
+        },
+        {
+          "num": "2.2",
+          "title": "Model lifecycle: deprecation, retirement, migration"
+        },
+        {
+          "num": "2.3",
+          "title": "Messages API: requests, state, tools, streaming, vision"
+        },
+        {
+          "num": "2.4",
+          "title": "Calling the API: REST, JSON, sync vs async"
+        },
+        {
+          "num": "2.5",
+          "title": "App design: surfaces, instruction placement, output schemas"
+        },
+        {
+          "num": "2.6",
+          "title": "Config management: CLAUDE.md, settings, pinning"
+        }
+      ]
+    },
+    {
+      "num": "3",
+      "name": "Claude Code",
+      "weight": 3,
+      "lessons": [
+        {
+          "num": "3.1",
+          "title": "Project config: CLAUDE.md, rules, auto memory, settings.json"
+        }
+      ]
+    },
+    {
+      "num": "4",
+      "name": "Eval, Testing, and Debugging",
+      "weight": 3,
+      "lessons": [
+        {
+          "num": "4.1",
+          "title": "API error types and recovery"
+        }
+      ]
+    },
+    {
+      "num": "5",
+      "name": "Model Selection and Optimization",
+      "weight": 17,
+      "lessons": [
+        {
+          "num": "5.1",
+          "title": "How LLMs work: tokens, context window, sampling"
+        },
+        {
+          "num": "5.2",
+          "title": "REST: endpoints, headers, SDKs"
+        },
+        {
+          "num": "5.3",
+          "title": "Choosing a model: tiers, effort, fast mode"
+        },
+        {
+          "num": "5.4",
+          "title": "Token pricing, counting, usage tracking"
+        }
+      ]
+    },
+    {
+      "num": "6",
+      "name": "Prompt and Context Engineering",
+      "weight": 11,
+      "lessons": [
+        {
+          "num": "6.1",
+          "title": "Context window budget & tool output pruning"
+        },
+        {
+          "num": "6.2",
+          "title": "Prompt engineering: clarity, examples, placement, format"
+        },
+        {
+          "num": "6.3",
+          "title": "Structured outputs & strict tool use"
+        }
+      ]
+    },
+    {
+      "num": "7",
+      "name": "Security and Safety",
+      "weight": 8,
+      "lessons": [
+        {
+          "num": "7.1",
+          "title": "Prompt injection & jailbreak defense"
+        },
+        {
+          "num": "7.2",
+          "title": "Guardrail layering & content policy"
+        },
+        {
+          "num": "7.3",
+          "title": "Claude Code hooks: events, matchers, handlers"
+        },
+        {
+          "num": "7.4",
+          "title": "API keys: storage, rotation, leak response"
+        }
+      ]
+    },
+    {
+      "num": "8",
+      "name": "Tools and MCPs",
+      "weight": 11,
+      "lessons": [
+        {
+          "num": "8.1",
+          "title": "Defining tools: schemas, descriptions, tool set design"
+        },
+        {
+          "num": "8.2",
+          "title": "MCP primitives: tools, resources, prompts"
+        },
+        {
+          "num": "8.3",
+          "title": "Built-in vs custom tools, skills, MCP"
+        }
+      ]
+    }
+  ]
+}

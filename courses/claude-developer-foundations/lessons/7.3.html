@@ -1,0 +1,250 @@
+<section class="lesson" id="l-7-3">
+<h2>7.3 Claude hooks as guardrails: events, matchers and handlers</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-hooks-as-guardrails-events-matchers-and-handlers">CertSafari 7.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกชื่อ hook event ที่ fire รอบ tool call, รอบ turn และรอบ session ได้</li>
+    <li>แยกได้ว่า event ไหน <strong>หยุด action ได้</strong> และ event ไหนแค่ <strong>สังเกตหลังเกิดเหตุ</strong></li>
+    <li>เขียน matcher แบบชื่อตรงตัว (exact) หรือ regular expression เพื่อเล็ง tool ที่ต้องการ</li>
+    <li>เลือก handler type และที่เก็บ settings ที่เหมาะกับ guardrail hook</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: hook = policy ที่รันทุกครั้ง</span>
+  <p>Hook คือ handler ที่ลงทะเบียนไว้กับ lifecycle event Claude Code จะรันมันทุกครั้งที่ event นั้นเกิด <strong>ไม่ว่า model ตั้งใจอะไร</strong> ถ้า event fire ก่อน action มีผล hook ก็ปฏิเสธ action นั้นได้ นโยบายที่เคยเป็นแค่ตัวหนังสือจึงกลายเป็นด่านตรวจที่ไม่มีวันข้าม</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Hook คือชั้นที่รันกับทุก tool call</h3>
+<p>ความต่างแบบสั้นที่สุด: คำสั่งใน prompt Claude <strong>เอาไปชั่งน้ำหนัก</strong> ส่วน hook Claude Code <strong>เอาไปรัน</strong> hook ไม่พึ่งว่า model จะเชื่อฟังหรือเปล่า มันจึงทำงานแม้กับ tool call ที่ model ถูก injected content หลอกให้เรียก</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ความถี่</th><th>Event</th></tr>
+  <tr><td>ครั้งเดียวต่อ session</td><td><code>SessionStart</code>, <code>SessionEnd</code></td></tr>
+  <tr><td>ครั้งเดียวต่อ turn</td><td><code>UserPromptSubmit</code>, <code>Stop</code>, <code>StopFailure</code></td></tr>
+  <tr><td>รอบทุก tool call</td><td><code>PreToolUse</code>, <code>PostToolUse</code> (ยกเว้น call <code>EndConversation</code> ที่ข้ามทั้งคู่)</td></tr>
+</table></div>
+<p>Guardrail ส่วนใหญ่เล็งไปที่คู่ PreToolUse/PostToolUse เพราะ tool call คือจุดที่ agent แก้ไฟล์ รัน shell และเรียก service ภายนอก</p>
+<p>นอกจาก block แล้ว hook ยังใช้ได้อีกหลายอย่าง เช่น audit ทุกคำสั่ง Bash ลง log, บังคับให้มนุษย์ approve ก่อนเขียน database, หรือ rewrite tool input ก่อนรัน (Agent SDK docs ยกเคส approval และ blocking ไว้)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Prompt = ขอร้อง, hook = บังคับ และ tool call คือสนามหลักของ guardrail</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>คุณตั้ง PreToolUse hook matcher <code>*</code> ที่เขียนทุก tool call ลงไฟล์ audit ต่อมาพบว่ามี call ประเภทหนึ่งไม่เคยโผล่ใน log เลย น่าจะเป็น call อะไร?</p>
+  <ol type="A">
+    <li>Bash ที่รันเกิน 2 นาที</li>
+    <li>Call ไปยัง MCP tool</li>
+    <li><code>EndConversation</code></li>
+    <li>Write ที่สร้างไฟล์ใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> tool event fire กับทุก tool call ยกเว้น <code>EndConversation</code> ที่ข้ามทั้ง PreToolUse และ PostToolUse ส่วน MCP tool ก็โดน <code>*</code> จับเหมือน tool อื่น</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Event ไหนหยุด action ได้</h3>
+<p>ลองเดาก่อน: PostToolUse hook บน Bash เห็นคำสั่ง <code>rm -rf build/</code> แล้ว exit 2 จะเกิดอะไรขึ้น? คำตอบ: <strong>ไม่มีอะไรถูกย้อนกลับ</strong> Claude แค่เห็น stderr เพราะคำสั่งรันไปแล้ว</p>
+<div class="box key"><span class="tag">กฎหลัก</span>
+  <p>Hook หยุด action ได้ <strong>ก็ต่อเมื่อ event ของมัน fire ก่อน action มีผล</strong> เหมือนยามที่ยืนหน้าประตูกันคนเข้าได้ ยามที่ยืนหลังประตูทำได้แค่จดว่าใครเข้าไปแล้ว</p>
+</div>
+<ul>
+  <li><code>PreToolUse</code> fire ก่อนรัน ยกเลิก call ได้</li>
+  <li><code>UserPromptSubmit</code> fire ก่อน Claude ประมวลผล prompt block แล้ว prompt ไม่ถึง Claude</li>
+  <li><code>UserPromptExpansion</code> block การ expand คำสั่งที่พิมพ์ให้กลายเป็น prompt ได้</li>
+  <li><code>PreModelSwitch</code> veto การขอเปลี่ยน model ได้</li>
+  <li><code>PostToolUse</code> และ <code>PostToolUseFailure</code> fire หลังสำเร็จหรือล้มเหลว เหมาะกับ audit, lint, report กลับ แต่สายเกินจะกันอะไร</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>Hook event</th><th>Block ได้?</th><th>Exit code 2 ทำอะไร</th></tr>
+  <tr><td>PreToolUse</td><td>ได้</td><td>block tool call</td></tr>
+  <tr><td>UserPromptSubmit</td><td>ได้</td><td>block prompt ก่อน Claude เห็น</td></tr>
+  <tr><td>UserPromptExpansion</td><td>ได้</td><td>block การ expand</td></tr>
+  <tr><td>Stop</td><td>ได้</td><td>ไม่ให้หยุด ให้ conversation ทำต่อ</td></tr>
+  <tr><td>ConfigChange</td><td>ได้</td><td>block การเปลี่ยน config ยกเว้น policy settings</td></tr>
+  <tr><td>PostToolUse</td><td>ไม่ได้</td><td>โชว์ stderr ให้ Claude, tool รันไปแล้ว</td></tr>
+  <tr><td>PermissionRequest</td><td>ไม่ได้ (ด้วย exit 2)</td><td>exit 2 ถูกเมิน ต้อง deny ผ่าน JSON decision object</td></tr>
+</table></div>
+<ul>
+  <li>"Block" ไม่ได้แปลว่าห้ามของอันตรายเสมอ บน <code>Stop</code> และ <code>SubagentStop</code> การ block คือ <strong>บังคับให้ Claude ทำงานต่อ</strong> เช่น ห้ามหยุดจนกว่า test จะผ่าน</li>
+  <li><code>PermissionRequest</code> fire ตอน tool call ต้องขอ approval แต่ exit 2 ไม่มีผล ต้องคืน decision ใน JSON output</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"PostToolUse ที่ exit 2 หยุด call ทำลายล้างได้"</strong> ไม่ได้ มัน fire หลัง tool สำเร็จแล้ว การกันต้องอยู่ใน PreToolUse</p>
+  <p><strong>"PermissionRequest hook exit 2 = deny"</strong> ไม่ใช่ event นี้เมิน exit 2 ต้องตอบ decision เป็น JSON</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อยู่ก่อน action = กันได้ (PreToolUse, UserPromptSubmit, UserPromptExpansion, PreModelSwitch, Stop, ConfigChange) อยู่หลัง = แค่สังเกต (PostToolUse, PostToolUseFailure) และ PermissionRequest ต้อง deny ด้วย JSON</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Security lead เขียนรายการ "event ที่ใช้กันความเสียหายได้" ดังนี้ ข้อไหนผิด?</p>
+  <ol type="A">
+    <li>PreToolUse: ปฏิเสธ <code>curl</code> ไปยังโดเมนที่ไม่อยู่ใน allowlist ได้</li>
+    <li>UserPromptSubmit: กัน prompt ที่มี secret ไม่ให้ไปถึง Claude ได้</li>
+    <li>PostToolUse: ย้อนการ overwrite ไฟล์ <code>.env</code> ได้ด้วย exit 2</li>
+    <li>ConfigChange: block การแก้ settings กลาง session ได้ (ยกเว้น policy settings)</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> PostToolUse fire หลังไฟล์ถูกเขียนไปแล้ว exit 2 แค่ส่ง stderr ให้ Claude ไม่ได้ undo อะไร</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ทีม platform ต้องการรับประกันว่า agent จะไม่รัน <code>kubectl delete</code> กับ namespace <code>prod</code> เด็ดขาด ควรผูก hook กับ event ไหน?</p>
+  <ol type="A">
+    <li>PreToolUse</li>
+    <li>PostToolUse</li>
+    <li>Stop</li>
+    <li>Notification</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> fire ก่อนรันและ deny ได้ PostToolUse สายไป Stop fire ตอนจบ turn ส่วน Notification แค่รายงานสถานะ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เล็งเป้าด้วย matcher และ <code>if</code> condition</h3>
+<p>Config มี 3 ระดับ: <strong>เลือก event → ใส่ matcher group เพื่อกรองว่าจะ fire เมื่อไหร่ → ระบุ handler หนึ่งตัวหรือมากกว่า</strong></p>
+<ul>
+  <li><strong>Tool event</strong> (PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, PermissionDenied) match กับ <strong>ชื่อ tool</strong></li>
+  <li>Event อื่นกรองด้วย field อื่น เช่น SessionStart กรองตามวิธีที่ session เริ่ม, PreCompact กรองว่า compaction เป็นแบบ manual หรือ automatic</li>
+  <li>บาง event <strong>ไม่รองรับ matcher</strong> fire ทุกครั้ง เช่น UserPromptSubmit, Stop, PostToolBatch</li>
+</ul>
+
+<h3>Claude Code อ่าน matcher string ยังไง</h3>
+<div class="table-wrap"><table>
+  <tr><th>รูปแบบ</th><th>ถูกตีความเป็น</th><th>ตัวอย่าง</th></tr>
+  <tr><td><code>*</code>, string ว่าง, หรือไม่ใส่ matcher</td><td>match ทุกอย่าง</td><td><code>*</code></td></tr>
+  <tr><td>มีแค่ตัวอักษร, ตัวเลข, <code>_</code>, <code>-</code>, ช่องว่าง, comma, <code>|</code></td><td>ชื่อ exact หรือ list ของชื่อ exact</td><td><code>Edit|Write</code> = Edit หรือ Write เท่านั้น</td></tr>
+  <tr><td>มีอักขระอื่นปน</td><td>JavaScript regex แบบ <strong>unanchored</strong></td><td><code>^Notebook</code> = tool ที่ชื่อขึ้นต้นด้วย Notebook</td></tr>
+</table></div>
+<p>MCP tool ตั้งชื่อแบบ <code>mcp__&lt;server&gt;__&lt;action&gt;</code> regex อย่าง <code>mcp__memory__.*</code> จึงครอบทั้ง server ได้ในทีเดียว</p>
+
+<h3><code>if</code> condition: กรองลึกถึง argument</h3>
+<p>Matcher เห็นแค่ชื่อ tool ถ้าอยากให้ handler รันเฉพาะ argument บางแบบ ใส่ field <code>if</code> บน handler ด้วย permission-rule syntax เช่น <code>Bash(rm *)</code> จะได้ไม่ต้องปลุก script ทุกครั้งที่มี Bash call</p>
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",                       // ระดับ 1: ชื่อ tool
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(rm *)",                  // ระดับ 2: เฉพาะคำสั่งที่ขึ้นต้นด้วย rm
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-rm.sh",
+            "args": []
+          }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+<pre><code>#!/usr/bin/env bash
+# block-rm.sh: อ่าน event JSON จาก stdin
+cmd=$(jq -r '.tool_input.command')
+if [[ "$cmd" == *"-rf"* ]]; then
+  echo "ห้าม rm -rf ใน repo นี้" &gt;&amp;2   # stderr จะถูกส่งกลับให้ Claude
+  exit 2                                  # exit 2 = blocking error
+fi
+exit 0</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"<code>Edit|Write</code> เป็น regex เลย match ชื่ออะไรก็ได้ที่มีคำว่า Edit หรือ Write"</strong> ไม่ใช่ string ที่มีแค่ตัวอักษรกับ <code>|</code> เป็น exact list จะกลายเป็น regex ก็ต่อเมื่อมีอักขระอื่นปน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>event → matcher (ชื่อ tool, exact หรือ regex) → <code>if</code> (argument) → handler → Claude Code ทำตามผลของ handler</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เรียงลำดับ)</span>
+  <p>Claude เรียก Bash ด้วย <code>rm -rf dist/</code> เรียงลำดับสิ่งที่เกิดขึ้นในระบบ hook:</p>
+  <ol type="a">
+    <li>Handler script รัน</li>
+    <li>Matcher เทียบชื่อ tool กับ <code>Bash</code></li>
+    <li>Claude Code ทำตามผลที่ handler คืนมา</li>
+    <li>Event PreToolUse fire พร้อมชื่อ tool และ input</li>
+    <li>เช็ก <code>if</code> ว่าเข้ากับ <code>Bash(rm *)</code> ไหม</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>d → b → e → a → c</strong> event มาก่อน แล้วกรองสองชั้น (ชื่อ tool แล้วค่อย argument) จากนั้นค่อยรัน handler</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่ matcher กับสิ่งที่มัน match:</p>
+  <ol>
+    <li><code>Read|Grep</code></li>
+    <li><code>mcp__github__.*</code></li>
+    <li>(ไม่ใส่ matcher)</li>
+    <li><code>Web.*</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → Read หรือ Grep เท่านั้น (exact list) · 2 → ทุก tool ของ MCP server ชื่อ github · 3 → ทุกครั้งที่ event fire · 4 → regex แบบ unanchored จึง match ทุก tool ที่มี "Web" ตามด้วยอะไรก็ได้ เช่น WebFetch, WebSearch</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Handler type และที่เก็บ config</h3>
+<div class="table-wrap"><table>
+  <tr><th>Type</th><th>ทำอะไร</th></tr>
+  <tr><td><code>command</code></td><td>รัน local script ที่รับ event data</td></tr>
+  <tr><td><code>http</code></td><td>ส่ง event data ไปที่ URL</td></tr>
+  <tr><td><code>mcp_tool</code></td><td>เรียก tool บน MCP server ที่ config ไว้</td></tr>
+  <tr><td><code>prompt</code></td><td>ให้ LLM ประเมินแบบ single-turn</td></tr>
+  <tr><td><code>agent</code></td><td>verification แบบ multi-turn ที่ใช้ tool ได้ (experimental)</td></tr>
+</table></div>
+<ul>
+  <li><strong>กฎแข็ง</strong> ให้ใช้ <code>command</code> เพราะ input เดิมได้ decision เดิมทุกครั้ง (deterministic)</li>
+  <li><code>prompt</code> กับ <code>agent</code> เอา judgment ของ model มาช่วย เหมาะกับ policy ที่คลุมเครือจน regex เขียนไม่ได้</li>
+  <li>Admin จำกัด HTTP handler ได้ด้วย <code>allowedHttpHookUrls</code> พอตั้งไว้ที่ settings ระดับไหนก็ตาม จะรันได้เฉพาะ URL ที่อยู่ใน allowlist ที่ merge แล้ว</li>
+</ul>
+
+<h3>Config อยู่ที่ไหน = คุ้มครองใคร</h3>
+<div class="table-wrap"><table>
+  <tr><th>Location</th><th>Scope</th><th>แชร์ได้?</th></tr>
+  <tr><td><code>~/.claude/settings.json</code></td><td>ทุกโปรเจกต์ของเรา</td><td>ไม่ อยู่แค่เครื่องเรา</td></tr>
+  <tr><td><code>.claude/settings.json</code></td><td>โปรเจกต์เดียว</td><td>ได้ commit ไปกับ repo</td></tr>
+  <tr><td><code>.claude/settings.local.json</code></td><td>โปรเจกต์เดียว</td><td>ไม่ ถูก gitignore</td></tr>
+  <tr><td>Managed policy settings</td><td>ทั้ง organization</td><td>ได้ admin เป็นคนคุม</td></tr>
+  <tr><td>Plugin <code>hooks/hooks.json</code></td><td>ตอน plugin เปิดอยู่</td><td>ได้ มากับ plugin</td></tr>
+  <tr><td>Subagent frontmatter</td><td>ตอน subagent นั้นรัน</td><td>ได้ อยู่ในไฟล์ subagent</td></tr>
+</table></div>
+<p>Hook ในไฟล์ user คุ้มครองแค่เรา ส่วน hook ในไฟล์โปรเจกต์คุ้มครองทุกคนที่ clone repo ไป</p>
+
+<h3>Exit code ที่ต้องจำ</h3>
+<ul>
+  <li><code>0</code> = สำเร็จ (และอ่าน JSON บน stdout ได้)</li>
+  <li><code>2</code> = blocking error, stderr ถูกส่งกลับให้ Claude ใช้ block ได้โดยไม่ต้องมี JSON</li>
+  <li><code>1</code> หรือ non-zero อื่น = non-blocking error, ไม่ block</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>กฎแข็งใช้ <code>command</code> + exit 2, policy เบลอใช้ <code>prompt</code>/<code>agent</code>, อยากให้ทั้งทีมได้ใส่ <code>.claude/settings.json</code>, อยากบังคับทั้งองค์กรใช้ managed policy</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>Tech lead อยากให้ hook ที่ block การแก้ไฟล์ใน <code>migrations/</code> ติดไปกับทุกคนที่ clone repo โดยไม่ต้องตั้งค่าอะไรเพิ่ม ควรใส่ไว้ที่ไหน?</p>
+  <ol type="A">
+    <li><code>~/.claude/settings.json</code> ของ tech lead</li>
+    <li><code>.claude/settings.local.json</code></li>
+    <li><code>.claude/settings.json</code> ใน repo</li>
+    <li>ใน system prompt ของ CLAUDE.md</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> commit ไปกับ repo จึงแชร์อัตโนมัติ A อยู่แค่เครื่อง tech lead B ถูก gitignore D เป็นแค่คำขอร้อง ไม่ใช่ hook</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>Script hook ของคุณไม่อยากพิมพ์ JSON อะไรเลย แค่อยาก block tool call แล้วบอกเหตุผลผ่าน stderr ต้อง exit ด้วยค่าอะไร?</p>
+  <ol type="A">
+    <li>0</li>
+    <li>1</li>
+    <li>2</li>
+    <li>ค่าอะไรก็ได้ที่ไม่ใช่ 0</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> exit 2 คือ blocking error และ stderr ถูกป้อนกลับให้ Claude exit 0 คือสำเร็จ exit 1 เป็น non-blocking มีแค่ 2 ที่ block</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Code docs: Hooks reference</li>
+  <li>Claude Agent SDK docs: Hooks</li>
+  <li>Claude Code docs: Hooks guide</li>
+</ul>
+</section>

@@ -1,0 +1,240 @@
+<section class="lesson" id="l-5-1">
+<h2>5.1 How LLMs work: tokens, context window และ sampling</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/how-llms-generate-text-tokens-context-windows-and-sampling">CertSafari 5.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่า token คืออะไร และประมาณจำนวน token จากความยาวข้อความได้</li>
+    <li>อธิบายว่าการ generate ทีละ token ทำให้ข้อความลื่นไหลแต่แต่งเรื่องขึ้นได้ และรู้ว่าการแต่งมักไปกองอยู่ตรงไหน</li>
+    <li>บอกได้ว่าอะไรนับเข้า context window บ้าง และ model ไหนรับ input ขนาดเท่าไหร่ได้</li>
+    <li>อธิบายว่าทำไมตัวอย่างใน prompt ถึงคุมผลลัพธ์ได้โดยไม่ต้อง retrain</li>
+    <li>อธิบายว่าทำไม prompt เดิมได้ผลต่างกัน และ <code>temperature</code>, <code>top_k</code>, <code>top_p</code> คุมอะไร</li>
+    <li>ออกแบบ test, cache และงบค่าใช้จ่ายที่ทนต่อ non-determinism ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: autocomplete ที่เก่งมาก</span>
+  <p>LLM อ่านและเขียนเป็น <strong>token</strong> ทีละตัว แต่ละขั้นเลือก token ถัดไปจากความน่าจะเป็น โดยมองเห็นได้แค่สิ่งที่อยู่ใน <strong>context window</strong> เรื่องอื่นในบทนี้ ทั้ง hallucination, few-shot และผลที่ไม่เหมือนเดิมทุกครั้ง ล้วนมาจากกลไกนี้ทั้งนั้น</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Token: หน่วยที่โมเดลอ่านและเขียน</h3>
+<p>โมเดลไม่ได้มองเป็นตัวอักษรหรือคำ แต่มองเป็น <strong>token</strong> ซึ่งอาจเป็นทั้งคำ เศษของคำ ตัวอักษรตัวเดียว หรือแม้แต่ byte</p>
+<ul>
+  <li>กฎคร่าวๆ: ภาษาอังกฤษ <strong>1 token ≈ 3.5 ตัวอักษร</strong> ภาษาอื่น (รวมถึงไทย) อาจได้จำนวนต่างออกไป</li>
+  <li>token เป็นหน่วยของทุกอย่าง: ขนาด context window, เพดาน <code>max_tokens</code>, การคิดเงิน และตัวเลขใน <code>usage</code> ของ response</li>
+</ul>
+<pre><code># ประมาณ token แบบหยาบๆ (ภาษาอังกฤษ)
+chars = 14_000
+print(chars / 3.5)   # ≈ 4,000 tokens
+
+# ตัวเลขจริงดูจาก response
+print(msg.usage.input_tokens, msg.usage.output_tokens)</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>คิดเป็น token เสมอ ภาษาอังกฤษหาร 3.5 จากจำนวนตัวอักษรได้ค่าประมาณ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>release note ภาษาอังกฤษยาว 10,500 ตัวอักษร น่าจะใช้ประมาณกี่ token?</p>
+  <ol type="A">
+    <li>ประมาณ 10,500</li>
+    <li>ประมาณ 3,000</li>
+    <li>ประมาณ 1,000</li>
+    <li>ประมาณ 35,000</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> 10,500 ÷ 3.5 ≈ 3,000 เพราะ token หนึ่งครอบคลุมราว 3.5 ตัวอักษร</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Next-token generation และทำไมถึง hallucinate</h3>
+<p>ลองนึกถึง autocomplete บนมือถือที่เก่งขึ้นเป็นล้านเท่า โมเดลเลือก token ถัดไปจากสิ่งที่ "มักจะตามมา" และในลูปนี้ <strong>ไม่มีขั้นไหนตรวจสอบข้อเท็จจริง</strong> เลย</p>
+<p>ความลื่นไหลกับการแต่งเรื่องจึงมาจากกลไกเดียวกัน งานที่มี pattern ชัดและพบบ่อย เช่น สรุป จัด format ใหม่ อธิบายแนวคิดที่คนรู้กันทั่วไป จะเชื่อถือได้ ส่วนเรื่องที่ข้อมูลน้อยหรือแปลกใหม่ คือที่ที่โมเดลเริ่มแต่ง</p>
+<p>การแต่งมักไปกองอยู่ที่ <strong>รายละเอียดเจาะจง</strong>: ชื่อคน วันที่ ตัวเลขสถิติ citation URL และคำพูดที่ยกมา ส่วนเนื้อความอธิบายทั่วไปมักไม่ค่อยเพี้ยน</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>โมเดลเขียนสิ่งที่ "ฟังดูน่าจะถูก" ไม่ใช่สิ่งที่ "ถูก" ตอนตรวจงาน ให้ไล่เช็กชื่อ ตัวเลข วันที่ และลิงก์ก่อน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Claude ช่วยร่างบทความเกี่ยวกับประวัติภาษา Python ให้บล็อกบริษัท ถ้ามีเวลาตรวจแค่ส่วนเดียว ควรตรวจอะไรก่อน?</p>
+  <ol type="A">
+    <li>ย่อหน้าที่อธิบายว่า dynamic typing คืออะไร</li>
+    <li>ปีที่ออกแต่ละเวอร์ชัน ชื่อคนที่ยกคำพูดมา และลิงก์อ้างอิง</li>
+    <li>ไวยากรณ์และการสะกด</li>
+    <li>ย่อหน้าบทนำ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ข้อมูลเจาะจงอย่างวันที่ ชื่อ และ URL คือจุดที่การแต่งมักเกิด ส่วนการอธิบายแนวคิดที่คนรู้กันทั่วไปมักเชื่อถือได้</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Context window = working memory</h3>
+<p>Context window คือ <strong>ทุกอย่างที่โมเดลอ้างอิงได้ในการตอบครั้งหนึ่ง รวมถึงคำตอบที่กำลังเขียนด้วย</strong> ซึ่งแยกจาก training data</p>
+<p>สิ่งที่นับเข้า window:</p>
+<ul>
+  <li>system prompt</li>
+  <li><code>messages</code> ทั้งหมด รวม tool result, รูปภาพ และเอกสาร</li>
+  <li>tool definitions</li>
+  <li>output รวมถึง extended thinking</li>
+</ul>
+<p>ใน multi-turn conversation turn เก่าๆ ถูกส่งซ้ำทุกครั้ง window เลยค่อยๆ เต็มขึ้นเรื่อยๆ</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Model</th><th>Context window</th></tr>
+  <tr><td>Claude Opus 5.5, Opus 4.8, Opus 4.7</td><td>1M tokens</td></tr>
+  <tr><td>Claude Sonnet 5.5, Sonnet 5, Sonnet 4.6</td><td>1M tokens</td></tr>
+  <tr><td>Claude Sonnet 4.5, Haiku 4.5</td><td>200k tokens</td></tr>
+</table></div>
+<ul>
+  <li>1M เป็นค่า default ของ flagship รุ่นปัจจุบัน ไม่ต้องใส่ beta header</li>
+  <li>ตัวอย่าง: เอกสาร 500,000 token ใส่ใน Sonnet 4.6 ได้ แต่ใส่ใน Haiku 4.5 ไม่ได้</li>
+  <li><strong>Context rot</strong>: ยิ่ง token เยอะ ความแม่นและการดึงข้อมูลกลับมาใช้ยิ่งลดลง ดังนั้น "ใส่อะไร" สำคัญพอๆ กับ "ใส่ได้เท่าไหร่"</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด prompt caching แล้วจะได้พื้นที่ context window คืน"</strong> ไม่ใช่ caching เปลี่ยนแค่ <em>ราคา</em> ของ prefix ที่ cache ไว้ แต่ token พวกนั้นยังนั่งอยู่ใน window เต็มๆ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>window = system + messages + tools + output (รวม thinking) ใหญ่ได้ถึง 1M แต่ยิ่งยาวยิ่งเสี่ยง context rot และ cache ไม่ได้ลดขนาด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>agent ตัวหนึ่งใช้ prompt caching กับ system prompt ยาว มี tool 12 ตัว และคุยมาแล้ว 40 turn ข้อไหนถูกเกี่ยวกับ context window?</p>
+  <ol type="A">
+    <li>ส่วนที่ cache ไว้ไม่นับใน window แล้ว</li>
+    <li>tool definitions ไม่นับ เพราะไม่ใช่ข้อความ</li>
+    <li>prefix ที่ cache, tool definitions, messages ทั้ง 40 turn และ output ที่กำลังเขียน นับรวมทั้งหมด</li>
+    <li>นับเฉพาะ turn ล่าสุด เพราะ turn เก่าถูกจำไว้แล้ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ทุกอย่างที่ส่งไปและทุกอย่างที่โมเดลเขียนออกมานับหมด turn เก่าถูกส่งซ้ำทุกครั้ง และ cache เปลี่ยนแค่ราคา</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>คุณตั้ง coding agent ให้ทำ refactor ใหญ่แบบอัตโนมัติ รันนานเกินครึ่งชั่วโมง มีงบ token หลายล้าน ควรใช้ effort level ไหน?</p>
+  <ol type="A">
+    <li><code>low</code></li>
+    <li><code>medium</code></li>
+    <li><code>high</code></li>
+    <li><code>xhigh</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>xhigh</code> ออกแบบมาสำหรับงาน agentic/coding แบบ long-horizon ส่วน <code>high</code> เป็น default สำหรับงานซับซ้อนทั่วไป และ <code>low</code>/<code>medium</code> เหมาะกับงานง่ายกว่า</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ทำไมตัวอย่างใน prompt ถึงคุมโมเดลได้โดยไม่ต้อง retrain</h3>
+<p>เรื่องวิธีเขียน zero-shot / single-shot / multi-shot อยู่ในบท 6.2 ตรงนี้จะคุยแค่ว่า <em>ทำไม</em> มันได้ผล</p>
+<p>คำตอบคือ ตัวอย่างอยู่ใน context window ซึ่งเป็น working memory ชั่วคราวของ request นั้น โมเดลเห็นตัวอย่างแล้วต่อ pattern ตาม เหมือนเราโชว์ฟอร์มที่กรอกเสร็จแล้วให้คนดูก่อนกรอกใบใหม่ ไม่ได้ไปเปลี่ยนสมองเขาถาวร</p>
+<ul>
+  <li><strong>Fine-tuning</strong> คือการเทรนโมเดลที่ pretrain แล้วต่อด้วยข้อมูลใหม่ ซึ่ง Claude API ตอนนี้ <strong>ยังไม่มีให้ใช้</strong></li>
+  <li>ผลของตัวอย่างอยู่แค่ใน request นั้น request ถัดไปต้องใส่ใหม่ทุกครั้ง และกินพื้นที่ window ทุกครั้ง</li>
+  <li>ตัวอย่างควร <strong>หลากหลายและครอบคลุม edge case</strong> ไม่งั้นโมเดลจะลอก pattern ที่เราไม่ได้ตั้งใจ เช่น ความยาวเท่ากันทุกข้อ หรือขึ้นต้นด้วยคำเดิมทุกครั้ง</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>few-shot = ข้อมูลใน context ไม่ใช่การเรียนรู้ถาวร เอาออกเมื่อไหร่ผลหายทันที</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบจัดหมวด ticket ใส่ตัวอย่าง 6 ข้อใน prompt มาหลายเดือน มีคนเสนอให้ตัดออกเพื่อประหยัด token เพราะ "Claude เห็นมาเป็นแสนรอบแล้ว น่าจะจำได้" จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>ไม่มีผล เพราะโมเดลเรียนรู้จากการใช้งานไปแล้ว</li>
+    <li>ประโยชน์จากตัวอย่างหายไป เพราะตัวอย่างมีผลเฉพาะตอนอยู่ใน context ของ request</li>
+    <li>คุณภาพดีขึ้น เพราะ window ว่างขึ้น</li>
+    <li>ต้องสั่ง fine-tune ผ่าน API ก่อนจึงตัดได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> แต่ละ request เริ่มจากศูนย์ ไม่มีอะไรถูกเรียนรู้ข้าม request และ Claude API ไม่มี fine-tuning ให้ใช้</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Sampling: ทำไม prompt เดิมได้คำตอบต่างกัน</h3>
+<p>ทุกขั้นของการ generate มี token ที่เป็นไปได้หลายตัว โมเดล <strong>สุ่มเลือก (sample)</strong> หนึ่งตัวตามความน่าจะเป็น ผลต่างกันระหว่างรอบจึงเป็นเรื่องปกติ</p>
+<div class="table-wrap"><table>
+  <tr><th>Parameter</th><th>คุมอะไร</th></tr>
+  <tr><td><code>temperature</code></td><td>ระดับความสุ่ม default 1.0 ช่วง 0.0–1.0 ใกล้ 0 เหมาะกับงานวิเคราะห์/ตัวเลือก ใกล้ 1 เหมาะกับงานสร้างสรรค์</td></tr>
+  <tr><td><code>top_k</code></td><td>สุ่มจาก K token ที่น่าจะเป็นที่สุดเท่านั้น (ตัดตามจำนวน)</td></tr>
+  <tr><td><code>top_p</code> (nucleus sampling)</td><td>ตัดตัวเลือกตาม cumulative probability แทนที่จะตัดตามจำนวน</td></tr>
+</table></div>
+<p>ข้อจำกัดใน model รุ่นใหม่:</p>
+<ul>
+  <li><strong>Claude 5 ทุกตัว และ Opus 4.7 ขึ้นไป</strong>: ส่ง <code>temperature</code>, <code>top_p</code> หรือ <code>top_k</code> ที่ไม่ใช่ default จะได้ <strong>400 error</strong> ไม่ว่าจะเปิด thinking หรือไม่</li>
+  <li>model รุ่นเก่า: ข้อห้ามนี้มีผลเฉพาะตอนเปิด thinking</li>
+</ul>
+<pre><code># โค้ดเก่าที่ย้ายมา Opus 5.5 แล้วจะพัง
+client.messages.create(model="claude-opus-5-5", temperature=0, ...)   # → 400
+
+# ให้ลบ temperature ทิ้ง แล้วไปคุมความสม่ำเสมอด้วย prompt / validation แทน
+client.messages.create(model="claude-opus-5-5", ...)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง temperature 0 แล้ว output จะเหมือนเดิมเป๊ะทุกครั้ง"</strong> ไม่ใช่ มันเอียงไปทางตัวเลือกที่น่าจะเป็นที่สุด แต่ไม่การันตีว่าจะได้ผลเหมือนกันทุกรอบ</p>
+  <p><strong>"อยากได้ผลสม่ำเสมอ ก็ลด temperature ได้เสมอ"</strong> ไม่ใช่ บน Claude 5 และ Opus 4.7+ ค่าที่ไม่ใช่ default จะถูกปฏิเสธด้วย 400</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>temperature = ความสุ่ม, top_k = ตัดตามจำนวน, top_p = ตัดตามความน่าจะเป็นสะสม และรุ่นใหม่ห้ามแตะทั้งสามตัว</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่การตั้งค่ากับพฤติกรรม (สมมติว่าเป็น model รุ่นเก่าที่ยังปรับได้):</p>
+  <ol>
+    <li>temperature ต่ำ</li>
+    <li>temperature สูง</li>
+    <li><code>top_k</code> = 5</li>
+    <li>temperature = 0</li>
+  </ol>
+  <ol type="a">
+    <li>เลือกได้แค่ 5 token ที่น่าจะเป็นที่สุดในแต่ละขั้น</li>
+    <li>ข้ามหลาย API call แล้วก็ยังไม่ deterministic 100%</li>
+    <li>ใช้คำที่หลากหลายและคาดไม่ถึงมากขึ้น</li>
+    <li>ใช้สำนวนที่น่าจะเป็นที่สุด ค่อนข้างระมัดระวัง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → d · 2 → c · 3 → a · 4 → b</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Non-determinism: ออกแบบระบบให้รับผลที่ไม่เหมือนเดิมได้</h3>
+<p>Non-determinism คือ input เดียวกันอาจได้ output ต่างกันข้าม call ซึ่งกระทบ regression test, cache ที่ใช้ output เป็น key และ audit ที่ต้องการให้ตัดสินใจซ้ำได้ผลเดิม</p>
+<ul>
+  <li>เกิดทั้งบน first-party API ของ Anthropic และบน cloud provider อื่น ไม่มีเจ้าไหนให้ผลเหมือนเดิมเป๊ะ</li>
+  <li><strong>ไม่เคยมี setting ไหนกำจัดมันได้</strong> โค้ดที่ย้ายไป model ใหม่แล้วลบ <code>temperature=0</code> ทิ้ง ไม่ได้เสียอะไรจริงๆ</li>
+  <li><strong>จำนวน token ก็ไม่คงที่</strong>: เมื่อใช้ adaptive thinking Claude จะเลือกปริมาณ thinking เองในแต่ละ request และ thinking token คิดเงินเป็น output ดังนั้นประมาณค่าใช้จ่ายเป็น <em>ช่วง</em> จากการรันหลายๆ รอบ</li>
+</ul>
+<p>แนวปฏิบัติ:</p>
+<ul>
+  <li>ตรวจ <strong>โครงสร้างและความหมาย</strong> (JSON parse ได้, label ถูก, field ครบ) ไม่ใช่เทียบทีละ byte</li>
+  <li>รัน eval แต่ละเคสหลายรอบ แล้วดูว่าส่วนไหนนิ่ง ส่วนไหนแกว่ง</li>
+  <li>ถ้าต้อง audit ได้ ให้ <strong>เก็บ response ที่ใช้ตัดสินใจจริงไว้</strong> เพราะรันใหม่ก็คือ sample ใหม่</li>
+</ul>
+<pre><code>def test_classify_refund():
+    out = json.loads(classify("ขอคืนเงิน order #123"))   # parse ได้ไหม
+    assert out["label"] == "refund"                      # label ถูกไหม
+    assert "order_id" in out                             # field ครบไหม
+    # ไม่ assert ว่าข้อความ reason ตรงกับไฟล์ที่เก็บไว้ทุกตัวอักษร</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Non-determinism เป็นเรื่องของ API ของ Anthropic เท่านั้น ถ้าเรียกผ่าน cloud provider อื่นจะได้ผลเหมือนเดิมทุกครั้ง"</strong> ไม่จริง เกิดทุกที่ที่รันโมเดล</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อย่าสู้กับ non-determinism ให้ออกแบบรอบมัน: test ตามโครงสร้าง, eval หลายรอบ, เก็บ response จริงไว้ audit และตั้งงบเป็นช่วง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>pipeline สรุปข่าวรันบน Claude ผ่าน cloud provider มี snapshot test ที่เทียบ output กับไฟล์ที่เก็บไว้ทุกตัวอักษร แล้ว fail ทุก 2–3 วัน ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>ย้ายมาใช้ first-party API เพราะ cloud provider ไม่ deterministic</li>
+    <li>ตั้ง <code>temperature=0</code></li>
+    <li>เปลี่ยนไปตรวจโครงสร้างและ field ที่จำเป็น แทนการเทียบข้อความเป๊ะ</li>
+    <li>อัปเดต snapshot ใหม่ทุกครั้งที่ fail</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> non-determinism เกิดทุก platform, temperature 0 ไม่ได้การันตี (และรุ่นใหม่ตอบ 400) ส่วนการอัปเดต snapshot ทุกครั้งทำให้ test ไม่มีความหมาย</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Docs: Glossary</li>
+  <li>Claude Academy: next-token prediction</li>
+  <li>Claude Docs: Context windows</li>
+  <li>Claude Docs: Prompting best practices</li>
+  <li>Claude API reference: Message Batches</li>
+  <li>Claude Docs: Extended thinking</li>
+  <li>Claude Docs: Migrating to Claude Opus 5.5</li>
+</ul>
+</section>

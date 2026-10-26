@@ -1,0 +1,258 @@
+<section class="lesson" id="l-5-4">
+<h2>5.4 Claude token pricing, token counting และ usage tracking</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-token-pricing-token-counting-and-usage-tracking">CertSafari 5.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ประมาณค่าใช้จ่ายของ request จากจำนวน input/output token กับราคาต่อ MTok ของ model</li>
+    <li>อธิบายได้ว่า batch discount, fast mode, US-only inference และ cache multiplier เปลี่ยนราคายังไง และตัวไหนซ้อนกันได้</li>
+    <li>นับ input token ด้วย count_tokens ก่อนส่งจริง รวมถึงใช้เทียบ tokenizer ตอน migrate model</li>
+    <li>กระทบยอดค่าใช้จ่ายจริงด้วย usage field ใน response และ Usage and Cost Admin API และอ่านมันคู่กับ rate limit ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: input แยกเป็น 3 ก้อน</span>
+  <p>เมื่อใช้ prompt caching, response จะรายงาน input แยก 3 field และแต่ละ field คิดราคาคนละเรท:</p>
+  <ul>
+    <li>token ที่อ่านจาก cache (<code>cache_read_input_tokens</code>)</li>
+    <li>token ที่เขียนลง cache (<code>cache_creation_input_tokens</code>)</li>
+    <li>token ที่ไม่ได้ cache หลัง breakpoint สุดท้าย (<code>input_tokens</code>)</li>
+  </ul>
+  <p>ขนาด input จริงและต้นทุนจริงต้อง <strong>บวกทั้ง 3 ตัว</strong> เสมอ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Input กับ output ราคาไม่เท่ากัน</h3>
+<p>Claude คิดเงินเป็น token: <strong>input</strong> คือทุกอย่างที่เราส่งไปใน request ส่วน <strong>output</strong> คือทุกอย่างที่ Claude generate ออกมา แต่ละ model ตั้งราคาแยกกันเป็น USD ต่อล้าน token (MTok)</p>
+<div class="table-wrap"><table>
+  <tr><th>Model</th><th>Input / MTok</th><th>Output / MTok</th></tr>
+  <tr><td>Claude Fable 5.1</td><td>$10</td><td>$50</td></tr>
+  <tr><td>Claude Opus 5.5</td><td>$4</td><td>$20</td></tr>
+  <tr><td>Claude Sonnet 5.5</td><td>$2</td><td>$10</td></tr>
+  <tr><td>Claude Haiku 4.5</td><td>$1</td><td>$5</td></tr>
+</table></div>
+<p>สังเกตว่า <strong>ทุก model output แพงกว่า input 5 เท่า</strong> ดังนั้นงานที่ตอบยาวอาจแพงกว่าที่ดูจากความยาว prompt เยอะ</p>
+<pre><code># คำนวณค่าใช้จ่ายคร่าวๆ (ราคาต่อ MTok)
+PRICE = {"claude-opus-5-5": (4, 20), "claude-haiku-4-5": (1, 5)}
+
+def cost(model, input_tokens, output_tokens):
+    inp, out = PRICE[model]
+    return input_tokens / 1e6 * inp + output_tokens / 1e6 * out
+
+# Opus 5.5: 30,000 in + 3,000 out = $0.12 + $0.06 = $0.18
+print(cost("claude-opus-5-5", 30_000, 3_000))</code></pre>
+
+<h3>Tool use ก็นับเป็น input</h3>
+<ul>
+  <li>parameter <code>tools</code> ทั้งก้อน (name, description, schema)</li>
+  <li>ทุก block <code>tool_use</code> และ <code>tool_result</code> ที่อยู่ในบทสนทนา</li>
+  <li>system prompt ที่ API แอบเติมให้เมื่อมี tools</li>
+</ul>
+<p>แปลว่าถ้ามี tool catalogue ใหญ่ๆ เราจ่ายค่ามันซ้ำ <strong>ทุก turn</strong> ส่วน <strong>server-side tool</strong> อย่าง web search ยังมีค่าบริการต่อครั้งเพิ่มบนค่า token อีกที</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ค่าใช้จ่าย = input × ราคา input + output × ราคา output, output แพงกว่า 5 เท่า และ tool definition / tool block นับเป็น input ทุก turn</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Request บน Opus 5.5 มี 25,000 input token และ 5,000 output token ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>input แพงกว่า output 5 เท่าเพราะมี token มากกว่า 5 เท่า</li>
+    <li>input กับ output มีค่าเท่ากันพอดี (คนละ $0.10)</li>
+    <li>output คิดราคาเหมาต่อ request</li>
+    <li>input ฟรีถ้ายังไม่เกิน context window</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> 25,000 × $4/MTok = $0.10 และ 5,000 × $20/MTok = $0.10 output แพงกว่าต่อ token 5 เท่า แต่จำนวนน้อยกว่า 5 เท่า เลยเท่ากัน</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Modifier ที่เปลี่ยนราคาต่อ token</h3>
+<div class="table-wrap"><table>
+  <tr><th>Modifier</th><th>ผลต่อราคา</th><th>ข้อจำกัด</th></tr>
+  <tr><td>Batch API</td><td>ลด 50% ทั้ง input และ output</td><td>ใช้กับ fast mode ไม่ได้</td></tr>
+  <tr><td>Fast mode (Opus 5.5)</td><td>$8 input / $40 output ต่อ MTok (2 เท่า)</td><td>เฉพาะ Claude API (first-party)</td></tr>
+  <tr><td>US-only <code>inference_geo</code></td><td>×1.1 ทั้ง input, output, cache write และ cache read</td><td>Claude 4.6 ขึ้นไป</td></tr>
+  <tr><td>Cache write 5 นาที</td><td>×1.25 ของราคา input ปกติ</td><td>คิดเฉพาะ token ที่เขียน</td></tr>
+  <tr><td>Cache write 1 ชั่วโมง</td><td>×2 ของราคา input ปกติ</td><td>คิดเฉพาะ token ที่เขียน</td></tr>
+  <tr><td>Cache read (hit)</td><td>×0.1 ของราคา input (Opus 5.5 = ×0.05, Fable 5.1 = ×0.025)</td><td>คิดเฉพาะ token ที่อ่าน</td></tr>
+</table></div>
+
+<h3>Caching ทำงานยังไงแบบย่อ</h3>
+<p>ส่วนต้นของ prompt ที่คงที่ (prefix) cache ได้ เราวาง breakpoint ด้วย <code>cache_control</code> เพื่อบอกว่า prefix จบตรงไหน ถ้า prefix ถึง breakpoint มีใน cache แล้ว token ส่วนนั้นจะคิดเป็น cache read ถ้ายังไม่มี ระบบประมวลผลทั้ง prompt แล้วเก็บ prefix เป็น cache write (TTL default ของ <code>ephemeral</code> คือ 5 นาที ตั้งเป็น <code>"1h"</code> ได้)</p>
+<pre><code>system=[{
+    "type": "text",
+    "text": MANUAL_40K_TOKENS,                     # เอกสารยาวที่ใช้ซ้ำ
+    "cache_control": {"type": "ephemeral", "ttl": "1h"},  # breakpoint + TTL 1 ชั่วโมง
+}]</code></pre>
+
+<h3>อะไรซ้อนกันได้บ้าง</h3>
+<ul>
+  <li>Cache multiplier ซ้อนกับ Batch discount และ data residency ได้ ดังนั้น batch ที่อ่าน cached prefix ได้ส่วนลด <strong>ทั้งสองต่อ</strong> (แต่ cache hit ใน batch เป็นแบบ best-effort)</li>
+  <li>Fast mode ซ้อนกับ caching และ data residency ได้ <strong>แต่ซ้อนกับ batch ไม่ได้</strong></li>
+  <li><strong>ความยาว context ไม่ใช่ modifier:</strong> Claude 4.6 ขึ้นไปคิดราคาเรทปกติตลอด window 1M token request ยาวแพงกว่าแค่เพราะมี token มากกว่าเท่านั้น</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Batch −50%, fast mode ×2, US-only ×1.1, cache write ×1.25 (5m) / ×2 (1h), cache read ×0.1 (Opus 5.5 ×0.05, Fable 5.1 ×0.025) ซ้อนกันได้หมด ยกเว้น fast mode + batch</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>งาน nightly batch ที่ทุก request ใช้ system prompt ยาวชุดเดียวกันและ cache ไว้ ส่วนลด batch กับส่วนลด cache read จะเป็นยังไง?</p>
+  <details><summary>ดูเฉลย</summary><p>ซ้อนกันได้ ได้ทั้งสองต่อ (ไม่ใช่เลือกเอาอันที่ลดมากกว่า และไม่ใช่ว่า batch ใช้ cache ไม่ได้) แค่ cache hit ใน batch ไม่การันตี 100%</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมอยากลดต้นทุนให้สุดแล้วลองจับคู่ option ต่างๆ คู่ไหน <strong>ใช้ด้วยกันไม่ได้</strong>?</p>
+  <ol type="A">
+    <li>Caching + Batch API</li>
+    <li>US-only <code>inference_geo</code> + caching</li>
+    <li>Fast mode + Batch API</li>
+    <li>Fast mode + caching</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> fast mode ส่งผ่าน Batch API ไม่ได้ คู่อื่นซ้อนกันได้ทั้งหมด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบ Q&amp;A กฎหมายใช้ <code>cache_control: {"type": "ephemeral"}</code> (TTL default) กับเอกสารสัญญา 60,000 token ทนายถามคำถามเป็นช่วงๆ ห่างกันราว 15 นาที ผลคือแทบไม่เคยได้ cache read และจ่ายค่า cache write ซ้ำไปเรื่อยๆ ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>ตั้ง TTL ของ <code>cache_control</code> เป็น <code>"1h"</code></li>
+    <li>ยิง request เปล่าทุก 5 นาทีเพื่อ "อุ่น" cache</li>
+    <li>แบ่งเอกสารเป็นหลาย breakpoint</li>
+    <li>ใช้ model ที่ context window ใหญ่ขึ้นเพื่อให้ server จำได้นานขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> TTL default คือ 5 นาที สั้นกว่าช่วงห่าง 15 นาที ตั้ง 1h (cache write ×2) จะครอบคลุม B ไม่ใช่กลไกที่ใช้ยืดอายุ cache, C เปลี่ยนแค่ความละเอียดแต่ทุกชิ้นยังหมดอายุใน 5 นาที, D context window เป็นขนาดสูงสุดต่อ request ไม่เกี่ยวกับการเก็บ cache</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. นับ token ก่อนส่งจริง</h3>
+<ul>
+  <li>Endpoint count_tokens คืนค่า <code>input_tokens</code> ของ request <strong>โดยไม่รัน model</strong></li>
+  <li>รับ input หน้าตาเดียวกับ messages.create: system prompt, tools, รูปภาพ และ PDF</li>
+  <li>ใช้ประมาณต้นทุน: นับ request ตัวแทนหนึ่งตัว แล้วคูณกับ volume ที่คาดไว้</li>
+  <li><strong>ใช้ฟรี</strong> แต่มี requests-per-minute limit ของตัวเองตาม usage tier</li>
+</ul>
+<pre><code>count = client.messages.count_tokens(
+    model="claude-opus-5-5",
+    system="คุณคือผู้ช่วยด้านภาษี",
+    messages=[{"role": "user", "content": "ลดหย่อนอะไรได้บ้าง"}],
+)
+print(count)   # {"input_tokens": ...} ไม่มีการ generate ไม่เสียค่า token
+
+# ประมาณงบรายเดือน: request ตัวแทน x volume
+monthly_input = count.input_tokens * 500_000</code></pre>
+
+<h3>ข้อจำกัดของการนับ</h3>
+<ol>
+  <li><strong>ไม่สนใจ caching:</strong> ใส่ <code>cache_control</code> ไปได้ แต่ผลที่ได้คือขนาด input ดิบ ไม่ใช่ต้นทุนหลังหักส่วนลด cache</li>
+  <li><strong>บาง input ถูก reject:</strong> server tool ส่วนใหญ่, MCP connector และ image/document block ที่อ้างแหล่งด้วย URL หรือ file ถ้าอยากให้นับรูปหรือ PDF ให้ส่งเป็น base64</li>
+  <li><strong>ขึ้นกับ model:</strong> Fable 5.1, Mythos 5.1, Fable 5 และ Mythos 5 ใช้ tokenizer ที่มากับ Opus 4.7 prompt เดียวกันจะออกมาใหญ่ขึ้นราว <strong>30%</strong> เมื่อเทียบกับ model รุ่นเก่า ตัวเลขเก่าจึงประเมินต้นทุนต่ำไป</li>
+</ol>
+
+<h3>วิธีเช็กตอน migrate model</h3>
+<pre><code># นับ request เดียวกันด้วย 2 model แล้วเทียบ
+for m in ["claude-sonnet-5-5", "claude-fable-5-1"]:
+    n = client.messages.count_tokens(model=m, messages=msgs).input_tokens
+    print(m, n)   # tokenizer ต่างกัน ตัวเลขอาจต่างกันเป็นสิบเปอร์เซ็นต์</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"นับ token ไว้แล้วบน model เก่า ย้ายไป model ใหม่ก็ใช้ตัวเลขเดิมได้"</strong> ไม่ใช่ endpoint นับด้วย tokenizer ของ model ที่เราส่งไป ต้องนับใหม่ทั้งสอง model แล้วเทียบกัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>count_tokens = ฟรี ไม่รัน model คืน <code>input_tokens</code> แต่ไม่คิด cache, ไม่รับ URL/file source และตัวเลขผูกกับ tokenizer ของ model</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เติมคำ)</span>
+  <p>อยากรู้จำนวน input token โดยไม่ให้ model generate อะไร ใช้ <code>client.messages.________(...)</code></p>
+  <details><summary>ดูเฉลย</summary><p><code>count_tokens</code> (ไม่ใช่ <code>token_count</code>, <code>estimate</code> หรือ <code>create</code>)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีมเอา prompt 80,000 token ที่มี <code>cache_control</code> breakpoint บน prefix ซึ่ง cache ไว้แล้ว ไปเรียก count_tokens ผลที่ได้คืออะไร?</p>
+  <ol type="A">
+    <li>80,000 × อัตรา cache read</li>
+    <li>ขนาด input เต็มทั้งหมด เพราะการนับไม่ใช้ logic ของ caching</li>
+    <li>เฉพาะ token หลัง breakpoint</li>
+    <li>error เพราะ count_tokens ไม่รับ <code>cache_control</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> count_tokens รับ <code>cache_control</code> ได้ แต่คืนขนาด input ดิบเสมอ ไม่ได้คำนวณราคาหลัง cache</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ติดตามค่าใช้จ่ายจริงและ rate limit</h3>
+<h3>Usage field ในทุก response</h3>
+<div class="table-wrap"><table>
+  <tr><th>Field</th><th>ความหมาย</th></tr>
+  <tr><td><code>cache_read_input_tokens</code></td><td>token ที่อ่านมาจาก cache</td></tr>
+  <tr><td><code>cache_creation_input_tokens</code></td><td>token ที่เขียนลง cache ใน request นี้</td></tr>
+  <tr><td><code>input_tokens</code></td><td>token ที่ไม่ได้ cache หลัง breakpoint สุดท้าย</td></tr>
+</table></div>
+<p>พลาดกันบ่อยคือ log แค่ <code>input_tokens</code> สมมติ cache เอกสาร 200,000 token แล้วถามคำถาม 50 token, field นี้จะโชว์ 50 ทั้งที่จริงส่งไป 200,050 token</p>
+<pre><code>u = resp.usage
+total_input = (u.input_tokens
+               + u.cache_read_input_tokens
+               + u.cache_creation_input_tokens)   # ต้องบวกครบ 3 ตัว
+log.info("usage", total_input=total_input, output=u.output_tokens)</code></pre>
+
+<h3>Usage and Cost Admin API</h3>
+<ul>
+  <li>ดูยอดรวมระดับ organization ต้องใช้ <strong>Admin API key</strong></li>
+  <li><code>/v1/organizations/usage_report/messages</code> คืน token count เป็น bucket <code>1m</code>, <code>1h</code> หรือ <code>1d</code></li>
+  <li>filter / group ได้ตาม model, workspace, API key, service tier, <code>inference_geo</code>, speed</li>
+  <li>cost report คืนยอดเป็น USD เอาไว้กระทบยอดกับระบบบัญชีภายใน</li>
+  <li>หน้า Usage และ Cost ใน Console แสดงข้อมูลคล้ายกันและ export CSV ได้</li>
+</ul>
+<pre><code># token รายวันของเดือนนี้ แยกตาม workspace
+curl "https://api.anthropic.com/v1/organizations/usage_report/messages?\
+starting_at=2026-10-01T00:00:00Z&amp;ending_at=2026-10-26T00:00:00Z&amp;\
+group_by[]=workspace_id&amp;bucket_width=1d" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "x-api-key: $ANTHROPIC_ADMIN_KEY"   # ต้องเป็น Admin key ไม่ใช่ key ปกติ</code></pre>
+
+<h3>เชื่อมกับ rate limit</h3>
+<ul>
+  <li>model ส่วนใหญ่นับ <code>input_tokens</code> + <code>cache_creation_input_tokens</code> เข้า <strong>ITPM</strong> (input tokens per minute)</li>
+  <li><code>cache_read_input_tokens</code> <strong>ไม่นับ</strong> เข้า ITPM</li>
+  <li>cache hit rate สูง = ประหยัดเงินและลดแรงกด ITPM ไปพร้อมกัน</li>
+  <li>หน้า Usage ใน Console มีกราฟ peak ITPM รายชั่วโมงเทียบกับ cache rate และ limit ปัจจุบัน</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"<code>input_tokens</code> คือขนาด input ทั้งหมดของ request"</strong> ไม่ใช่ มันคือเฉพาะ token ที่ไม่ได้ cache หลัง breakpoint สุดท้าย ยอดรวม = <code>input_tokens</code> + <code>cache_read_input_tokens</code> + <code>cache_creation_input_tokens</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Log usage ให้ครบ 3 field, ใช้ Admin API (usage_report + cost report) กระทบยอดระดับ org และจำไว้ว่า cache read ไม่กิน ITPM</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่ field กับความหมาย:</p>
+  <ol>
+    <li><code>cache_read_input_tokens</code></li>
+    <li><code>cache_creation_input_tokens</code></li>
+    <li><code>input_tokens</code></li>
+  </ol>
+  <ol type="a">
+    <li>token หลัง breakpoint สุดท้ายที่ไม่ได้ cache</li>
+    <li>token ของ prefix ที่ได้จาก cache entry ที่มีอยู่แล้ว</li>
+    <li>token ที่ถูกเขียนลง cache ที่ breakpoint ใน request นี้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → b · 2 → c · 3 → a</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>Dashboard ภายในแสดงว่าแต่ละ request ใช้ input แค่ ~100 token แต่บิลกับกราฟ ITPM ไม่สอดคล้องกันเลย แอปนี้ cache knowledge base ขนาดใหญ่ไว้ใน system prompt ปัญหาน่าจะอยู่ตรงไหน?</p>
+  <details><summary>ดูเฉลย</summary><p>Dashboard อ่านแค่ <code>input_tokens</code> ซึ่งเป็นแค่ส่วนที่ไม่ได้ cache ต้องบวก <code>cache_read_input_tokens</code> และ <code>cache_creation_input_tokens</code> ด้วย และตอนดู ITPM จำไว้ว่า cache write นับ แต่ cache read ไม่นับ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Anthropic docs: Pricing</li>
+  <li>Anthropic docs: Prompt caching</li>
+  <li>Anthropic docs: Token counting</li>
+  <li>Anthropic docs: Rate limits</li>
+  <li>Anthropic docs: Usage and Cost API</li>
+  <li>Claude Console help: Cost and usage reporting</li>
+</ul>
+</section>

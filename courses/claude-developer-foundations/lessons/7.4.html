@@ -1,0 +1,291 @@
+<section class="lesson" id="l-7-4">
+<h2>7.4 Claude API keys: key types, secret storage, rotation และ leak response</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-api-keys-key-types-secret-storage-rotation-and-leak-response">CertSafari 7.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกระหว่าง personal key, service account key, legacy workspace key และ Admin API key ได้ โดยดูว่า key <strong>ถือ identity ของใคร</strong> และ <strong>จะหยุดใช้ได้เมื่อไหร่</strong></li>
+    <li>แยก 401 (authentication ล้มเหลว) กับ 403 (level ไม่พอ) และรู้ว่าแต่ละอันแก้ยังไง</li>
+    <li>ทายได้ว่า API ตอบอะไรเมื่อ workspace scope ของ key ไม่ตรงกับ workspace ใน request</li>
+    <li>เก็บ, ตั้ง expiration และ rotate key ได้ ตั้งแต่ <code>.env</code> บน laptop ไปจนถึง secrets manager บน production</li>
+    <li>รับมือ key รั่วด้วย secret scanning, การ deactivate, spend limit และ usage monitoring</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: identity-backed API key</span>
+  <p>Personal key และ service account key "สวมตัวตน" ของ user หรือ service account ที่ organization จัดการอยู่แล้ว สิทธิ์ของ key ตามตัวตนนั้นไปตลอด และ <strong>เมื่อ identity ถูกลบ key ก็ใช้ไม่ได้ทันที</strong> เหมือนบัตรพนักงานที่ผูกกับคน ลาออกบัตรก็ดับ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Key แต่ละแบบถือ identity ของใคร</h3>
+<ul>
+  <li>Static key หน้าตาแบบ <code>sk-ant-api...</code> ส่งเป็น <code>Authorization: Bearer &lt;key&gt;</code></li>
+  <li>ใน Console (Settings → API keys) field <strong>Linked account</strong> เป็นตัวกำหนดชนิด key: ผูกกับตัวเรา (personal) หรือกับ service account (สำหรับงานแชร์/workload)</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>Key type</th><th>ทำงานในนามของ</th><th>หยุดใช้ได้เมื่อ</th></tr>
+  <tr><td>Personal key</td><td>ตัวเรา พร้อม role และ permission ของเรา</td><td>เราหลุดจาก organization (หรือจาก workspace ถ้าเป็น single-workspace key) key ที่ถูก archive <strong>ไม่ฟื้นคืน</strong> แม้จะถูก invite กลับมา</td></tr>
+  <tr><td>Service account key</td><td>service account</td><td>service account ถูก archive หรือถูกเอาออกจาก workspace (กรณี single-workspace key)</td></tr>
+  <tr><td>Workspace key (legacy)</td><td>ไม่มีใคร เป็นของ workspace</td><td>หมดอายุ, ถูก disable/delete หรือ workspace ถูก archive <strong>ไม่เกี่ยวว่าคนสร้างจะออกไปหรือยัง</strong></td></tr>
+</table></div>
+<p>Legacy workspace key คือข้อยกเว้นที่ไม่ผูกกับ identity มันยังทำงานต่อแม้คนสร้างลาออก integration ใหม่ๆ จึงควรใช้ key แบบ identity-backed</p>
+
+<h3>เลือกใช้แบบไหน</h3>
+<ul>
+  <li>Script ส่วนตัวและงาน dev ใช้ <strong>personal key</strong> แต่อย่าแชร์ให้ทีม เพราะพอเจ้าของออก ระบบทีมพังทันที</li>
+  <li>CI job และ production service ใช้ <strong>service account</strong> เฉพาะ ซึ่ง organization admin เป็นคนสร้าง</li>
+</ul>
+
+<h3>Admin API key</h3>
+<ul>
+  <li>ใช้ <strong>จัดการ organization</strong> ไม่ได้ใช้เรียก model</li>
+  <li>สร้างได้เฉพาะสมาชิกที่มี role admin (Settings → Admin keys)</li>
+  <li>prefix <code>sk-ant-admin01-...</code> ใช้กับ Admin API, Usage and Cost API, Rate Limits API และ API อื่นในหมวด Admin</li>
+  <li>ใช้ข้าม organization ไม่ได้</li>
+  <li>Console Admin API key <strong>เลือก scope ไม่ได้</strong> และเข้าถึงทุก endpoint ที่รับ key นี้ แต่ endpoint ของ service account และ federation รับเฉพาะ <code>org:admin</code> OAuth token เท่านั้น Admin API key จะโดนปฏิเสธไม่ว่าคนสร้างมีสิทธิ์สูงแค่ไหน</li>
+</ul>
+
+<h3>401 vs 403: อ่าน status code ก่อนเสมอ</h3>
+<div class="table-wrap"><table>
+  <tr><th>Status</th><th>ความหมาย</th><th>สาเหตุตัวอย่าง</th><th>แก้ยังไง</th></tr>
+  <tr><td><strong>401</strong> <code>authentication_error</code></td><td>พิสูจน์ตัวตนไม่ผ่าน</td><td>key ไม่รู้จัก, ถูก archive, หมดอายุ</td><td>แก้ credential (key หมดอายุไม่กลับมา ต้องสร้างใหม่)</td></tr>
+  <tr><td><strong>403</strong></td><td>ตัวตนผ่าน แต่ level ไม่พอ</td><td>personal key ของ <code>developer</code> พยายามจัดการ user (ต้อง <code>admin</code>) หรือ Enterprise key ไม่มี scope ที่ endpoint ต้องการ</td><td>แก้ level: ใช้ identity ที่ role สูงพอ หรือสร้าง key ใหม่ที่มี scope ครบ</td></tr>
+</table></div>
+<ul>
+  <li>Key ส่งเป็น bearer token ส่วน header เก่า <code>x-api-key</code> ยังใช้ได้ (Admin API call ปกติใช้ตัวนี้)</li>
+  <li>Level ของ personal key = organization role ของเจ้าของ เช่น <code>developer</code> จัดการ API key ได้ แต่จัดการ user ต้องเป็น <code>admin</code></li>
+  <li>Claude Enterprise key มี scope ชัดเจน (เช่น <code>read:members</code>, <code>read:analytics</code>) <strong>ล็อกตั้งแต่ตอนสร้าง</strong> เรียกนอก scope ได้ 403 ที่บอกทั้ง scope ที่ key มีและ scope ที่ endpoint ต้องการ อยากขยายต้องสร้าง key ใหม่</li>
+</ul>
+
+<pre><code># ดู status ก่อนตัดสินใจแก้
+try:
+    client.messages.create(...)
+except anthropic.AuthenticationError:      # 401
+    rotate_credential()                     # key ผิด/หมดอายุ/ถูก archive -&gt; ต้องได้ key ใหม่
+except anthropic.PermissionDeniedError:    # 403
+    escalate_role_or_scope()                # key ใช้ได้ แต่สิทธิ์ไม่ถึง</code></pre>
+
+<div class="box key"><span class="tag">แถม: allowed_tools ไม่ใช่ allowlist</span>
+  <p>ใน Agent SDK <code>allowed_tools</code> แค่ <strong>pre-approve</strong> tool ที่ระบุ tool อื่นที่ไม่อยู่ใน list จะไม่ match allow rule แล้ว <strong>ตกไปที่ permission mode</strong> ถ้าตั้ง <code>permission_mode: "bypassPermissions"</code> ไว้ ทุกอย่างก็ผ่านหมด ถ้าอยากกันจริงให้ใช้ <code>disallowed_tools</code>, เลี่ยง bypass mode หรือใช้ PreToolUse hook</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ลบ engineer ออกจาก org แล้ว key ทุกตัวที่เขาสร้างจะใช้ไม่ได้"</strong> ไม่ใช่ personal key ถูก archive ก็จริง แต่ legacy workspace key เป็นของ workspace ยังใช้ได้จนกว่าจะหมดอายุ ถูก disable/delete หรือ workspace ถูก archive</p>
+  <p><strong>"ได้ 403 จาก Admin หรือ Compliance API แปลว่า key เสีย ให้เปลี่ยนเป็น key แบบเดิม"</strong> ไม่ใช่ 403 คือ key ผ่านแล้วแต่ level ไม่พอ scope ล็อกตอนสร้าง key แบบเดิมก็ได้ 403 เหมือนเดิม ต้องสร้าง key ใหม่ที่มี scope ที่ขาด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Personal = ของเรา, service account = ของ workload, legacy workspace = ของ workspace (รอดแม้คนสร้างออก), Admin key = จัดการ org และ 401 = แก้ credential, 403 = แก้ level</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Data engineer คนหนึ่งลาออก admin เอาเขาออกจาก organization วันรุ่งขึ้น job ไหนยังเรียก API ได้ปกติ?</p>
+  <ol type="A">
+    <li>Job ที่ใช้ personal key ของเขา</li>
+    <li>Job ที่ใช้ legacy workspace key ที่เขาสร้างไว้</li>
+    <li>ไม่มีเลย key ทุกตัวที่เขาสร้างถูก revoke หมด</li>
+    <li>ทุก job เพราะ key ไม่ผูกกับคน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> personal key ถูก archive พร้อมเจ้าของ แต่ legacy workspace key เป็นของ workspace ไม่ใช่ของคน (และนี่คือเหตุผลที่ควรรีบย้ายไป service account)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Agent ตั้ง <code>allowed_tools=["Grep"]</code> คู่กับ <code>permission_mode="bypassPermissions"</code> แล้วพบว่า agent ยังรัน <code>Write</code> ได้ เพราะอะไร?</p>
+  <ol type="A">
+    <li>Config ผิด syntax เลยถูกเมินทั้งหมด</li>
+    <li><code>allowed_tools</code> แค่ pre-approve tool ที่ระบุ ส่วน <code>Write</code> ไม่ match allow rule จึงตกไปที่ permission mode ซึ่ง bypass อนุมัติให้</li>
+    <li>เป็น bug ของ permission evaluator</li>
+    <li>เพราะไม่มี PreToolUse hook เท่านั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> combination นี้ valid และทำงานตามออกแบบ D ไม่ครบ เพราะ <code>disallowed_tools</code> หรือการไม่ใช้ bypass mode ก็กันได้เหมือนกัน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (เรียงลำดับ)</span>
+  <p>ทีมจะเลิกใช้ legacy workspace key ใน service จ่ายบิล เรียงขั้นตอนให้ถูก:</p>
+  <ol type="a">
+    <li>ยืนยันว่า request ผ่าน แล้วค่อยลบ key เก่า</li>
+    <li>สร้าง key ใหม่สำหรับ workspace นั้น</li>
+    <li>ตัดสินใจว่าจะใช้ key ชนิดไหน</li>
+    <li>Deploy key ใหม่ลง <code>ANTHROPIC_API_KEY</code> หรือ entry ใน secrets manager</li>
+    <li>ให้ admin สร้าง service account และเพิ่มเข้า workspace (ถ้าจำเป็น)</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → e → b → d → a</strong> key เก่าต้องลบเป็นขั้นสุดท้าย เพื่อไม่ให้มีช่วงไหนที่ traffic วิ่งโดยไม่มี credential ที่ใช้ได้</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. API ตรวจยังไงว่า key ทำงานใน workspace ไหนได้</h3>
+<div class="table-wrap"><table>
+  <tr><th>สถานการณ์</th><th>ผลลัพธ์</th></tr>
+  <tr><td>Workspace-scoped key</td><td>ใช้ได้แค่ใน workspace ของมัน ไม่ต้องส่ง workspace ID</td></tr>
+  <tr><td>Key ไม่ scope workspace แต่ไม่ส่ง header <code>anthropic-workspace-id</code></td><td><code>400 invalid_request_error</code></td></tr>
+  <tr><td>ส่ง ID ที่ format ผิด</td><td><code>400</code></td></tr>
+  <tr><td>ส่ง ID ถูก format แต่ identity เข้าไม่ถึง</td><td><code>404 not_found_error</code> (เหมือน workspace ไม่มีอยู่จริง)</td></tr>
+</table></div>
+<ul>
+  <li>Key ที่ไม่ scope ต้องบอก workspace ทุก request ผ่าน <code>anthropic-workspace-id</code> หรือตั้งครั้งเดียวด้วย <code>default_headers</code> ตอนสร้าง client</li>
+  <li>404 ตรงนี้ส่วนใหญ่แปลว่า <strong>ไม่ได้เป็นสมาชิก</strong> ไม่ใช่พิมพ์ผิด</li>
+  <li>Service account เป็นสมาชิก <strong>Default Workspace</strong> โดยอัตโนมัติ workspace อื่นต้องเพิ่มเองทีละที่</li>
+  <li><strong>Admin API เช็กกลับทาง:</strong> รับ personal/service account key ก็ต่อเมื่อ key <em>ไม่ได้</em> scope อยู่กับ workspace เดียว key แบบ single-workspace บน laptop ของ admin เลยใช้กับ endpoint จัดการ org ไม่ได้ แม้ role จะอนุญาตก็ตาม</li>
+</ul>
+<pre><code>import anthropic
+# ตั้ง workspace ครั้งเดียว ไม่ต้องใส่ทุก request
+client = anthropic.Anthropic(
+    default_headers={"anthropic-workspace-id": "wrkspc_01ABC..."}
+)</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ไม่ส่ง/ส่ง ID ผิด format = 400, ส่ง ID ถูกแต่ไม่ได้เป็นสมาชิก = 404 และ Admin API ต้องการ key ที่ไม่ scope workspace</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>Script ใช้ key ที่เข้าได้หลาย workspace แล้วโดน <code>400 invalid_request_error</code> ทุกครั้ง ต้องเพิ่ม header ตัวไหน?</p>
+  <ol type="A">
+    <li><code>x-api-key</code></li>
+    <li><code>anthropic-version</code></li>
+    <li><code>anthropic-workspace-id</code></li>
+    <li><code>anthropic-organization-id</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> A คือ header credential, B คือ API version, D ไม่ใช่ header สำหรับเลือก workspace</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Service account ตัวหนึ่งเพิ่งสร้าง ยังไม่เคยถูกเพิ่มเข้า workspace "analytics" ถ้าส่ง ID ของ analytics ที่ถูกต้อง 100% ไป จะได้อะไร?</p>
+  <details><summary>ดูเฉลย</summary><p><strong><code>404 not_found_error</code></strong> เหมือน workspace ไม่มีอยู่ เพราะ identity เข้าไม่ถึง (service account อยู่แค่ใน Default Workspace โดยอัตโนมัติ) 400 จะได้เฉพาะตอนไม่ส่ง header หรือ ID ผิด format</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เก็บ, ตั้งอายุ และ rotate key</h3>
+<p><strong>ทางรั่วยอดฮิต:</strong> commit key แบบ plaintext ขึ้น public repo หรือ paste key ลง tool ของ third party การอัปโหลด key ไปที่ web IDE, cloud provider หรือ CI/CD platform เท่ากับให้คนทำ tool นั้นเข้าถึง Console account ของเราได้ ถ้าจำเป็นต้องใส่ ให้ใส่เป็น <strong>encrypted secret</strong> และทุกคนควรมี key ของตัวเอง</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Environment</th><th>เก็บยังไง</th></tr>
+  <tr><td>Laptop</td><td>ไฟล์ <code>.env</code> โหลดด้วย <code>python-dotenv</code> และใส่ไว้ใน <code>.gitignore</code></td></tr>
+  <tr><td>Cloud</td><td>encrypted secret storage (ไม่ใช่ dotenv) ให้ secret manager inject <code>ANTHROPIC_API_KEY</code> ซึ่ง SDK อ่านเองอัตโนมัติ</td></tr>
+  <tr><td>มีหลาย key</td><td>key management system: ที่เก็บเข้ารหัสที่เดียว, access control ละเอียด, audit trail, rotate ง่าย</td></tr>
+</table></div>
+<pre><code># laptop เท่านั้น
+echo "ANTHROPIC_API_KEY=sk-ant-api..." &gt; .env
+echo ".env" &gt;&gt; .gitignore        # กันเผลอ commit
+
+# โค้ด: ไม่ต้องส่ง key ตรงๆ SDK อ่านจาก env เอง
+from dotenv import load_dotenv; load_dotenv()
+import anthropic; client = anthropic.Anthropic()</code></pre>
+
+<h3>Expiration</h3>
+<ul>
+  <li>Preset: <strong>3 ชั่วโมง, 1 วัน, 7 วัน, 30 วัน</strong>, custom duration หรือ <strong>Never</strong> (สำหรับ key ที่เรา rotate เองใน secrets manager)</li>
+  <li>Org ตั้ง <strong>maximum expiration policy</strong> ได้ ซึ่งจำกัดตัวเลือกและตัด Never ออก</li>
+  <li>Expiration ตั้งตอนสร้างและ <strong>แก้ทีหลังไม่ได้</strong></li>
+  <li>Anthropic เตือนก่อนหมดอายุ: <strong>7 วันล่วงหน้า</strong> สำหรับ key อายุ ≥ 14 วัน และ <strong>1 วันล่วงหน้า</strong> สำหรับ key อายุ ≥ 7 วัน</li>
+  <li>หมดอายุแล้วได้ <code>401 authentication_error</code> ทางเดียวคือสร้าง key ใหม่</li>
+</ul>
+
+<h3>Rotation</h3>
+<p>สร้าง key ใหม่ <strong>ก่อน</strong> ปลด key เก่า และทำเป็นรอบ (ต้นฉบับยกตัวอย่างทุก 90 วัน) Expiration ช่วยจำกัดว่า key ที่รั่วจะใช้ได้นานแค่ไหน แต่ <strong>ไม่ได้แทน</strong> secret hygiene ที่ดี</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Key ที่หมดอายุแล้ว เข้า Console ไป reactivate หรือยืดอายุได้"</strong> ไม่ได้ expiration ล็อกตั้งแต่สร้าง หมดแล้วได้ 401 และเปิดกลับไม่ได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Laptop = <code>.env</code> + <code>.gitignore</code>, cloud = secret manager, อายุ key แก้ไม่ได้ และ rotate แบบสร้างใหม่ก่อนลบเก่า</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมสร้าง key อายุ 7 วันไว้ทดสอบ แต่โปรเจกต์ยืดเป็น 60 วัน ทำยังไงดี?</p>
+  <ol type="A">
+    <li>แก้ expiration ใน Console เป็น 60 วัน</li>
+    <li>Disable แล้ว re-enable เพื่อรีเซ็ตอายุ</li>
+    <li>สร้าง key ใหม่ที่อายุยาวพอ แล้ว rotate ไปใช้ key นั้น</li>
+    <li>รอให้หมดอายุแล้วค่อย reactivate</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> expiration แก้ไม่ได้ disable/re-enable ไม่รีเซ็ตอายุ และ key หมดอายุแล้ว reactivate ไม่ได้</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ตรวจจับการรั่ว, ปิดให้ไว และเฝ้า usage</h3>
+<h3>Secret scanning</h3>
+<ul>
+  <li>เปิด secret scanning ใน source control provider</li>
+  <li>รัน SAST tool อย่าง <strong>Gitleaks</strong> กับ repo</li>
+  <li>ใส่ scanning ใน CI/CD เพื่อจับ secret ก่อนเข้า main branch</li>
+  <li><strong>ตาข่ายรองรับจาก GitHub:</strong> ผ่าน Secret scanning partner program ถ้า Claude API key โผล่ใน public repo GitHub จะแจ้ง Anthropic ซึ่งจะ <strong>deactivate key อัตโนมัติ</strong> และ email แจ้งเจ้าของ</li>
+</ul>
+<pre><code># CI step: fail build ถ้าเจอ secret
+gitleaks detect --source . --redact --exit-code 1</code></pre>
+<p>ถ้าสงสัยว่าโดน: <strong>revoke ทันที</strong>, สร้าง key ใหม่ และเก็บใน secrets manager</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Action</th><th>ย้อนได้?</th><th>ผลลัพธ์</th></tr>
+  <tr><td>Disable</td><td>ได้</td><td>status เป็น <code>inactive</code> กด Re-enable กลับเป็น <code>active</code> เหมาะกับ key ที่ยังไม่แน่ใจ</td></tr>
+  <tr><td>Delete</td><td>ไม่ได้</td><td>key ถูก archive แต่ยังโผล่ใน List API Keys ด้วย <code>status: "archived"</code> key ที่หมดอายุทำได้แค่ delete</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Delete key ต้องสงสัยก็ย้อนได้เหมือน disable"</strong> ไม่ใช่ เฉพาะ Disable ที่ Re-enable ได้ Delete คือถาวร</p>
+</div>
+
+<h3>Spend control: จำกัดความเสียหาย</h3>
+<ul>
+  <li>Org แบบ <strong>Custom Rate Limit</strong> ควรตั้ง usage limit และ spend limit</li>
+  <li>Org แบบ <strong>Standard Rate Limit</strong> ตั้ง auto-reload threshold ให้ระวัง เพราะทุกครั้งที่ reload คือเครดิตเพิ่มให้ attacker ใช้</li>
+  <li>ภาพรวมเรื่อง rate limit / spend limit / service tier อยู่ในบท 2.1</li>
+</ul>
+
+<h3>Monitoring</h3>
+<ul>
+  <li>ดู log และ usage แยกตาม key ใน Console</li>
+  <li>แยก key ตามจุดประสงค์ (dev / test / prod) ถ้ารั่วจะได้ปิดแค่ตัวเดียว</li>
+  <li>List API Keys และ Retrieve API Key คืน <code>expires_at</code> ใช้ audit และ rotate ก่อนหมดอายุได้</li>
+  <li>Identity-backed key บอกได้ว่า user หรือ service account ไหนเป็นคนเรียก</li>
+</ul>
+<pre><code>import os, requests
+from datetime import datetime, timedelta, timezone
+
+r = requests.get("https://api.anthropic.com/v1/organizations/api_keys",
+                 headers={"x-api-key": os.environ["ANTHROPIC_ADMIN_KEY"],   # Admin API key
+                          "anthropic-version": "2023-06-01"})
+soon = datetime.now(timezone.utc) + timedelta(days=14)
+for k in r.json()["data"]:
+    exp = k.get("expires_at")
+    if exp is None:                      # null = ไม่มีวันหมดอายุ
+        continue
+    if datetime.fromisoformat(exp.replace("Z", "+00:00")) &lt; soon:
+        print("ใกล้หมดอายุ:", k["name"], exp)</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Scan ก่อนรั่ว (Gitleaks, CI, GitHub partner program), รั่วแล้ว revoke + สร้างใหม่, Disable ย้อนได้ Delete ไม่ได้, ตั้ง spend limit และแยก key ตามจุดประสงค์</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่สถานะ/การกระทำกับผลที่ตามมา:</p>
+  <ol>
+    <li>กด Disable key</li>
+    <li>กด Delete key</li>
+    <li>Key ที่เลยวันหมดอายุ</li>
+    <li>Key หลุดไปอยู่ใน public GitHub repo</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → status <code>inactive</code>, Re-enable กลับได้ · 2 → ถาวร ถูก archive แต่ยังอยู่ใน list · 3 → ได้ 401 และทำได้แค่ delete · 4 → Anthropic deactivate ให้อัตโนมัติและ email แจ้ง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>Security team อยากได้ report รายสัปดาห์ของทุก key ทุก workspace ที่จะหมดอายุใน 14 วัน แบบ automate ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>Compliance Activity Feed</li>
+    <li>Usage and Cost API</li>
+    <li>เรียก List API Keys ของ Admin API ด้วย Admin API key แล้วดู <code>expires_at</code> (ค่า <code>null</code> = ไม่หมดอายุ)</li>
+    <li>ตั้ง Rate Limit ให้ต่ำลงตอนใกล้หมดอายุ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Activity Feed log เหตุการณ์แต่ไม่บอกวันหมดอายุ Usage and Cost บอกการใช้งาน ไม่ใช่ lifecycle ของ credential และ Rate Limit ไม่ผูกกับ expiration</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Platform docs: Authentication</li>
+  <li>Claude Platform docs: Admin API keys</li>
+  <li>Claude Platform docs: Admin API</li>
+  <li>Claude Help Center: API key best practices</li>
+  <li>Claude Help Center: What should I do if I suspect my API key has been compromised</li>
+</ul>
+</section>

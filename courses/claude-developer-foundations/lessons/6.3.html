@@ -1,0 +1,243 @@
+<section class="lesson" id="l-6-3">
+<h2>6.3 Structured outputs และ strict tool use สำหรับ JSON ที่เชื่อถือได้</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/structured-outputs-and-strict-tool-use-for-reliable-json">CertSafari 6.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่าทำไม JSON ที่ขอผ่าน prompt อย่างเดียวทำ parser ปลายทางพัง และ constrained decoding กันปัญหานี้ยังไง</li>
+    <li>ส่ง JSON schema ผ่าน <code>output_config.format</code> ได้ ทั้งแบบตรงๆ และผ่าน <code>client.messages.parse()</code></li>
+    <li>เปิด <code>strict: true</code> บน tool ได้ และรู้ว่า toolset ไหนไม่รับ</li>
+    <li>เลือก fallback ได้เมื่อ structured outputs ใช้กับ schema ที่ต้องการไม่ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: constrained decoding</span>
+  <p>จำกัดการ sample token ให้เลือกได้เฉพาะ token ที่ยังทำให้ output ถูกต้องตาม schema รูปร่างถูกบังคับ <strong>ระหว่าง generate</strong> ไม่ใช่ตรวจทีหลัง ผลที่ได้จึง parse ได้เสมอ มี field ครบ และ type ถูก เหมือนเขียนบนแบบฟอร์มที่มีช่องให้กรอกเท่านั้น จะเขียนนอกช่องก็ทำไม่ได้</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ทำไม JSON ที่ขอใน prompt ถึงทำ pipeline พัง</h3>
+<p>คนที่รับ output ต่อมักเป็นโค้ด เช่น <code>json.loads()</code>, insert ลง database หรือ typed function พวกนี้ไม่รับของ "เกือบถูก" ปัญหาที่เจอซ้ำๆ มี 4 แบบ:</p>
+<ul>
+  <li><strong>Parsing error</strong> JSON ไม่ valid</li>
+  <li><strong>Missing required fields</strong> field ที่ต้องมีหายไป</li>
+  <li><strong>Inconsistent types</strong> type ไม่ตรง</li>
+  <li><strong>Schema violations</strong> ที่ต้องเขียนโค้ดจับแล้ว retry</li>
+</ul>
+<p>ตัวอย่าง: tool จองตั๋วต้องการ <code>passengers</code> เป็น integer แต่ถ้าไม่บังคับ Claude อาจส่ง <code>"two"</code> หรือ <code>"2"</code> มา</p>
+<p>Structured outputs รับประกันทั้ง validity, type safety และความเสถียร จนไม่ต้องมี retry ลูป มี 2 ส่วนที่แยกกันแต่ใช้ร่วมกันได้:</p>
+<ul>
+  <li><strong>JSON outputs</strong> คุมรูปร่างของ <em>คำตอบ</em> ของ Claude</li>
+  <li><strong>Strict tool use</strong> คุมรูปร่างของ <em>arguments</em> ที่ส่งเข้า tool</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เขียน prompt ชัดๆ พร้อมตัวอย่างแล้ว ก็ส่งเข้า parser ได้โดยไม่ต้องกันอะไร"</strong> ไม่ใช่ prompting แค่เพิ่มโอกาสถูก มีแต่ constrained decoding ที่ตัดโอกาส output ผิดรูปออกไปได้จริง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Prompt = ขอร้อง · Constrained decoding = บังคับ ถ้าโค้ดปลายทางต้อง parse ให้เลือกแบบบังคับ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมเขียน prompt ละเอียดมาก มีตัวอย่าง JSON ครบ ทดสอบ 50 ครั้งผ่านหมด แล้วส่งตรงเข้า <code>json.loads()</code> ใน production โดยไม่มี try/except ความเสี่ยงคืออะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>ไม่มีอะไรบังคับ format จริง prompt แค่เพิ่มโอกาส วันหนึ่งก็อาจเจอ parse error, field หาย หรือ type ผิด แล้ว pipeline ล่ม</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. JSON outputs ด้วย <code>output_config.format</code></h3>
+<ol class="steps">
+  <li>นิยามโครงสร้างเป็น JSON schema (หรือเป็น type ในภาษาที่ใช้)</li>
+  <li>ส่งใน <code>output_config.format</code> พร้อม <code>type: "json_schema"</code></li>
+  <li>อ่านผลจาก text content block ของ response</li>
+</ol>
+<pre><code>import json
+resp = client.messages.create(
+    model="claude-sonnet-5-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "ดึงข้อมูลออเดอร์จากแชทนี้: ..."}],
+    output_config={
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "customer": {"type": "string"},
+                    "item": {"type": "string"},
+                    "quantity": {"type": "integer"},
+                    "express": {"type": "boolean"},
+                },
+                "required": ["customer", "item", "quantity", "express"],
+                "additionalProperties": False,   # ห้ามมี field เกินมา
+            },
+        }
+    },
+)
+text = next(b.text for b in resp.content if b.type == "text")  # ผลอยู่ใน text block
+order = json.loads(text)                                        # parse ได้แน่นอน</code></pre>
+
+<h3>ทางลัดใน Python: <code>client.messages.parse()</code></h3>
+<p>ส่ง Pydantic model เข้าไปเป็น <code>output_format=</code> SDK จะแปลงเป็น schema ส่งไปเป็น <code>output_config.format</code> ให้ validate ผลแล้วคืน object มาใน <code>parsed_output</code></p>
+<pre><code>from pydantic import BaseModel
+
+class Order(BaseModel):
+    customer: str
+    item: str
+    quantity: int
+    express: bool
+
+resp = client.messages.parse(
+    model="claude-sonnet-5-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "ดึงข้อมูลออเดอร์จากแชทนี้: ..."}],
+    output_format=Order,          # helper layer ของ output_config.format
+)
+order = resp.parsed_output        # ได้ Order object ที่ validate แล้ว</code></pre>
+<p><code>output_format</code> (argument ของ helper) กับ <code>output_config.format</code> (field ใน request) คือ <strong>ฟีเจอร์เดียวกัน คนละ layer</strong></p>
+
+<h3>ข้อจำกัดของ schema</h3>
+<ul>
+  <li>Constraint อย่าง <code>minimum</code>, <code>maximum</code>, <code>minLength</code>, <code>maxLength</code> จะถูกถอดออกจาก schema ที่ Claude ได้รับ แล้วย้ายไปเขียนไว้ใน description ของ field</li>
+  <li>Helper ยังเติม <code>additionalProperties: false</code> ให้ทุก object และกรอง string format ให้เหลือเฉพาะที่รองรับ</li>
+  <li>แต่ helper ที่ validate จะยังตรวจ response กับ <strong>schema ต้นฉบับ</strong> ของเรา เช่น field ที่มี <code>minimum: 100</code> จะถูกส่งเป็น integer ธรรมดาพร้อมโน้ตใน description แต่ตอนได้ผลกลับมา helper ยังเช็กว่า ≥ 100</li>
+  <li>ถ้ายิง request เอง ใช้ <code>transform_schema()</code> จาก package <code>anthropic</code> แปลงให้ ได้ schema ที่แก้ต่อได้ก่อนส่ง</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Constraint ที่ไม่รองรับอย่าง <code>minimum</code> ถูกทิ้งไปเฉยๆ"</strong> ไม่ใช่ มันถูกย้ายไปอยู่ใน description และ helper ยังตรวจให้ตอน validate</p>
+  <p><strong>"<code>output_format=</code> ใน <code>parse()</code> เป็นอีกฟีเจอร์หนึ่ง"</strong> ไม่ใช่ เป็น helper ที่ห่อ <code>output_config.format</code> อยู่</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Schema → <code>output_config.format</code> → อ่านจาก text block หรือใช้ <code>parse()</code> กับ Pydantic ให้ SDK จัดการ constraint ที่ไม่รองรับไม่หาย แค่ย้ายไป description แล้วตรวจฝั่ง client</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอนใช้ JSON outputs แบบ raw request ให้ถูก:</p>
+  <ol type="a">
+    <li>อ่าน JSON จาก text content block</li>
+    <li>นิยาม schema</li>
+    <li>ส่ง schema ใน <code>output_config.format</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>b → c → a</strong></p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>Pydantic model มี field <code>age: int = Field(ge=18)</code> ใช้กับ <code>messages.parse()</code> schema ที่ส่งไปจริงหน้าตาเป็นยังไง และ ≥ 18 ถูกบังคับที่ไหน?</p>
+  <details><summary>ดูเฉลย</summary><p>schema ที่ส่งไปมี <code>age</code> เป็น integer ธรรมดา และมีโน้ตเรื่องขั้นต่ำใน description ส่วนการบังคับ ≥ 18 เกิดตอน helper validate response กับ schema ต้นฉบับ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Strict tool use</h3>
+<p>ความเสี่ยงอีกจุดอยู่ที่ tool arguments เช่น handler <code>create_booking</code> ได้ <code>"2"</code> แทน <code>2</code> หรือ field ที่ required หายไป แล้วพังกลางงาน</p>
+<p>ใส่ <code>strict: true</code> ไว้ <strong>ระดับบนสุดของ tool definition</strong> (ข้างๆ <code>name</code>, <code>description</code>, <code>input_schema</code>) ระบบจะ compile <code>input_schema</code> เป็น grammar แล้วบังคับการ sample ให้ได้ input ที่ตรงเท่านั้น</p>
+<pre><code>{
+  "name": "create_booking",
+  "description": "จองโต๊ะร้านอาหาร",
+  "strict": true,                       // อยู่ระดับเดียวกับ name ไม่ใช่ใน input_schema
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "date": {"type": "string"},
+      "passengers": {"type": "integer"}
+    },
+    "required": ["date", "passengers"],
+    "additionalProperties": false
+  }
+}</code></pre>
+<p>สิ่งที่รับประกัน:</p>
+<ul>
+  <li><code>input</code> ในทุก <code>tool_use</code> block ตรงกับ <code>input_schema</code></li>
+  <li>ชื่อ tool ถูกเสมอ (เป็น tool ที่เราให้ไว้ หรือ server tool)</li>
+  <li>handler ไม่ต้องมีลูป validate-and-retry สำหรับ arguments อีก</li>
+</ul>
+
+<h3>ข้อจำกัดเชิงปฏิบัติ</h3>
+<ul>
+  <li><code>computer_toolset_20260801</code> และ <code>browser_toolset_20260801</code> <strong>ไม่รับ</strong> <code>strict: true</code> ใส่แล้ว request fail</li>
+  <li>Compiled tool schema ถูก cache ไว้นานสุด 24 ชั่วโมงหลังใช้ครั้งล่าสุด (message content ไม่ได้ถูก cache แบบนี้)</li>
+  <li>Strict tool use เป็น HIPAA eligible แต่ schema cache ไม่มีการป้องกัน PHI แบบเดียวกับ prompt/response ห้ามใส่ PHI ใน property names, enum values, const values และ pattern regex</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>ฟีเจอร์</th><th>ตั้งที่ไหน</th><th>คุมอะไร</th><th>ผลอยู่ที่ไหน</th></tr>
+  <tr><td>JSON outputs</td><td><code>output_config.format</code> กับ <code>type: "json_schema"</code></td><td>คำตอบของ Claude</td><td>text content block</td></tr>
+  <tr><td>Strict tool use</td><td><code>strict: true</code> บน tool definition</td><td>ชื่อ tool และ tool inputs</td><td>field <code>input</code> ของ <code>tool_use</code> block</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใส่ <code>strict: true</code> ได้กับทุก entry ใน tools"</strong> ไม่ได้ computer use และ browser use toolset ไม่รับ และทำให้ request ทั้งก้อน fail</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>strict: true</code> ระดับบนสุดของ tool = arguments ตรง schema เสมอ ยกเว้น computer/browser toolset ที่ใส่ไม่ได้ และอย่าเอา PHI ไปไว้ใน schema</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ใน tool definition key ไหนที่ <em>เปิด</em> การรับประกันว่า input ตรง schema?</p>
+  <ol type="A">
+    <li><code>required</code></li>
+    <li><code>additionalProperties: false</code></li>
+    <li><code>strict: true</code></li>
+    <li><code>input_schema</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>required</code> และ <code>additionalProperties</code> เป็นส่วนของ schema ที่อยู่ใน <code>input_schema</code> แค่บอกรูปร่าง ไม่ได้เปิดการบังคับ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>dev ใส่ <code>strict: true</code> ให้ทุก tool รวมถึง <code>browser_toolset_20260801</code> เพื่อความชัวร์ จะเกิดอะไรขึ้น?</p>
+  <details><summary>ดูเฉลย</summary><p>request ถูก reject เพราะ browser toolset (และ computer toolset) ไม่รับ <code>strict: true</code> ต้องเอาออกจาก entry นั้น</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เมื่อใช้ structured outputs ไม่ได้</h3>
+<p>ก่อนอื่นเช็กว่าที่ติดเป็นแค่ <strong>constraint ที่ไม่รองรับ</strong> หรือเปล่า ถ้าใช่ <code>transform_schema()</code> หรือ helper ที่ validate จัดการได้ ไม่ต้องเลิกใช้ฟีเจอร์</p>
+<p>ที่ต้อง fallback จริงๆ มี 2 กรณี:</p>
+<ul>
+  <li>โมเดลที่ใช้ไม่รองรับ structured outputs</li>
+  <li>schema ต้องใช้ feature ที่อยู่นอก subset ที่รองรับ</li>
+</ul>
+<p>Fallback คือเทคนิคจากบทเรียน 6.2: กำหนด format ให้เป๊ะด้วย JSON, XML หรือ template, prefill assistant turn (ถ้าโมเดลรับ) และใส่ examples</p>
+<p>แต่ตอนนี้ <strong>ไม่มีอะไรรับประกันแล้ว</strong> syntax error, field หาย, type ผิด กลับมาได้ทั้งหมด ต้องเติม:</p>
+<pre><code>from pydantic import ValidationError
+
+def get_order(prompt, retries=2):
+    for attempt in range(retries + 1):        # retry budget จำกัด
+        text = call_claude(prompt)
+        try:
+            return Order.model_validate_json(text)   # parse + validate schema ในโค้ด
+        except ValidationError as e:
+            prompt += f"\nรอบก่อน output ผิด: {e}. ตอบใหม่เป็น JSON ตาม format"
+    raise RuntimeError("ได้ JSON ที่ถูกไม่ทัน retry budget")</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Fallback ไปใช้ prompt-based format แล้ว ตัด validation ออกได้"</strong> ไม่ได้ guarantee หายไปแล้ว ต้องมี parse error handling, schema validation และ retries</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Constraint ไม่รองรับ ≠ ใช้ไม่ได้ · โมเดลไม่รองรับหรือ schema เกิน subset → fallback ไป prompt + ต้องมี validation และ retry</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมต้องใช้โมเดลที่ไม่รองรับ structured outputs จึงเปลี่ยนไปใช้ template + examples สิ่งที่ต้องเพิ่มในโค้ดคืออะไร และเพราะอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>ต้องเพิ่ม parse error handling, schema validation และ retry ที่มี budget เพราะ output ไม่ได้ถูกบังคับด้วย constrained decoding แล้ว จึงอาจผิดรูปได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>tool <code>get_exchange_rate</code> พังเมื่อ API ปลายทาง timeout และคืน <code>tool_result</code> ว่า <code>"failed"</code> พร้อม <code>is_error: true</code> แล้ว Claude ก็เรียกซ้ำวนไม่จบ ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>เปลี่ยนข้อความ error ให้บอกชัดว่าเกิดอะไร เช่น "upstream timeout, ลองใหม่ได้หลัง 30 วินาที หรือใช้อัตราที่ cache ไว้"</li>
+    <li>เอา <code>is_error</code> ออก ให้ดูเหมือนสำเร็จ</li>
+    <li>ไม่ต้องส่ง <code>tool_result</code> กลับเมื่อ error</li>
+    <li>เปลี่ยน tool นี้เป็น server tool</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> error ที่บอกรายละเอียดและสิ่งที่ทำได้ทำให้ Claude ปรับแผนได้ · B ทำให้ Claude อาจเอาข้อมูลที่พังไปใช้ต่อ · C ผิดกติกา API เพราะทุก <code>tool_use</code> ต้องมี <code>tool_result</code> ตามมา ไม่งั้น request error · D ไม่ใช่ option ที่ตั้งได้สำหรับ tool ที่เราเขียนเอง</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Anthropic docs: Structured outputs</li>
+  <li>Anthropic docs: Strict tool use</li>
+  <li>Anthropic docs: Increase output consistency</li>
+</ul>
+</section>

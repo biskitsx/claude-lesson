@@ -1,0 +1,222 @@
+<section class="lesson" id="l-2-4">
+<h2>2.4 Calling the Claude API: REST, JSON และ sync vs async patterns</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/rest-json-and-asynchronous-calls-with-the-claude-api">CertSafari 2.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่า Messages API call คือ HTTPS POST ที่ส่ง JSON ไปและได้ JSON กลับ และบอกได้ว่า SDK ใส่ header อะไรให้บ้าง</li>
+    <li>เลือกระหว่าง blocking call, async client, streaming และ submit-and-poll ให้เหมาะกับ workload</li>
+    <li>เก็บประวัติบทสนทนาเป็น JSON ใน storage ของเราเองระหว่างแต่ละ request</li>
+    <li>อธิบายได้ว่าทำไม network call เข้ากับ async programming และหลบ race condition จาก shared state ระหว่าง coroutine ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: request เหมือนกัน ต่างกันแค่ "วิธีรอ"</span>
+  <p>ไม่ว่าจะเรียกแบบไหน ตัว request ที่ส่งไปคือ JSON ของ Messages API ชุดเดิม และสิ่งที่ได้กลับคือ Message object หน้าตาเดิม สิ่งที่ต่างกันมีอย่างเดียวคือ <strong>โค้ดของเรารอผลลัพธ์ยังไง</strong> เพราะฉะนั้นให้เลือก pattern จาก latency ที่รับได้และรูปร่างของ workload</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Messages API คือ REST endpoint ธรรมดาที่คุยกันด้วย JSON</h3>
+<p>ลอก SDK ออกให้หมด สิ่งที่เหลือคือ HTTP request ธรรมดาตัวเดียว:</p>
+<ul>
+  <li>Base URL: <code>https://api.anthropic.com</code> ส่วนงานสนทนาใช้ <code>POST /v1/messages</code></li>
+  <li>Header ที่ต้องมี: <code>content-type: application/json</code>, <code>anthropic-version</code> (เช่น <code>2023-06-01</code>) และ <code>Authorization: Bearer &lt;token&gt;</code> (header เก่า <code>x-api-key</code> ยังใช้เป็น fallback ได้)</li>
+  <li>Official SDK ใส่ auth, version และ content-type ให้เอง แถมมี typed request/response, retry ในตัว, streaming และ timeout</li>
+  <li>Header ตัวเดียวที่เราอาจต้องใส่เองคือ <code>anthropic-workspace-id</code> และใส่เฉพาะตอน API key ของเราครอบคลุมหลาย workspace</li>
+</ul>
+<pre><code># ยิงตรงด้วย curl จะเห็นชัดว่าไม่มีอะไรซับซ้อน
+curl https://api.anthropic.com/v1/messages \
+  -H "content-type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Authorization: Bearer $ANTHROPIC_TOKEN" \
+  -d '{"model":"claude-opus-5-5","max_tokens":512,
+       "messages":[{"role":"user","content":"สวัสดี"}]}'</code></pre>
+<p>Response ที่ได้กลับมามี field หลักๆ แบบนี้:</p>
+<pre><code>{
+  "id": "msg_01...",          // id ของ message นี้
+  "type": "message",
+  "role": "assistant",
+  "content": [{"type": "text", "text": "..."}],  // เป็น list ของ block
+  "model": "claude-opus-5-5",
+  "stop_reason": "end_turn",  // ทำไมถึงหยุด
+  "stop_sequence": null,
+  "usage": {"input_tokens": 12, "output_tokens": 40}
+}</code></pre>
+
+<h3>API เป็น stateless: ความจำเป็นหน้าที่ของเรา</h3>
+<p>API ไม่จำอะไรเลยระหว่าง request ถ้าอยากให้ Claude "จำ" turn ก่อนหน้า เราต้องส่งประวัติทั้งหมดไปเองทุกครั้ง วิธีมาตรฐานคือเก็บ array <code>messages</code> (list ของ object ที่มี role กับ content) เป็น JSON ใน DB โดยใช้ conversation id เป็น key แล้วทำแบบนี้ทุก turn:</p>
+<ol class="steps">
+  <li>โหลด history ของ conversation นั้น</li>
+  <li>append ข้อความใหม่ของ user</li>
+  <li>ส่งทั้งก้อนไปที่ API</li>
+  <li>append content ของ assistant ที่ได้กลับมา</li>
+  <li>save กลับลง storage</li>
+</ol>
+<pre><code>def chat_turn(conv_id, user_text):
+    history = db.load(conv_id) or []          # 1. โหลดของเดิม
+    history.append({"role": "user", "content": user_text})
+    reply = client.messages.create(
+        model="claude-opus-5-5", max_tokens=1024, messages=history)
+    history.append({"role": "assistant", "content": reply.content})
+    db.save(conv_id, history)                 # 5. เก็บกลับ
+    return reply</code></pre>
+<p>เพราะ history เป็นของเรา เราจะใส่ assistant message ที่เขียนขึ้นเอง (synthetic) ลงไปก็ได้ เช่นเป็นตัวอย่างคำตอบ</p>
+<p>ข้อจำกัดเรื่องขนาด: request ของ Messages และ Token Counting สูงสุด <strong>32 MB</strong> ถ้าเกินจะได้ <strong>HTTP 413</strong> พร้อม error <code>request_too_large</code> ดังนั้นต้องวางแผนตัด/ย่อ history ไว้ก่อนที่แชตยาวๆ จะชนเพดาน</p>
+
+<h3>ทำไม network call ถึงเหมาะกับ async</h3>
+<p>เวลารอ API ตอบ CPU ของเราแทบไม่ได้ทำอะไร <code>await client.messages.create(...)</code> จะพักแค่ coroutine ตัวนั้น แล้วปล่อยให้ event loop ไปรัน coroutine ตัวอื่นต่อ ตัว request และ Message ที่ได้เหมือน blocking call ทุกอย่าง ต่างแค่การจัดคิว</p>
+<p>ข้อควรระวัง: ถ้าหลาย coroutine append ลง list หรือ dict ตัวเดียวกัน ก็เกิด race ได้แบบเดียวกับ thread วิธีที่ปลอดภัยคือให้แต่ละ coroutine return ผลของตัวเอง แล้วค่อยรวมทีหลัง</p>
+<pre><code># ไม่ดี: ทุก task เขียนลง results ตัวเดียวกัน
+# ดี: ให้ gather คืนผลเป็น list แล้วค่อยรวม
+results = await asyncio.gather(*(summarize(doc) for doc in docs))</code></pre>
+<p>อีกระดับของ async คือ async ที่ระดับ endpoint เลย เช่น <strong>Message Batches API</strong> ที่รับ request ไปก่อนแล้วค่อยประมวลผลทีหลัง HTTP response ตอนส่งแค่บอกว่า "รับแล้ว" ยังไม่มีคำตอบ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"API จำ turn ก่อนหน้าได้ ส่งแค่ข้อความล่าสุดก็พอ"</strong> ไม่ใช่ API เป็น stateless service ของเราต้องเก็บ history เองและส่งไปทั้งหมดทุกครั้ง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>POST JSON ไปที่ <code>/v1/messages</code> พร้อม 3 header หลัก ได้ Message กลับมา history เป็นของเรา ต้องเก็บและส่งเองทุก turn และระวังเพดาน 32 MB</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมเขียน wrapper ด้วย Rust ยิง HTTP เองโดยไม่ใช้ SDK และใช้ API key ที่ผูกกับ workspace เดียว header ตัวไหนที่ต้องใส่เองทุก request แน่ๆ?</p>
+  <ol type="A">
+    <li><code>anthropic-workspace-id</code></li>
+    <li><code>anthropic-version</code></li>
+    <li><code>request-id</code></li>
+    <li><code>x-batch-id</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>anthropic-version</code> ต้องมีทุก request ปกติ SDK ใส่ให้ แต่ถ้ายิงเองก็ต้องใส่เอง ส่วน workspace id ใช้เฉพาะ key ที่ครอบหลาย workspace และ <code>request-id</code> เป็น header ฝั่ง response</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทุกเดือนต้องแปะ tag หมวดหมู่ให้รีวิวสินค้าเก่า 80,000 รายการ แต่ละรายการไม่เกี่ยวกัน อยากประหยัดที่สุด ได้ผลภายในวันรุ่งขึ้นก็พอ ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>Streaming ผ่าน connection เดียวแล้วยัดรีวิวทั้งหมดใน prompt</li>
+    <li>ลูป <code>messages.create</code> ทีละรายการ</li>
+    <li>Message Batches API</li>
+    <li>เปิด session เดียวแล้ว resume ไปเรื่อยๆ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> งานปริมาณมาก แยกกันอิสระ และไม่มีใครรอผลทันที คือโจทย์ของ Batch API ซึ่งประมวลผลแบบ async และราคาประมาณครึ่งหนึ่ง</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Blocking call กับ async client</h3>
+<p><code>client.messages.create(...)</code> บน client แบบ sync (<code>Anthropic</code>) จะรอจนได้ Message ครบก่อนค่อยไปบรรทัดต่อไป เหมาะกับ script, CLI tool และ worker ที่ทำทีละ request</p>
+<p>แต่ถ้า service รันบน event loop (เช่น FastAPI) การเรียกแบบ blocking จะไปแช่ทั้ง loop ทำให้ coroutine อื่นค้างไปหมด ทางแก้คือใช้ <code>AsyncAnthropic</code> ซึ่งมี method <code>messages.create</code> ชื่อเดียวกัน แค่ต้อง <code>await</code> ภายใน <code>async</code> function (Python SDK ยังเลือกใช้ aiohttp เป็น backend ได้ถ้าอยากได้ throughput แบบ async ดีขึ้น)</p>
+<pre><code>import asyncio
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic()
+
+async def main():
+    # await = พัก coroutine นี้ระหว่างรอ ไม่ block loop
+    msg = await client.messages.create(
+        model="claude-opus-5-5", max_tokens=1024,
+        messages=[{"role": "user", "content": "ช่วยสรุปไฟล์นี้หน่อย"}])
+    print(msg.content)
+
+asyncio.run(main())   # จุดเริ่ม event loop ระดับบนสุด</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Script/CLI ใช้ <code>Anthropic</code> แบบ blocking ได้เลย service ที่อยู่บน asyncio ใช้ <code>AsyncAnthropic</code> + <code>await</code> method เหมือนกันทุกอย่าง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ใน handler <code>async def</code> ของ web service มีคนเขียน <code>reply = client.messages.create(...)</code> โดย <code>client</code> เป็น <code>AsyncAnthropic</code> แล้วได้ coroutine object แทน Message ต้องเติมอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>เติม <strong><code>await</code></strong> หน้า call เพราะ <code>messages.create</code> ของ async client คืน awaitable ส่วน <code>asyncio.run</code> ใช้แค่เริ่ม loop ที่ระดับบนสุด ไม่ใช่ใส่ใน handler</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Streaming: เมื่อ output ยาว หรือมีคนนั่งดูอยู่</h3>
+<p>ลองเดาก่อน: job ตอนดึกขอ <code>max_tokens=128000</code> และไม่มีใครนั่งดู ควรเรียกยังไง? คำตอบคือ <code>messages.stream(...)</code> แล้วเรียก <code>get_final_message()</code> ไม่ใช่ blocking call ธรรมดา และไม่ต้องหั่นงานเป็นหลาย call</p>
+<p>Streaming คือ response ทยอยมาเป็นชิ้นๆ ผ่าน HTTP connection เดียวที่เปิดค้างไว้ มันช่วยใน 2 กรณี:</p>
+<ul>
+  <li>มีคนรออยู่ และได้ประโยชน์จากการเห็นข้อความค่อยๆ โผล่</li>
+  <li>Response ยาวมากจนเสี่ยงโดน HTTP timeout ซึ่ง SDK <strong>บังคับ</strong> ให้ใช้ streaming เมื่อ <code>max_tokens</code> สูงๆ แม้เราจะอยากได้แค่ผลสุดท้าย</li>
+</ul>
+<pre><code>with client.messages.stream(
+    model="claude-opus-5-5", max_tokens=128000,
+    messages=[{"role": "user", "content": "เขียนรายงานฉบับเต็ม"}],
+) as stream:
+    final = stream.get_final_message()   # ได้ Message หน้าตาเดียวกับ create
+print(final.usage.output_tokens)</code></pre>
+
+<h3>Error กลาง stream</h3>
+<p>Error ที่ blocking call รายงานเป็น HTTP status อาจมาเป็น <code>error</code> event <strong>ระหว่าง</strong> stream ได้ ตัวหลักคือ overload: <code>overloaded_error</code> ใน stream เทียบเท่ากับ <strong>HTTP 529</strong> ใน call ปกติ ถ้าเขียน error handling ครอบแค่ response แรก จะพลาดเคสนี้ไป ทั้ง sync และ async stream รองรับหมด</p>
+<pre><code>try:
+    with client.messages.stream(**req) as stream:
+        for text in stream.text_stream:
+            ui.push(text)
+except anthropic.APIStatusError as e:
+    # ต้องมี path นี้แยก: overload อาจมาหลังจาก stream เริ่มไปแล้ว
+    handle_retry(e)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Streaming มีไว้สำหรับ UI งาน backend ใช้ blocking เสมอ"</strong> ไม่ใช่ ถ้า <code>max_tokens</code> สูง SDK บังคับให้ stream อยู่แล้ว และ <code>get_final_message()</code> ก็คืน Message ครบเหมือน <code>create</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Stream เมื่อมีคนดูหรือ output ยาว ใช้ <code>get_final_message()</code> ถ้าอยากได้แค่ผลรวม และต้องจัดการ <code>error</code> event กลาง stream แยกจาก HTTP status</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>แชตบอทมีโค้ด retry เมื่อได้ HTTP 529 แต่ช่วง peak ผู้ใช้ยังเห็นคำตอบขาดกลางประโยคบ่อยๆ น่าจะเป็นเพราะอะไร?</p>
+  <ol type="A">
+    <li><code>max_tokens</code> ต่ำเกินไป</li>
+    <li>Overload มาเป็น <code>error</code> event หลัง stream เริ่มไปแล้ว ซึ่งการเช็ก 529 ตอนเริ่มจับไม่ได้</li>
+    <li>API ตัด history ทิ้งเพราะเกิน 32 MB</li>
+    <li>ต้องเปลี่ยนเป็น Batch API</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ใน stream, overload โผล่มาเป็น <code>overloaded_error</code> event กลางทาง ต้องมี error path สำหรับ stream โดยเฉพาะ</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Submit-and-poll: งานที่ไม่มีใครรอ</h3>
+<p>แยกการส่งงานกับการเก็บผลออกจากกัน: ส่งงานไป ได้ ID กลับมา แล้วค่อยมาเช็กสถานะทีหลัง ตัวอย่างมาตรฐานคือ Message Batches API ซึ่ง batch เริ่มที่ <code>processing_status</code> = <code>in_progress</code> แล้วเปลี่ยนเป็น <code>ended</code> เมื่อทุก request เสร็จและผลพร้อม</p>
+<pre><code>import time
+
+while True:
+    batch = client.messages.batches.retrieve(batch_id)
+    if batch.processing_status == "ended":
+        break                       # ผลพร้อมแล้ว ไปดึง results ได้
+    print("ยังไม่เสร็จ รอก่อน...")
+    time.sleep(60)                  # เช็กทุก 60 วินาที</code></pre>
+<ul>
+  <li>Job ID ต้อง<strong>อยู่นานกว่า</strong> process ที่ส่งงาน ให้เก็บ batch <code>id</code> ลง DB พร้อมข้อมูลที่ใช้ map ผลกลับไปหา record ของเรา</li>
+  <li>ตัว poller รันเป็น scheduled job ได้ ถ้า restart ก็ไม่เสียงาน</li>
+  <li>ใช้เมื่อ throughput และต้นทุนสำคัญกว่า latency เช่น classification หรือ evaluation ตอนกลางคืน ห้ามใช้เมื่อมี user รออยู่</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>Pattern</th><th>โค้ดรอยังไง</th><th>เหมาะเมื่อ</th></tr>
+  <tr><td>Blocking <code>messages.create</code></td><td>thread รอจนได้ Message ครบ</td><td>Script, worker ที่ทำทีละ request</td></tr>
+  <tr><td><code>AsyncAnthropic</code> + <code>await</code></td><td>coroutine ยอมถอยระหว่าง request วิ่ง</td><td>Service ที่รันบน event loop อยู่แล้ว</td></tr>
+  <tr><td><code>messages.stream</code></td><td>อ่าน event ผ่าน connection เดียว</td><td>มีคนดู output หรือ <code>max_tokens</code> สูงจนเสี่ยง timeout</td></tr>
+  <tr><td>Message Batches (submit-and-poll)</td><td>เก็บ ID แล้วเช็ก <code>processing_status</code> ทีหลัง</td><td>งานปริมาณมากที่ไม่มีใครรอผลทีละชิ้น</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Submit-and-poll = ส่งงาน เก็บ ID ให้ทนทาน แล้ว poll จน <code>ended</code> เหมาะกับงานกลางคืนปริมาณมาก ไม่เหมาะกับงานที่ user รอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่ workload กับ pattern:</p>
+  <ol>
+    <li>หน้าเว็บ code assistant ที่ผู้ใช้ดูคำตอบพิมพ์ออกมาทีละคำ</li>
+    <li>รัน eval ชุด 30,000 ข้อทุกคืนวันอาทิตย์</li>
+    <li>API gateway บน asyncio ที่รับ request พร้อมกันหลายร้อยตัว</li>
+    <li>Script ครั้งเดียวที่แปลไฟล์ README</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → Streaming · 2 → Message Batches + polling · 3 → <code>AsyncAnthropic</code> + <code>await</code> · 4 → Blocking <code>messages.create</code></p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Platform docs: API overview</li>
+  <li>Claude Platform docs: Working with messages</li>
+  <li>Anthropic Python SDK docs</li>
+  <li>Claude Platform docs: Streaming messages</li>
+  <li>Claude Platform docs: Batch processing</li>
+  <li>Anthropic Cookbook</li>
+</ul>
+</section>

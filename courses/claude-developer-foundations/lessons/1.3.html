@@ -1,0 +1,299 @@
+<section class="lesson" id="l-1-3">
+<h2>1.3 Agent patterns, frameworks, subagents และ memory</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/subagents-memory-and-context-window-management-for-agents">CertSafari 1.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>จับคู่งานกับ pattern ได้: prompt chaining, routing, parallelization, orchestrator-workers, evaluator-optimizer หรือ autonomous agent</li>
+    <li>บอกได้ว่าใครหมุน tool-use loop (โค้ดเรา, server ของ Anthropic, Agent SDK หรือ framework) และเมื่อไหร่ควรเรียก API ตรงๆ</li>
+    <li>ใช้ subagent เพื่อกันงานสำรวจไม่ให้ไปรก context window หลัก</li>
+    <li>resume subagent ข้าม <code>query()</code> ได้ด้วย session ID และ agent ID</li>
+    <li>แยก memory file ที่อยู่ข้าม session ออกจาก context window ที่อยู่แค่ session เดียว</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เริ่มจากโครงที่ง่ายที่สุดที่ใช้ได้</span>
+  <p>ใน <strong>workflow</strong> โค้ดเราล็อกเส้นทางของการเรียก LLM ไว้ ใน <strong>agent</strong> โมเดลเลือกขั้นต่อไปเอง ใช้ agent ก็ต่อเมื่อ <em>รู้ขั้นตอนล่วงหน้าไม่ได้จริงๆ</em> เท่านั้น</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Workflow pattern 5 แบบ (+ autonomous agent)</h3>
+<div class="table-wrap"><table>
+  <tr><th>Pattern</th><th>หน้าตา</th><th>ใช้เมื่อ</th></tr>
+  <tr><td><strong>Prompt chaining</strong></td><td>ลำดับตายตัว แต่ละ call ใช้ output ของ call ก่อน คั่นด้วย code gate ตรวจระหว่างขั้นได้</td><td>งานแตกเป็นขั้นที่รู้ล่วงหน้า เช่น ร่าง → แปล</td></tr>
+  <tr><td><strong>Routing</strong></td><td>classifier ส่ง input ไปที่ prompt หรือ model เฉพาะทาง</td><td>input แบ่งเป็นหมวดชัดเจน</td></tr>
+  <tr><td><strong>Parallelization</strong></td><td><em>sectioning</em> (งานย่อยอิสระรันพร้อมกัน) หรือ <em>voting</em> (งานเดียวกันรันหลายรอบ)</td><td>งานย่อยไม่พึ่งกัน, อยากได้ความเร็ว หรืออยากได้ความมั่นใจเพิ่ม</td></tr>
+  <tr><td><strong>Orchestrator-workers</strong></td><td>LLM ตัวกลางแตกงานตอนรันแล้วส่งให้ worker</td><td>เดางานย่อยล่วงหน้าไม่ได้</td></tr>
+  <tr><td><strong>Evaluator-optimizer</strong></td><td>ตัวหนึ่ง generate อีกตัว critique แล้ววนซ้ำ</td><td>มีเกณฑ์ประเมินชัด และการ refine ช่วยได้จริงแบบวัดผลได้</td></tr>
+  <tr><td><strong>Autonomous agent</strong></td><td>โมเดลเลือก tool call เองใน feedback loop</td><td>จำนวนขั้นเปิดกว้าง และแต่ละขั้นเช็กกับความจริงได้</td></tr>
+</table></div>
+<ul>
+  <li><strong>Sectioning vs orchestrator-workers:</strong> sectioning งานย่อยถูก hardcode ไว้ในโค้ด ส่วน orchestrator-workers โมเดลเป็นคนคิดงานย่อยตอนรัน</li>
+  <li><strong>Voting:</strong> ให้หลาย prompt ทำงานเดียวกัน เช่น ตรวจโค้ดหาช่องโหว่ด้วย prompt คนละแบบ แล้วรวมคำตัดสิน</li>
+  <li><strong>เรื่องความเร็ว:</strong> subagent ที่รันพร้อมกันเสร็จเมื่อตัวที่ช้าที่สุดเสร็จ ไม่ใช่เวลาของทุกตัวบวกกัน</li>
+  <li><strong>Trade-off:</strong> ระบบ agentic โดยทั่วไปเอา latency กับ cost ไปแลกกับผลงานที่ดีขึ้น</li>
+</ul>
+
+<pre><code># voting: ส่ง diff เดียวกันให้ prompt หลายแบบ แล้ว flag ถ้ามีตัวไหนเจอปัญหา
+import asyncio
+
+PROMPTS = ["หา SQL injection", "หา XSS", "หา secret ที่หลุดในโค้ด"]
+
+async def vote(diff):
+    verdicts = await asyncio.gather(*(llm(p, diff) for p in PROMPTS))
+    return any(v.found_issue for v in verdicts)   # กฎการรวมผลอยู่ในโค้ดเรา</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"งานซับซ้อนหลายขั้น ต้องใช้ autonomous agent เสมอ"</strong> ไม่ใช่ เริ่มจากง่ายก่อน workflow ตายตัวหรือการเรียก LLM ครั้งเดียวมักชนะทั้งเรื่องต้นทุนและความคาดเดาได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>รู้ขั้นตอน = chaining, รู้หมวด = routing, งานอิสระพร้อมกัน = parallelization, งานย่อยโผล่ตอนรัน = orchestrator-workers, มีเกณฑ์ให้วนแก้ = evaluator-optimizer, ไม่รู้กี่ขั้น = agent</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ระบบตรวจ Terraform plan ส่ง plan เดียวกันให้ prompt 3 แบบ (มองด้าน cost, ด้าน security, ด้าน naming convention) พร้อมกัน แล้วรวมเป็นรายงานเดียว เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Parallelization แบบ voting</li>
+    <li>Parallelization แบบ sectioning</li>
+    <li>Orchestrator-workers</li>
+    <li>Routing</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> แต่ละตัวทำคนละเรื่อง และเรื่องเหล่านั้นถูกกำหนดไว้ในโค้ดตั้งแต่แรก ถ้าเป็น voting ทุกตัวต้องทำ <em>งานเดียวกัน</em> แล้วเอาคำตัดสินมารวม และไม่มี LLM ตัวกลางคิดงานย่อยตอนรัน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ต้อง migrate API client เก่าในโปรเจกต์ใหญ่ โดยไม่รู้ว่ามีกี่ไฟล์ที่เรียกใช้ และแต่ละไฟล์ต้องแก้แบบไหน จนกว่าจะเข้าไปดูโค้ด pattern ไหนเหมาะ?</p>
+  <ol type="A">
+    <li>Prompt chaining ไฟล์ละ 1 call ตามรายชื่อที่เขียนไว้ล่วงหน้า</li>
+    <li>Routing ตามนามสกุลไฟล์</li>
+    <li>Orchestrator-workers: LLM ตัวกลางสำรวจ แตกงานตอนรัน ส่งให้ worker แล้วรวมผล</li>
+    <li>Voting: รัน migration prompt เดียวกัน 3 รอบแล้วเลือกผลที่ตรงกันมากที่สุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> งานย่อยโผล่ออกมาระหว่างสำรวจ A กับ B สมมติว่ารู้งานย่อยตั้งแต่แรก ส่วน D เป็นการเพิ่มความมั่นใจ ไม่ใช่การแตกงาน</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ใครหมุน tool-use loop</h3>
+<p>ลูปพื้นฐาน: Claude ขอ tool → tool ทำงาน → ผลกลับไปหา Claude คำถามออกแบบคือ <strong>ใครเป็นคนหมุนลูปนี้</strong></p>
+<p>ตัวบอกว่าลูปควรทำอะไรต่อคือ <code>stop_reason</code>:</p>
+<div class="table-wrap"><table>
+  <tr><th><code>stop_reason</code></th><th>ความหมาย / ต้องทำอะไร</th></tr>
+  <tr><td><code>tool_use</code></td><td>Claude ขอเรียก client tool → เรารันแล้วส่ง <code>tool_result</code> กลับ</td></tr>
+  <tr><td><code>end_turn</code></td><td>ได้คำตอบสุดท้ายแล้ว</td></tr>
+  <tr><td><code>max_tokens</code></td><td>ชนเพดาน token ของ response</td></tr>
+  <tr><td><code>stop_sequence</code></td><td>เจอ stop sequence ที่ตั้งไว้</td></tr>
+  <tr><td><code>refusal</code></td><td>โมเดลปฏิเสธ</td></tr>
+  <tr><td><code>pause_turn</code></td><td>server tool วนครบ iteration limit → ส่ง conversation กลับไปใหม่ <strong>รวม response ที่ถูก pause ด้วย</strong> เพื่อให้ Claude ทำต่อ</td></tr>
+</table></div>
+
+<pre><code># ลูปที่เราหมุนเองบน Messages API
+while True:
+    resp = client.messages.create(model=MODEL, messages=msgs, tools=TOOLS, max_tokens=2048)
+    msgs.append({"role": "assistant", "content": resp.content})
+    if resp.stop_reason == "tool_use":
+        msgs.append({"role": "user", "content": run_client_tools(resp.content)})  # เราสร้าง tool_result เอง
+    elif resp.stop_reason == "pause_turn":
+        continue          # server tool ยังไม่เสร็จ ส่ง conversation (รวม response ที่ pause) กลับไปใหม่
+    else:
+        break             # end_turn / max_tokens / stop_sequence / refusal</code></pre>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>เปิด <code>web_fetch</code> ไว้ใน request แล้ว Claude fetch ไป 4 หน้า แอปเราต้องสร้าง <code>tool_result</code> block กี่อัน?</p>
+  <ol type="A"><li>4</li><li>1 (รวมทุกหน้า)</li><li>0</li></ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>web_fetch</code> เป็น server tool ที่ Anthropic รันให้ เราไม่ต้องสร้างผลของมันเลย</p></details>
+</div>
+
+<div class="table-wrap"><table>
+  <tr><th>คนหมุนลูป</th><th>โค้ดเราทำอะไร</th><th>Trade-off</th></tr>
+  <tr><td>โค้ดเราบน Messages API</td><td>วนตาม <code>tool_use</code>, รัน tool, ส่ง <code>tool_result</code>, จัดการ stop อื่นๆ</td><td>เห็นและคุมทุกอย่าง แต่ต้องเขียนลูปเองทั้งหมด</td></tr>
+  <tr><td>Server ของ Anthropic (<code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>)</td><td>เปิด tool และส่งซ้ำเมื่อเจอ <code>pause_turn</code></td><td>iteration เกิดนอกสายตาเรา</td></tr>
+  <tr><td>Claude Agent SDK <code>query()</code></td><td>วนอ่าน message ที่ถูก yield (AssistantMessage, UserMessage, ResultMessage)</td><td>ได้ built-in tools, subagents, hooks, session ID และไม่ต้องเขียนลูปเอง</td></tr>
+  <tr><td>Third-party frameworks (Strands Agents SDK ของ AWS, LangGraph, PydanticAI)</td><td>config agent object ของ framework</td><td>เริ่มได้เร็ว แต่ prompt ถูกซ่อน debug ยาก</td></tr>
+</table></div>
+<ul>
+  <li><strong>Agent SDK</strong> รัน tool และวนไปจนไม่เหลือ tool call แล้ว yield <strong>ResultMessage</strong> ที่มี final text, token usage, cost และ session ID</li>
+  <li><strong>Frameworks</strong> ช่วยให้เรียกโมเดล นิยาม tool และต่อ call ง่ายขึ้น แต่แลกกับ abstraction ที่บัง prompt จริง</li>
+  <li><strong>เรียก API ตรงๆ เมื่อ:</strong> pattern นั้นเขียนไม่กี่บรรทัดก็ได้ หรือเราต้องเห็นแบบเป๊ะๆ ว่า Claude ได้รับอะไรไป</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Server tool อย่าง <code>web_search</code> ต้องให้โค้ดเราเป็นคนรัน"</strong> ไม่ใช่ Anthropic รันให้ หน้าที่เรามีแค่เปิดใช้งานและจัดการ <code>pause_turn</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Client tool = เรารันเอง, server tool = Anthropic รัน, Agent SDK = SDK รันให้แล้วจบด้วย ResultMessage, framework = สะดวกแต่มองไม่เห็น prompt</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>agent ที่สร้างด้วย framework ชอบเรียก tool <code>search_orders</code> ทั้งที่ควรเรียก <code>search_invoices</code> และไม่มีใครในทีมรู้ว่า description ของ tool ที่ Claude เห็นจริงๆ หน้าตาเป็นยังไง ควรแก้ยังไงก่อน?</p>
+  <ol type="A">
+    <li>เพิ่ม tool ใหม่ที่รวมสองตัวนี้เข้าด้วยกัน</li>
+    <li>เปลี่ยนไปใช้โมเดลที่ context window ใหญ่กว่า</li>
+    <li>เขียน flow นี้ใหม่บน API ตรงๆ เพื่อให้เห็นทุก prompt และ response</li>
+    <li>ครอบด้วย evaluator-optimizer loop</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ต้นเหตุคือมองไม่เห็น prompt ที่ framework ซ่อนไว้ ข้ออื่นเป็นการแก้ปลายเหตุโดยยังไม่รู้ว่า Claude ได้รับอะไร</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Subagent เป็นกลยุทธ์จัดการ context window</h3>
+<p><strong>Context window</strong> บรรจุทุกอย่าง: system prompt, messages ทั้งหมด, tool results และ tool definitions ยิ่งเต็มยิ่งแย่ ความแม่นและการจำรายละเอียดลดลง เรียกว่า <strong>context rot</strong> และตัวที่ทำให้เต็มเร็วที่สุดคือ <strong>tool results</strong></p>
+<p>Subagent แก้ปัญหานี้ด้วย <strong>isolation</strong>: แต่ละตัวมีบทสนทนาของตัวเอง tool call ระหว่างทางอยู่ในนั้น และส่งกลับไปหาตัวแม่แค่ <strong>ข้อความสุดท้าย</strong> เหมือนส่งเด็กฝึกงานไปขุดเอกสาร 100 หน้า แล้วกลับมาเล่าให้ฟัง 5 บรรทัด</p>
+<p>ประโยชน์อื่น: รันขนานได้, มี system prompt เฉพาะทาง และจำกัด tool ต่อ subagent ได้</p>
+<ul>
+  <li>นิยาม subagent ได้ทาง option <code>agents</code> ของ <code>query()</code> หรือเป็นไฟล์ markdown ใน <code>.claude/agents/</code></li>
+  <li>Claude ยังเรียก <strong>general-purpose subagent</strong> ที่ built-in มาได้ผ่าน <strong>Agent tool</strong></li>
+  <li><strong>Compaction</strong> เป็นอีกเครื่องมือสำหรับบทสนทนายาวๆ เส้นเดียว: server แทนที่ turn เก่าๆ ด้วยสรุปที่ Claude เขียนเอง (เรื่อง context discipline อยู่บท 6.1)</li>
+</ul>
+
+<pre><code># นิยาม subagent ด้วย AgentDefinition
+from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
+
+opts = ClaudeAgentOptions(agents={
+    "log-digger": AgentDefinition(
+        description="ใช้เมื่อต้องค้นและสรุป log ขนาดใหญ่",   # Claude ใช้ตรงนี้ตัดสินว่าจะ delegate เมื่อไหร่
+        prompt="คุณเชี่ยวชาญการอ่าน log หา error pattern และสรุปสาเหตุแบบสั้น",
+        tools=["Read", "Grep", "Bash"],                    # Bash ไว้รัน jq/zcat ได้
+    )
+})</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>tool results คือตัวการทำ context เต็ม ส่งงานขุดข้อมูลไปให้ subagent แล้วรับกลับมาแค่ข้อความสุดท้าย context ของตัวแม่จะสะอาด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>agent หลักส่งงาน "หาว่า feature flag <code>new_checkout</code> ถูกใช้ที่ไหนบ้าง" ให้ subagent ซึ่ง grep และเปิดอ่านไป 25 ไฟล์ อะไรจะเข้าไปอยู่ในบทสนทนาของ agent หลัก?</p>
+  <ol type="A">
+    <li>เนื้อหาทั้ง 25 ไฟล์</li>
+    <li>รายการ tool call ทั้งหมด แต่ไม่มีผลลัพธ์</li>
+    <li>ข้อความสุดท้ายของ subagent เท่านั้น</li>
+    <li>ยังไม่มีอะไร จนกว่า agent หลักจะเปิดไฟล์อ่านซ้ำเอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> tool call และผลลัพธ์ระหว่างทางอยู่ในบทสนทนาของ subagent ทั้งหมด ตัวแม่ได้แค่ข้อความสุดท้าย</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Resume subagent ข้าม query</h3>
+<p>โดย default ทุก <code>query()</code> เปิด session ใหม่ ถ้าถามต่อโดยไม่ resume ก็เท่ากับให้ทำงานเดิมซ้ำตั้งแต่ศูนย์ ต้องใช้ ID สองตัว:</p>
+<div class="table-wrap"><table>
+  <tr><th>ID</th><th>หาได้จาก</th><th>เอาไปใช้ยังไง</th></tr>
+  <tr><td><strong>Session ID</strong></td><td><code>ResultMessage</code></td><td>ใส่เป็น <code>resume</code> ใน options ของ query ถัดไป เพื่อกู้ transcript</td></tr>
+  <tr><td><strong>Agent ID</strong></td><td>ข้อความใน result ของ Agent tool (<code>agentId: ...</code>)</td><td>ใส่ไว้ใน prompt เพื่อบอกให้ Claude ทำงานต่อกับ subagent ตัวนั้น</td></tr>
+</table></div>
+
+<pre><code>import re
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+
+def find_agent_id(text):
+    m = re.search(r"agentId:\s*([\w-]+)", text)   # ดึง agentId จากข้อความผลของ Agent tool
+    return m.group(1) if m else None
+
+session_id = agent_id = None
+async for msg in query(prompt="ใช้ subagent endpoint-finder หา endpoint ที่ไม่มี auth"):
+    # ... ตรงที่เจอ ToolResultBlock ของ Agent tool: agent_id = find_agent_id(text)
+    if isinstance(msg, ResultMessage):
+        session_id = msg.session_id
+
+# รอบสอง: resume session เดิม + ระบุ agent ID ใน prompt
+async for msg in query(
+    prompt=f"ให้ subagent {agent_id} ไล่ต่อว่า endpoint ไหนเข้าถึง PII ได้",
+    options=ClaudeAgentOptions(resume=session_id),
+):
+    ...</code></pre>
+<p><strong><code>maxTurns</code>:</strong> ถ้า subagent ชนเพดาน turn ผลที่ส่งกลับจะถูกมาร์กว่าเป็น partial การ resume ทำให้มันทำต่อจนจบได้โดยใช้ context ที่สะสมไว้แล้ว ไม่ต้องเริ่มขุดใหม่</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เรียก <code>query()</code> รอบใหม่ แล้วมันจะคุยกับ subagent ตัวเดิมได้เอง"</strong> ไม่ได้ ต้อง resume session ด้วย ID และระบุ agent ID ใน prompt ทั้งสองอย่าง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>session ID (จาก ResultMessage) → <code>resume</code>, agent ID (จาก Agent tool result) → ใส่ใน prompt ทั้งสองตัวมีหลังรอบแรกจบเท่านั้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (เรียงลำดับ)</span>
+  <p>อยากให้ subagent "dep-auditor" ที่ตรวจ dependency ไปแล้ว ตรวจ license ต่อในรอบถัดไป เรียงขั้นตอนให้ถูก:</p>
+  <ol type="a">
+    <li>เริ่ม <code>query()</code> รอบสองโดยตั้ง <code>resume</code> เป็น session ID ที่เก็บไว้</li>
+    <li>รัน <code>query()</code> รอบแรกให้ Claude ใช้ dep-auditor</li>
+    <li>ใส่ agent ID ไว้ใน prompt รอบสอง</li>
+    <li>เก็บ <code>session_id</code> จาก ResultMessage และ <code>agentId</code> จากผลของ Agent tool</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>b → d → a → c</strong> ID ทั้งสองตัวเกิดขึ้นหลังรอบแรกรันแล้วเท่านั้น จึงต้องรันก่อนแล้วค่อยเก็บ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ระบบทำ release note: สรุป commit เป็นภาษาอังกฤษ → โค้ดเช็กว่าไม่เกิน 300 คำและไม่มีชื่อ ticket ภายใน → ถ้าผ่านค่อยแปลเป็นไทยและญี่ปุ่น แต่ละขั้นอ่านแค่ output ที่ผ่านการตรวจแล้วของขั้นก่อน เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Evaluator-optimizer ที่วน critique จำนวนรอบตายตัว</li>
+    <li>Routing ไปหา prompt ตามภาษา</li>
+    <li>Prompt chaining ที่มี programmatic gate ก่อนแปล</li>
+    <li>Orchestrator-workers ที่ตัดสินภาษาตอนรัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ลำดับตายตัวและมี gate ตรวจครั้งเดียว ไม่ใช่ feedback loop (ไม่ใช่ A) ภาษาถูกกำหนดไว้แล้ว (ไม่ใช่ B หรือ D)</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Memory ที่อยู่ได้นานกว่า session</h3>
+<p><strong>Context window</strong> คือ working memory ที่หายไปพร้อม session การ resume แค่ต่อ transcript เดิมไปข้างหน้า และ compaction แค่ทำให้บทสนทนาเส้นเดียวไม่ล้นลิมิต ทั้งสองอย่าง <strong>ไม่ได้ทำให้เกิดการเรียนรู้ข้าม session</strong></p>
+<p>ตัวที่ทำได้คือ <strong>memory tool</strong>: Claude สร้าง อ่าน แก้ และลบไฟล์ใต้ <code>/memories</code> ได้ และไฟล์พวกนี้อยู่ข้าม session</p>
+<ul>
+  <li><strong>Workflow:</strong> เมื่อเปิดใช้ Claude จะเช็ก memory directory ก่อนเริ่มงาน แล้วจดสิ่งที่เรียนรู้ลงไประหว่างทำ</li>
+  <li><strong>Just-in-time retrieval:</strong> โหลดไฟล์เฉพาะตอนที่ต้องใช้ context ที่ active อยู่เลยเล็ก</li>
+  <li><strong>Client-side execution:</strong> Claude แค่ <em>ขอ</em> file operation ส่วนแอปเราเป็นคนทำจริงบน storage ที่เราคุม แล้วส่ง <code>tool_result</code> กลับ เราจึงเป็นคนกำหนดว่าข้อมูลอยู่ที่ไหนและใครเข้าถึงได้</li>
+  <li><strong>Schema:</strong> Anthropic เผยแพร่ schema ไว้ และ Claude ถูก train มากับมัน เลยเรียกได้แม่นกว่า tool ที่เราทำเลียนแบบเอง</li>
+</ul>
+
+<pre><code># handler ฝั่งเรา: Claude ขอ แอปเราทำจริง (ตัวอย่างแบบย่อ ต้องกัน path traversal ด้วย)
+from pathlib import Path
+ROOT = Path("/srv/agent-memories")   # เราเลือกเองว่าเก็บที่ไหน
+
+def handle_memory(cmd):
+    p = (ROOT / cmd["path"].removeprefix("/memories/")).resolve()
+    if not p.is_relative_to(ROOT):    # guardrail: ห้ามออกนอกโฟลเดอร์
+        return "error: invalid path"
+    if cmd["command"] == "view":
+        return p.read_text() if p.is_file() else "\n".join(x.name for x in p.iterdir())
+    if cmd["command"] == "create":
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(cmd["file_text"]); return "ok"
+    # ... คำสั่งอื่นๆ ตาม schema</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ให้ long-term memory ด้วยการโหลดทุกอย่างที่เคยเจอเข้า context ตั้งแต่เริ่ม session"</strong> ไม่ใช่ memory file ถูกอ่าน <strong>on demand</strong> การยัดทุกอย่างเข้าไปตั้งแต่แรกคือการเร่ง context rot</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>context window = สมุดทดที่ทิ้งเมื่อจบ session, memory tool = แฟ้มถาวรที่ Claude เปิดเฉพาะหน้าที่ต้องใช้ และแฟ้มนั้นอยู่บน storage ของเรา</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ฝ่าย compliance ถามว่าไฟล์ที่ Claude เขียนผ่าน memory tool ไปเก็บอยู่ที่ไหน คำตอบที่ถูกคือ?</p>
+  <ol type="A">
+    <li>อยู่ใน session transcript</li>
+    <li>เก็บบน server ของ Anthropic เหมือนผลของ <code>web_search</code></li>
+    <li>ที่ไหนก็ได้ที่แอปเราเขียนลงไป เพราะ tool นี้รันฝั่ง client</li>
+    <li>อยู่ใน context window แบบถูกบีบด้วย compaction</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Claude แค่ขอ operation ส่วนการอ่านเขียนจริงทำโดยแอปเรา บน storage ที่เราเลือก</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>แชตบอทของร้านค้าออนไลน์จัดข้อความลูกค้าเป็น "ติดตามพัสดุ", "ขอคืนเงิน" หรือ "สอบถามสินค้า" แล้วส่งไปหา prompt ที่เขียนไว้เฉพาะหมวดนั้น เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Parallelization แบบ sectioning</li>
+    <li>Routing</li>
+    <li>Orchestrator-workers ที่คิดหมวดใหม่ตอนรัน</li>
+    <li>Prompt chaining ที่รัน prompt เดิม 3 รอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> classify แล้วส่งเข้าเส้นทางเฉพาะทาง หมวดถูกกำหนดไว้แล้ว ไม่ได้ถูกคิดขึ้นตอนรัน และไม่ได้รันทุกเส้นทางพร้อมกัน</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Anthropic Engineering: "Building effective agents"</li>
+  <li>Claude Code / Agent SDK docs: subagents และ agent loop</li>
+  <li>Claude Platform docs: tool use, context windows, compaction</li>
+  <li>Claude Platform docs: memory tool</li>
+</ul>
+</section>

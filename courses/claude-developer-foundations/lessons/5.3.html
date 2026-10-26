@@ -1,0 +1,238 @@
+<section class="lesson" id="l-5-3">
+<h2>5.3 Choosing a Claude model: capability, latency และ cost (tiers, effort, fast mode)</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/choosing-a-claude-model-capability-latency-and-cost">CertSafari 5.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>จับคู่ workload กับ tier ของ Claude ที่เหมาะ โดยดูจาก latency, ราคา และ capability</li>
+    <li>เลือกได้ว่าจะ "เริ่มเล็กแล้วขยับขึ้น" หรือ "เริ่มเก่งแล้วลดลง"</li>
+    <li>ใช้ effort เพื่อแลกความละเอียดกับจำนวน token บน model ตัวเดิม</li>
+    <li>อธิบายได้ว่า fast mode เปลี่ยนอะไร แพงขึ้นเท่าไหร่ และ model ไหนรองรับ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: capability–speed–cost tradeoff</span>
+  <p>ทุกการเลือก model คือการบาลานซ์ 3 อย่าง: เก่งแค่ไหน ตอบเร็วแค่ไหน และแพงแค่ไหน เราขยับจุดบาลานซ์ได้ 2 ทาง คือ <strong>เปลี่ยน tier</strong> หรือ <strong>อยู่ model เดิมแต่ปรับ effort / เปิด fast mode</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Lineup ปัจจุบันและบทบาทของแต่ละ tier</h3>
+<p>ทั้ง 4 model รองรับ input เป็น text + image, output เป็น text, vision และ tool use ได้หมด คำถามจริงเลยไม่ใช่ "ทำได้ไหม" แต่เป็น "ทำได้ดีแค่ไหน เร็วแค่ไหน และจ่ายเท่าไหร่"</p>
+<div class="table-wrap"><table>
+  <tr><th>Model</th><th>Latency</th><th>ราคา input / output (ต่อ MTok)</th><th>Thinking</th><th>Default effort</th><th>Context / max output</th></tr>
+  <tr><td>Claude Fable 5.1</td><td>ช้ากว่า</td><td>$10 / $50</td><td>Adaptive (เปิดตลอด)</td><td>high</td><td>1M / 128K</td></tr>
+  <tr><td>Claude Opus 5.5</td><td>ปานกลาง</td><td>$4 / $20</td><td>Adaptive (เปิดตลอด)</td><td>medium</td><td>1M / 128K</td></tr>
+  <tr><td>Claude Sonnet 5.5</td><td>เร็ว</td><td>$2 / $10</td><td>Adaptive</td><td>high</td><td>1M / 128K</td></tr>
+  <tr><td>Claude Haiku 4.5</td><td>เร็วที่สุด</td><td>$1 / $5</td><td>Extended</td><td>ไม่รองรับ effort</td><td>200K / 64K</td></tr>
+</table></div>
+
+<h3>Thinking 2 แบบ</h3>
+<ul>
+  <li><strong>Adaptive thinking:</strong> Claude ตัดสินเองทีละ request ว่าจะคิดไหมและคิดเยอะแค่ไหน ถามเรื่องง่ายๆ อาจตอบเลยโดยไม่ think</li>
+  <li><strong>Extended thinking:</strong> โหมด manual เรากำหนด budget ของ thinking token เองต่อ request ผ่าน <code>budget_tokens</code> ในตารางนี้มีแค่ <strong>Haiku 4.5</strong> ที่ใช้แบบนี้</li>
+</ul>
+
+<h3>แต่ละ tier เกิดมาเพื่ออะไร</h3>
+<ul>
+  <li><strong>Fable 5.1:</strong> เก่งสุด สำหรับ agent session ยาวๆ และ deep research หลายขั้นที่จบด้วยเอกสารสำเร็จรูป</li>
+  <li><strong>Opus 5.5:</strong> จุดเริ่มต้นของ workload ส่วนใหญ่ เหมาะกับ coding agent ที่รันเองหลายชั่วโมง, refactor ขนาดใหญ่, งานหนัก vision และ computer use</li>
+  <li><strong>Sonnet 5.5:</strong> บาลานซ์ความเร็วกับความเก่ง สำหรับ code generation ประจำวัน, data analysis, agentic tool use</li>
+  <li><strong>Haiku 4.5:</strong> latency และราคาต่ำสุด สำหรับงาน real-time, ประมวลผลปริมาณมาก และงาน sub-agent</li>
+</ul>
+<p>ตัวเลขที่ควรจำ: output token ของ Fable แพงกว่า Haiku <strong>10 เท่า</strong> ($50 vs $5) และ Haiku มี context window (200K) กับ max output (64K) เล็กกว่าอีก 3 ตัว (1M / 128K)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ต้องใช้ Sonnet ขึ้นไปถึงจะทำ tool use ได้"</strong> ไม่ใช่ ทุก model ปัจจุบันรองรับ tool use ไม่ใช่ตัวแยก tier</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Fable = เก่งสุด/แพงสุด, Opus = จุดเริ่มทั่วไป, Sonnet = สายกลาง, Haiku = เร็วสุด/ถูกสุด (context เล็กกว่า, ใช้ extended thinking, ไม่มี effort)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>บริษัท e-commerce ต้องติด tag ให้รีวิวสินค้าสั้นๆ วันละหลายล้านรีวิว (บวก / ลบ / กลาง) แบบ real-time งบจำกัดและ latency ต้องต่ำ ควรเลือก model ไหน?</p>
+  <ol type="A">
+    <li>Opus 5.5 เพราะเป็นจุดเริ่มต้นของงานส่วนใหญ่</li>
+    <li>Sonnet 5.5 เพราะต้องใช้ tool use</li>
+    <li>Haiku 4.5</li>
+    <li>Fable 5.1 เพื่อความแม่นยำสูงสุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> งานง่าย ปริมาณมหาศาล ต้องเร็วและถูก ตรงกับ Haiku 4.5 ส่วน B อ้างเรื่อง tool use ซึ่งทุก model ทำได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมทำ voice assistant ในแอปธนาคาร ต้องเริ่มตอบภายในเสี้ยววินาที คนใช้เยอะมาก งบตึง แต่ยังต้องให้เหตุผลได้พอสมควร (เช่น อธิบายค่าธรรมเนียม) tier ไหนเหมาะสุด?</p>
+  <ol type="A">
+    <li>Haiku 4.5</li>
+    <li>Opus 5.5</li>
+    <li>Sonnet 5.5</li>
+    <li>Fable 5.1</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> เลือก tier ที่เร็วและถูกที่สุดที่ยังให้เหตุผลได้ตามโจทย์ ตัวอื่นแพงหรือช้าเกินความจำเป็น</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. สองวิธีในการเลือก model ตั้งต้น</h3>
+<div class="table-wrap"><table>
+  <tr><th>แนวทาง</th><th>เหมาะกับ</th><th>ทำยังไง</th></tr>
+  <tr><td><strong>Start small, step up</strong></td><td>prototype, latency budget ตึง, งานที่ไวต่อต้นทุน, งานง่ายปริมาณมาก</td><td>เริ่มที่ Haiku 4.5 แล้วขยับขึ้นเมื่อเจอ capability gap ที่ชี้ชัดได้เท่านั้น</td></tr>
+  <tr><td><strong>Start capable, step down</strong></td><td>reasoning ซับซ้อน, งานวิทย์/คณิต, ความเข้าใจละเอียดอ่อน, coding ขั้นสูง, ความถูกต้องสำคัญกว่าต้นทุน</td><td>เริ่มที่ Opus 5.5 จูน prompt ให้เข้าที่ แล้วค่อยลด effort หรือย้ายไป model ถูกลงทีหลัง</td></tr>
+</table></div>
+<p>ถ้า Opus 5.5 ที่ effort <code>xhigh</code> หรือ <code>max</code> แล้วยังไม่พอสำหรับงานหนักจริงๆ ค่อยขยับขึ้นไป Fable 5.1</p>
+
+<h3>ไม่ว่าทางไหน eval เป็นตัวตัดสิน</h3>
+<ul>
+  <li>สร้าง benchmark จาก prompt และข้อมูลจริงของเรา</li>
+  <li>เทียบ model ในเรื่อง accuracy, คุณภาพคำตอบ และ edge case</li>
+  <li>เทียบ <strong>cost per completed task</strong> ไม่ใช่ cost per token เพราะ model ที่ต่อ token แพงกว่าอาจทำงานเสร็จในรอบเดียว ขณะที่ตัวถูกต้องวนหลายรอบ</li>
+  <li>ผลวัดของ Anthropic: model รุ่นใหม่แก้โจทย์ได้อย่างน้อยเท่ารุ่นก่อนเสมอ และมักมี cost per solved task ต่ำกว่า</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>งานง่าย/ไวต่อเงิน → เริ่ม Haiku แล้วขึ้น งานยาก/ต้องแม่น → เริ่ม Opus 5.5 แล้วลง และวัดด้วย eval ที่ดู cost per completed task</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอนของแนวทาง start small ให้ถูก:</p>
+  <ol type="a">
+    <li>ประเมินว่า performance ผ่าน requirement ไหม</li>
+    <li>อัปเกรด model เมื่อเจอ capability gap ที่ชัดเจนเท่านั้น</li>
+    <li>เริ่ม implement ด้วย Haiku 4.5</li>
+    <li>เทสต์ use case ให้ทั่ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → d → a → b</strong> เริ่มเล็ก เทสต์ ประเมิน แล้วค่อยขยับขึ้นเฉพาะเมื่อมีหลักฐานว่าไม่พอ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Effort: จูน model ตัวเดิมแทนการเปลี่ยน model</h3>
+<p>Effort คือปุ่มบอกว่าให้ model "ใช้ token ไปกับคำตอบนี้มากแค่ไหน" แลกระหว่างความละเอียดถี่ถ้วนกับความประหยัด token</p>
+<ul>
+  <li>ตั้งต่อ request ที่ <code>output_config.effort</code></li>
+  <li>มี 5 ระดับจากต่ำไปสูง: <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code></li>
+  <li>มีผลกับ output token <strong>ทั้งหมด</strong>: text, tool call และ argument ของมัน รวมถึง thinking ถ้ามีการ think</li>
+  <li>effort ต่ำ = ประหยัดเวลาและเงิน แต่เสีย capability ไปบ้าง ส่วน <code>max</code> ให้ capability สูงสุด</li>
+</ul>
+<pre><code>resp = client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=4096,
+    output_config={"effort": "low"},   # ลด effort เพื่อลดค่า token
+    messages=[{"role": "user", "content": "สรุป PR นี้สั้นๆ"}],
+)</code></pre>
+
+<h3>Default effort และจุดเริ่มต้น</h3>
+<ul>
+  <li>model ส่วนใหญ่ default เป็น <code>high</code> (เช่น Fable 5.1 และ Opus 5)</li>
+  <li><strong>Opus 5.5 default เป็น <code>medium</code></strong> ให้เริ่มที่นั่น</li>
+  <li>บน Opus 4.8 และ 4.7 ค่าที่ <strong>แนะนำ</strong> สำหรับ coding และ agentic work ส่วนใหญ่คือ <code>xhigh</code> แม้จะไม่ใช่ default</li>
+  <li>Haiku 4.5 <strong>ไม่รองรับ</strong> effort</li>
+</ul>
+
+<h3>กฎตัดสินใจ</h3>
+<div class="table-wrap"><table>
+  <tr><th>อาการ</th><th>ทำอะไร</th></tr>
+  <tr><td>แพงไป แต่คุณภาพโอเค</td><td>ลด effort บน model เดิม</td></tr>
+  <tr><td>ลด effort แล้วคุณภาพตก</td><td>คืน effort กลับระดับเดิม</td></tr>
+  <tr><td>คุณภาพยังไม่พอ และยังไม่เคยลด effort</td><td>ลอง tier ถัดขึ้นไปที่ <code>low</code> effort ก่อน ค่อยตัดสินใจใช้ model ใหญ่ที่ default</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"อยากลดค่าใช้จ่าย ให้ย้ายไป model ถูกกว่าก่อน"</strong> ไม่ใช่ ลด effort บน model ที่ใช้อยู่ก่อน แล้วย้าย model เฉพาะเมื่อ eval บอกว่าจำเป็น</p>
+  <p><strong>"งาน autonomous coding สำคัญๆ บน Opus 4.8 ใช้ default หรือ max ไปเลย"</strong> ไม่ใช่ ค่าที่แนะนำคือ <code>xhigh</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Effort อยู่ที่ <code>output_config.effort</code> มี low → max คุมทุก output token Opus 5.5 เริ่ม medium, Haiku ไม่มี effort และปัญหาเรื่องเงินให้ลด effort ก่อนเปลี่ยน model</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>Agent บน Opus 5.5 ตอบดี แต่บิลรายเดือนสูงเกินงบ ขั้นแรกควรทำอะไร: ย้ายไป Haiku, เปิด fast mode หรือลด effort?</p>
+  <details><summary>ดูเฉลย</summary><p>ลด effort บน Opus 5.5 ก่อน fast mode ทำให้ <em>แพงขึ้น</em> ส่วนการย้ายไป Haiku เสี่ยงคุณภาพตกโดยยังไม่มีหลักฐานจาก eval</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เติมคำ)</span>
+  <pre><code>client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=2048,
+    ________={"effort": "high"},
+    messages=[...],
+)</code></pre>
+  <p>ช่องว่างคือ parameter อะไร?</p>
+  <ol type="A">
+    <li><code>speed</code></li>
+    <li><code>output_config</code></li>
+    <li><code>thinking</code></li>
+    <li><code>effort_config</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>speed</code> ใช้เปิด fast mode, <code>thinking</code> ใช้เลือกโหมด thinking และ <code>effort_config</code> ไม่มีอยู่จริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีม platform จะปล่อย agent ให้ migrate monorepo ขนาดใหญ่ไปใช้ framework ใหม่ รันเองต่อเนื่องหลายชั่วโมง ในกลุ่ม model รุ่นก่อน ตัวเลือกไหนตรงคำแนะนำที่สุด?</p>
+  <ol type="A">
+    <li>Opus 4.8 ที่ effort <code>xhigh</code></li>
+    <li>Sonnet 5 ที่ effort <code>low</code> เพื่อความเร็ว</li>
+    <li>Haiku 4.5 ปิด extended thinking</li>
+    <li>Opus 4.8 แล้วปรับ temperature ให้สูงขึ้นเพื่อความสร้างสรรค์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งาน coding ยาวๆ แบบ agentic บน Opus 4.8 แนะนำ <code>xhigh</code> ส่วน D จะโดน 400 เพราะ Opus 4.8 ไม่รับค่า temperature, top_p, top_k ที่ไม่ใช่ default</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Fast mode: model เดิม แต่ output ไหลเร็วขึ้น</h3>
+<ul>
+  <li>รัน <strong>model ตัวเดิม</strong> บน inference configuration ที่เร็วกว่า weights, พฤติกรรม และ capability ไม่เปลี่ยน</li>
+  <li>เพิ่ม output tokens per second ได้ถึง <strong>2.5 เท่า</strong></li>
+  <li>เร่งความเร็ว output <strong>ไม่ได้เร่ง time to first token (TTFT)</strong> เลยเห็นผลชัดตอน stream คำตอบยาวๆ</li>
+  <li>เปิดด้วย <code>speed: "fast"</code> คู่กับ beta header <code>fast-mode-2026-02-01</code></li>
+  <li>สถานะเป็น <strong>research preview</strong></li>
+</ul>
+<pre><code>resp = client.beta.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=8192,
+    speed="fast",                      # เปิด fast mode
+    betas=["fast-mode-2026-02-01"],    # ต้องมี beta flag
+    messages=[{"role": "user", "content": "เขียน migration script ทั้งชุดให้หน่อย"}],
+)</code></pre>
+<ul>
+  <li><strong>Model ที่รองรับ:</strong> Opus 5.5, Opus 5 และ Opus 4.8 (Opus 4.7 จะ reject)</li>
+  <li><strong>ราคา:</strong> คิดแบบ premium บน Opus 5.5 คือ $8 input / $40 output ต่อ MTok = 2 เท่าของปกติ ($4 / $20)</li>
+</ul>
+
+<h3>Effort vs fast mode: คนละขั้วกัน</h3>
+<div class="table-wrap"><table>
+  <tr><th></th><th>Effort</th><th>Fast mode</th></tr>
+  <tr><td>เปลี่ยนอะไร</td><td>ปริมาณงานที่ model ทำ</td><td>ความเร็วในการส่ง output (งานเท่าเดิม)</td></tr>
+  <tr><td>ผลต่อเงิน</td><td>ลดลงได้</td><td>แพงขึ้น (premium)</td></tr>
+  <tr><td>ใช้เมื่อ</td><td>ปัญหาคือบิล</td><td>มีคนนั่งรอ output ยาวๆ</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Fast mode คือการสลับไปใช้ model ที่เบากว่า แลกคุณภาพกับความเร็ว"</strong> ไม่ใช่ เป็น model ตัวเดิม เปลี่ยนแค่ output rate กับราคา</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Fast mode = <code>speed: "fast"</code> + beta header, output เร็วขึ้นถึง 2.5x (ไม่ใช่ TTFT), จ่าย 2 เท่า, ใช้ได้แค่ Opus 5.5 / 5 / 4.8</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ข้อไหนอธิบาย fast mode ถูกต้อง?</p>
+  <ol type="A">
+    <li>สลับไปใช้ Opus รุ่นย่อที่เล็กกว่าเพื่อให้เร็วขึ้น</li>
+    <li>เพิ่ม output tokens per second (ไม่ใช่ TTFT) และคิดราคาแบบ premium</li>
+    <li>ใช้กับ Haiku 4.5 ได้เพื่อให้เร็วขึ้นไปอีก</li>
+    <li>ทำให้ราคาต่อ token ถูกลงเพราะใช้เวลาน้อยลง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> model เดิม (A ผิด), Haiku ไม่รองรับ (C ผิด) และราคาแพงขึ้น ไม่ใช่ถูกลง (D ผิด)</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude docs: Models overview</li>
+  <li>Claude docs: Choosing a model</li>
+  <li>Claude docs: Extended thinking</li>
+  <li>Claude docs: Cost and intelligence optimization</li>
+  <li>Claude docs: Effort</li>
+  <li>Claude docs: Opus 5.5 migration guide</li>
+  <li>Claude docs: Fast mode</li>
+</ul>
+</section>

@@ -1,0 +1,255 @@
+<section class="lesson" id="l-8-3">
+<h2>8.3 Built-in tools vs custom tools, skills และ MCP: เลือกวิธีให้ Claude ลงมือ</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/built-in-tools-vs-custom-tools-choosing-how-claude-acts">CertSafari 8.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แยก Anthropic-provided client tool, server tool และ user-defined tool ได้จาก "ใครเขียน schema" และ "โค้ดรันที่ไหน"</li>
+    <li>ตัดสินได้ว่าเมื่อไหร่ built-in tool พอ และเมื่อไหร่คุ้มที่จะเขียน custom tool</li>
+    <li>อธิบายได้ว่า skill ใช้ progressive disclosure ยังไง เพื่อไม่ให้ความรู้ที่ไม่ได้ใช้มากิน context</li>
+    <li>เลือกได้ว่าจะใช้ MCP, skill หรือทั้งคู่ และบอก context cost ของแต่ละแบบได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: connection กับ know-how</span>
+  <p>Tool และ MCP server ให้ Claude มี <strong>action ให้เรียก</strong> (connection) ส่วน skill ให้ Claude มี <strong>วิธีทำหรือเอกสารอ้างอิงให้อ่านแล้วทำตาม</strong> (know-how) ที่โหลดเข้ามาเฉพาะตอนต้องใช้ หลายระบบต้องใช้ทั้งสองอย่าง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ใช้ built-in ก่อน แล้วค่อยเขียน custom tool สำหรับ action เฉพาะโดเมน</h3>
+<p>การขยายความสามารถ Claude มี 4 ทาง: tool ที่ Anthropic ให้มา, tool ที่เราเขียนเอง, skill และ MCP server เลือกผิดก็จะเจอ 2 แบบ: เขียนโค้ดที่ไม่จำเป็น หรือเผา context ทิ้ง</p>
+<p>จุดที่คนพลาดบ่อย: คำว่า "built-in" บอกแค่ว่า<strong>ใครออกแบบ</strong> tool ไม่ได้บอกว่า<strong>ใครรัน</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>ประเภท</th><th>Schema ใครเขียน</th><th>ใครรัน call</th><th>ตัวอย่าง</th></tr>
+  <tr><td>User-defined client tool</td><td>เรา</td><td>แอปของเรา</td><td><code>get_weather</code></td></tr>
+  <tr><td>Anthropic-schema client tool</td><td>Anthropic</td><td>แอปของเรา</td><td><code>bash</code>, <code>text_editor</code></td></tr>
+  <tr><td>Server tool</td><td>Anthropic</td><td>infrastructure ของ Anthropic</td><td><code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code></td></tr>
+</table></div>
+
+<h3>Built-in ใน Claude Code และ Agent SDK</h3>
+<p>Claude Code กับ Agent SDK มี built-in มาให้แล้ว เช่น Read, Edit, Write, Bash, Grep, Glob, WebFetch ฯลฯ ใน SDK:</p>
+<ul>
+  <li>เปิดใช้ built-in ด้วยชื่อใน <code>allowed_tools</code></li>
+  <li>ส่ง <code>tools</code> array ที่มีเฉพาะ built-in ที่ต้องการ เพื่อให้ตัวที่ไม่ใช้ไม่ต้องเข้ามาอยู่ใน context</li>
+  <li>Bash คือตัวเอนกประสงค์สำหรับงาน computer ทั่วไป</li>
+</ul>
+<pre><code>options = ClaudeAgentOptions(
+    tools=["Read", "Grep", "Glob"],          # เอาเข้า context แค่ 3 ตัวนี้
+    allowed_tools=["Read", "Grep", "Glob"],  # อนุมัติให้ใช้ได้โดยไม่ต้องถาม
+)</code></pre>
+
+<h3>เมื่อไหร่ควรเขียน custom tool</h3>
+<p>Custom tool คือ name + description + <code>input_schema</code> ที่โค้ดเราเป็นคนรัน ใน Agent SDK ให้ register ผ่าน <strong>in-process MCP server</strong> ควรเขียนเมื่อ action นั้น<strong>เฉพาะโดเมน และ agent ทำบ่อย</strong> เช่น agent จัดการอีเมลที่ต้องมี <code>fetchInbox</code> กับ <code>searchEmails</code></p>
+<pre><code>from claude_agent_sdk import tool, create_sdk_mcp_server
+
+@tool("lookup_shipment", "ดูสถานะพัสดุจากเลข tracking ภายในบริษัท", {"tracking_no": str})
+async def lookup_shipment(args):
+    status = await internal_api.track(args["tracking_no"])   # เรียกระบบภายในของเรา
+    return {"content": [{"type": "text", "text": status}]}
+
+logistics = create_sdk_mcp_server(name="logistics", version="1.0.0", tools=[lookup_shipment])</code></pre>
+<p>และรักษา tool set ให้เล็ก: tool PR ตัวเดียวที่มี parameter <code>action</code> ดีกว่ามี <code>create_pr</code>, <code>review_pr</code>, <code>merge_pr</code> แยกกัน</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Anthropic เขียน schema ของ bash กับ text_editor ก็แปลว่า Anthropic รันให้"</strong> ไม่ใช่ สองตัวนี้เป็น client tool แอปเรารันแต่ละ call และส่ง tool_result กลับเอง มีแค่ server tool ที่รันฝั่ง Anthropic</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถามสองข้อ: ใครเขียน schema และใครรัน built-in ครอบคลุมงานไฟล์/shell/search อยู่แล้ว custom tool ไว้สำหรับ action เฉพาะโดเมนที่ทำบ่อย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>tool ไหนต่อไปนี้ Anthropic เป็นคนเขียน schema แต่<strong>แอปของเรา</strong>ต้องรันเอง?</p>
+  <ol type="A">
+    <li><code>web_fetch</code></li>
+    <li><code>bash</code></li>
+    <li><code>tool_search</code></li>
+    <li><code>code_execution</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> bash เป็น Anthropic-schema client tool ส่วนอีกสามตัวเป็น server tool ที่รันบน infrastructure ของ Anthropic</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม QA ก๊อป checklist ทดสอบก่อน release 12 ขั้นมาแปะในแชท Claude Code ทุกรอบ และบางทีก็มีขั้นตกหล่น ควรทำยังไง?</p>
+  <ol type="A">
+    <li>แปะ checklist ไว้ใน CLAUDE.md ให้โหลดทุก session</li>
+    <li>ทำเป็น Skill แล้วเรียกด้วย slash command เช่น <code>/release-qa</code></li>
+    <li>เปิดเป็น MCP resource</li>
+    <li>เขียน custom tool ที่ print checklist ออกมา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> นี่คือ procedure ที่ใช้เป็นครั้งคราว เหมาะกับ skill CLAUDE.md ไว้สำหรับ convention ที่ต้องใช้ตลอดเวลา MCP ไว้ต่อระบบภายนอก และ tool ที่แค่ print ข้อความตายตัวไม่ได้เพิ่มอะไร</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Skills: know-how ที่โหลดเฉพาะตอนต้องใช้</h3>
+<p>Skill คือ directory ที่มีไฟล์ <code>SKILL.md</code> (instruction + metadata) และอาจมี script, template, ไฟล์อ้างอิงอื่นๆ แนบมา Claude จะหยิบมาใช้เองเมื่อเกี่ยวข้อง ตัวอย่างการใช้: deploy checklist, ขั้นตอน code review, API style guide</p>
+<pre><code>---
+name: invoice-reconcile
+description: กระทบยอด invoice กับรายการเดินบัญชี หาเคสยอดไม่ตรงและสรุปเป็นตาราง ใช้เมื่อ user พูดถึง invoice, statement, กระทบยอด หรือ reconciliation
+---
+# ขั้นตอน
+1. ...</code></pre>
+<p>Frontmatter บังคับแค่ 2 field:</p>
+<ul>
+  <li><code>name</code> ยาวไม่เกิน <strong>64 ตัว</strong> ใช้ได้แค่ตัวพิมพ์เล็ก ตัวเลข และ hyphen</li>
+  <li><code>description</code> ยาวไม่เกิน <strong>1024 ตัว</strong> Claude ใช้ field นี้จับคู่กับคำขอ จึงต้องบอกทั้ง <strong>ทำอะไร</strong> และ <strong>ใช้เมื่อไหร่</strong> เขียนแค่ "ตัวช่วย invoice" ไม่พอ เพราะไม่ได้บอกว่าใช้ตอนไหน</li>
+</ul>
+
+<h3>Progressive disclosure: โหลด 3 ระดับ</h3>
+<p>ลองเดาก่อน: ติดตั้ง 20 skill แต่ละตัวมี body ราว 4,000 token ก่อนใช้งานจะกิน context เท่าไหร่? คำตอบคือแค่ราว <strong>2,000 token</strong> เพราะตอนเริ่มโหลดแค่ metadata ตัวละประมาณ 100 token</p>
+<div class="table-wrap"><table>
+  <tr><th>ระดับ</th><th>โหลดเมื่อไหร่</th><th>Token cost</th><th>เนื้อหา</th></tr>
+  <tr><td>1: Metadata</td><td>ตลอด ตั้งแต่เริ่ม</td><td>~100 token ต่อ skill</td><td><code>name</code> กับ <code>description</code></td></tr>
+  <tr><td>2: Instructions</td><td>เมื่อถูก trigger</td><td>ไม่เกิน 5k token</td><td>body ของ SKILL.md</td></tr>
+  <tr><td>3+: Resources</td><td>เมื่อต้องใช้</td><td>0 จนกว่าจะถูกเปิด</td><td>ไฟล์ที่แนบมา script รันผ่าน bash และมีแค่ output ที่เข้า context</td></tr>
+</table></div>
+<ul>
+  <li>Trigger ได้สองทาง: user พิมพ์ <code>/&lt;name&gt;</code> หรือ Claude เห็นว่า description ตรงกับงาน</li>
+  <li>ที่เก็บ: <code>~/.claude/skills/</code> (ส่วนตัว) และ <code>.claude/skills/</code> (ของ project) ใน Claude Code ไม่ต้อง upload</li>
+  <li>บน Claude API skill รันใน container ของ code execution tool จึง<strong>ต้องเปิด</strong> code execution ด้วย</li>
+  <li>Skill สั่งให้ Claude รัน tool หรือโค้ดได้ ให้มอง skill ที่ไม่รู้ที่มาเหมือน software ที่กำลังจะติดตั้ง ต้องตรวจก่อน</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ติดตั้ง skill เยอะๆ แล้ว context จะเต็ม เพราะ instruction โหลดตั้งแต่เริ่ม"</strong> ไม่ใช่ ตอนเริ่มโหลดแค่ name กับ description body โหลดตอนถูก trigger</p>
+  <p><strong>"script ที่แนบมากิน context ตามความยาว เพราะ Claude ต้องอ่าน"</strong> ไม่ใช่ Claude รัน script ผ่าน bash มีแค่ output ที่เข้า context ตัวโค้ดไม่เข้า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Skill จ่ายแค่ ~100 token ต่อตัวจนกว่าจะถูกใช้ description ต้องบอกทั้ง what และ when เพราะเป็นตัวที่ใช้ trigger</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (เรียงลำดับ)</span>
+  <p>มี skill <code>invoice-reconcile</code> ที่แนบไฟล์ <code>FX_RULES.md</code> ไว้สำหรับเคสหลายสกุลเงิน เรียงเหตุการณ์ให้ถูก:</p>
+  <ol type="a">
+    <li>Claude อ่าน SKILL.md ทำให้ instruction เข้า context</li>
+    <li>user ขอให้กระทบยอด invoice เดือนนี้ ซึ่งเป็นเงินบาททั้งหมด</li>
+    <li>Claude ทำงานจนเสร็จตามขั้นตอนใน SKILL.md</li>
+    <li>ตอนเริ่ม session system prompt มี name และ description ของ skill</li>
+    <li>Claude เห็นว่าไม่มีหลายสกุลเงิน จึงไม่เปิด FX_RULES.md</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>d → b → a → e → c</strong> metadata มาก่อนเสมอ body โหลดหลังมีคำขอที่ตรง และไฟล์แนบระดับ 3 ถูกข้ามได้ถ้าไม่จำเป็น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>skill ของคุณไม่เคยถูกเรียกเองเลย ทั้งที่ user ถามเรื่องที่ตรงกับมัน field ไหนใน frontmatter ที่ควรเขียนใหม่ก่อน?</p>
+  <ol type="A">
+    <li><code>trigger</code></li>
+    <li><code>description</code></li>
+    <li><code>when_to_use</code></li>
+    <li><code>summary</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> Claude จับคู่คำขอกับ <code>description</code> field อื่นในตัวเลือกไม่ใช่ field ที่ใช้ trigger</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. MCP ไว้เชื่อมต่อ skill ไว้สอนวิธีทำ</h3>
+<p>แยกง่ายๆ: ถ้า Claude ต้อง<strong>เข้าถึงระบบที่ปกติมองไม่เห็น</strong> ใช้ MCP ถ้า Claude ต้อง<strong>รู้วิธีทำ</strong>อะไรบางอย่าง ใช้ skill</p>
+<div class="table-wrap"><table>
+  <tr><th></th><th>MCP</th><th>Skill</th></tr>
+  <tr><td>คืออะไร</td><td>protocol สำหรับต่อกับ service ภายนอก</td><td>ความรู้, workflow, เอกสารอ้างอิง</td></tr>
+  <tr><td>ให้อะไร</td><td>tool และการเข้าถึงข้อมูล</td><td>ความรู้, workflow, reference material</td></tr>
+  <tr><td>ตัวอย่าง</td><td>โพสต์ Slack, query database, คุม browser</td><td>code review checklist, deploy workflow, API style guide</td></tr>
+</table></div>
+<p>เทสต์ในชีวิตจริง: ถ้าคุณต้องก๊อปข้อมูลจาก tab browser ที่ Claude เข้าไม่ถึงมาแปะซ้ำๆ ให้ต่อระบบนั้นด้วย MCP ถ้าคุณแปะ playbook เดิมในแชทเป็นรอบที่สาม ให้ทำเป็น skill</p>
+
+<h3>Context cost</h3>
+<ul>
+  <li>ทุกอย่างที่ถูกอ่านใน turn นับรวมใน context budget รวมถึง tool definition ด้วย</li>
+  <li>MCP client ส่วนใหญ่โหลด tool definition <strong>ทั้งหมดตั้งแต่แรก</strong> agent ที่ต่อ tool เป็นพันตัวอาจกินไปหลายแสน token ก่อนจะได้อ่านคำขอของ user ด้วยซ้ำ</li>
+  <li>Skill กินแค่ราว 100 token จนกว่าจะถูก trigger</li>
+  <li><strong>Tool search</strong> ช่วยให้ Claude โหลด tool แบบ on-demand ได้</li>
+</ul>
+
+<h3>ใช้คู่กัน</h3>
+<p>MCP ให้ connection ส่วน skill สอนให้ใช้ connection นั้นให้ดี เช่น ต่อ analytics database ผ่าน MCP แล้วมี skill ที่อธิบาย schema และ query pattern ซึ่งโหลดเข้ามาเฉพาะตอนมีคำถามเรื่อง database</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"MCP กับ skill เป็นทางเลือกแทนกัน ต้องเลือกอย่างใดอย่างหนึ่ง"</strong> ไม่ใช่ สองอย่างแก้คนละปัญหา และถูกออกแบบมาให้ทำงานด้วยกัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>MCP = มือที่เอื้อมไปถึงระบบภายนอก skill = คู่มือว่าใช้มือนั้นยังไง MCP มักโหลด definition ทั้งหมดตั้งแต่แรก skill จ่ายแค่ metadata</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีม data อยากให้ Claude query BigQuery ได้ และต้องทำตาม convention ภายใน เช่น ห้าม select * และต้อง filter ด้วย partition date ทุกครั้ง แบบไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>เขียน custom tool แยกตาม table</li>
+    <li>MCP server อย่างเดียว แล้วยัด convention ทั้งหมดใส่ tool description</li>
+    <li>MCP server สำหรับ connection บวก skill ที่อธิบาย schema และ query pattern</li>
+    <li>skill อย่างเดียว ใส่ credential ไว้ใน SKILL.md</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ต้องการทั้ง connection และ know-how skill อย่างเดียวต่อ DB ไม่ได้ (และใส่ credential ไว้ในไฟล์คือไอเดียที่แย่) ส่วนยัดทุกอย่างใน description ทำให้ทุก request ต้องจ่าย token ก้อนนั้น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>บริษัทมี bot ที่ใช้ Linear MCP server ทางการอยู่แล้ว ตอนนี้อยากให้ Claude Code สร้าง issue ใน Linear ได้ ควรทำยังไง?</p>
+  <ol type="A">
+    <li>ต่อ Linear MCP server ตัวเดิมเข้ากับ Claude Code เพื่อใช้ tool และ authentication ที่มีอยู่</li>
+    <li>เขียน custom tool ใหม่พร้อม OAuth flow ของตัวเอง</li>
+    <li>เขียน skill ที่อธิบายวิธีสร้าง issue</li>
+    <li>ให้ Claude ใช้ Bash ยิง curl ไปที่ API ตรงๆ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B ทำงานซ้ำ, skill เรียก network เองไม่ได้, ส่วน curl ผ่าน Bash ข้ามการมี schema ที่มีโครงสร้าง และจัดการ credential ได้แย่</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เลือกระหว่าง built-in, custom tool, skill และ MCP</h3>
+<p>ไล่ถามตามลำดับต้นทุน หยุดที่ข้อแรกที่ตอบได้:</p>
+<ol class="steps">
+  <li>Built-in tool ทำได้แล้วหรือยัง? (อ่านไฟล์ แก้ไฟล์ shell search ส่วนใหญ่ครอบคลุม)</li>
+  <li>Claude ต้องเข้าถึงระบบภายนอกไหม? ถ้าใช่ ใช้ MCP</li>
+  <li>Claude เข้าถึงทุกอย่างได้ แต่ทำขั้นตอนผิด? เขียน skill</li>
+  <li>เขียน custom tool เฉพาะเมื่อเป็น domain action ที่ทำซ้ำ และไม่มี tool ไหนแสดงออกได้สะอาด</li>
+  <li>ถ้าต้องใช้ setup เดียวกันข้ามหลาย repo ให้แพ็กเป็น <strong>plugin</strong></li>
+</ol>
+<div class="table-wrap"><table>
+  <tr><th>Extension</th><th>ให้อะไร Claude</th><th>ชนะเมื่อ</th><th>Context cost</th></tr>
+  <tr><td>Built-in tool (Read, Edit, Bash, Grep)</td><td>action ทั่วไปกับไฟล์ shell search</td><td>อ่าน แก้ รัน ค้นโค้ด</td><td>definition ของ tool ที่เปิดไว้</td></tr>
+  <tr><td>Custom tool</td><td>domain action ที่ backed ด้วย function/API ของเรา</td><td>agent ทำ action นั้นซ้ำ และไม่มี built-in ที่เข้ากัน</td><td>definition ของมัน ทุก request</td></tr>
+  <tr><td>Skill (SKILL.md)</td><td>procedure หรือ reference</td><td>มี playbook/workflow ที่ถูกแปะซ้ำ</td><td>description ทุก session, body เฉพาะตอนใช้</td></tr>
+  <tr><td>MCP server</td><td>tool และข้อมูลจากระบบภายนอก</td><td>Claude ต้องใช้ข้อมูล/action ที่เข้าถึงไม่ได้</td><td>tool definition มักโหลดหมดตั้งแต่แรก</td></tr>
+  <tr><td>Plugin</td><td>bundle ของ feature ข้างบน</td><td>repo ที่สองต้องการ setup เดียวกัน</td><td>เท่ากับของที่อยู่ใน bundle</td></tr>
+</table></div>
+<p><strong>Heuristic ตอนสอบ:</strong> ไม่มีระบบภายนอกและไม่มี custom logic → built-in · โจทย์พูดถึง procedure หรือ style guide → skill · มีชื่อ service (Slack, Jira, database) → MCP · มีทั้ง service และ convention การใช้ → ทั้งคู่</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ไล่จากถูกไปแพง: built-in → MCP (ถ้าต้องต่อระบบนอก) → skill (ถ้าทำขั้นตอนผิด) → custom tool (domain action ซ้ำๆ) → plugin (ใช้ข้าม repo)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ความต้องการกับ extension (Built-in tools / MCP server / Skill / Plugin):</p>
+  <ol>
+    <li>ส่งสรุป sprint เข้า channel ใน Microsoft Teams</li>
+    <li>refactor ฟังก์ชันและรันเทสต์ใน repo</li>
+    <li>ทำตามขั้นตอน incident postmortem ของทีมทุกครั้ง</li>
+    <li>ทีม mobile อยากได้ setup เดียวกับที่ทีม web ใช้อยู่ใน repo ของตัวเอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → MCP server · 2 → Built-in tools · 3 → Skill · 4 → Plugin</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>agent ของโรงพยาบาลต้องดึงตารางเวรแพทย์จากระบบ HR ภายในที่เข้าได้ผ่าน internal REST API ที่ต้อง auth เท่านั้น ยังไม่มี MCP server หรือ SDK ใดๆ ควรทำยังไง?</p>
+  <ol type="A">
+    <li>เขียน custom tool ที่เรียก API นั้น แล้ว register ผ่าน in-process MCP server</li>
+    <li>ใช้ WebFetch ยิงไปที่ API</li>
+    <li>เขียน skill ที่บอกว่าตารางเวรอยู่ที่ไหน</li>
+    <li>หา community MCP server มาใช้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> WebFetch ไม่ได้ออกแบบมาสำหรับ API ภายในที่ต้อง auth, skill ให้ข้อมูลสดไม่ได้ และ community server ไม่มีทางรู้ schema หรือมี credential ของระบบภายในเรา</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Platform docs: Tool use overview</li>
+  <li>Claude cookbook: Migrating from OpenAI Agents SDK</li>
+  <li>Claude blog: Building agents with the Claude Agent SDK</li>
+  <li>Claude Code docs: Agent SDK custom tools</li>
+  <li>Claude Platform docs: Define tools</li>
+  <li>Claude Platform docs: Agent Skills overview</li>
+  <li>Claude Code docs: Features overview</li>
+  <li>Anthropic Engineering: Code execution with MCP</li>
+</ul>
+</section>

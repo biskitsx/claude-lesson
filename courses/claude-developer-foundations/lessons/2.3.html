@@ -1,0 +1,337 @@
+<section class="lesson" id="l-2-3">
+<h2>2.3 Claude Messages API: requests, vision, tools, streaming และ thinking</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-messages-api-requests-vision-tools-streaming-and-thinking">CertSafari 2.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อ่าน response ของ Messages API ออก: content blocks, <code>stop_reason</code> และ <code>usage</code></li>
+    <li>เก็บ conversation state ในโค้ดเราเอง ส่งซ้ำทุกครั้งโดยไม่ทำ prompt cache พัง</li>
+    <li>เขียน client-side tool loop ที่ส่ง thinking block กลับไปแบบไม่แตะต้อง</li>
+    <li>อ่าน streaming response ทีละ event หรือให้ SDK รวมให้</li>
+    <li>ส่งรูปแบบ inline (base64), URL หรือ Files API <code>file_id</code></li>
+    <li>บอกได้ว่า request เปลี่ยนตรงไหนเมื่อเรียก Claude ผ่าน Google Cloud หรือ Amazon Bedrock</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: API ความจำสั้นเป็นศูนย์</span>
+  <p>Messages API เป็น <strong>stateless</strong> ฝั่ง app ของเราเป็นคนถือ conversation ทั้งหมด และต้องส่งทั้งก้อนใหม่ทุก request ทั้ง turn เก่า, tool result และรูป</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. หน้าตาของ request และ response</h3>
+<p>request ขั้นต่ำมี 3 อย่าง:</p>
+<ul>
+  <li><code>model</code></li>
+  <li><code>max_tokens</code> เพดานความยาวของคำตอบ</li>
+  <li><code>messages</code> list ที่แต่ละตัวมี <code>role</code> (<code>user</code> หรือ <code>assistant</code>) และ <code>content</code></li>
+</ul>
+<p>คำสั่งที่อยากให้มีผลตั้งแต่ turn แรก ใส่ใน field <code>system</code> ระดับบนสุด ไม่ได้อยู่ใน <code>messages</code></p>
+<pre><code>{
+  "id": "msg_01AbC...",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5-5",
+  "content": [{"type": "text", "text": "สวัสดีครับ"}],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 12, "output_tokens": 6}
+}</code></pre>
+<ul>
+  <li><code>content</code> เป็น <strong>array ของ typed block</strong> ไม่ใช่ string คำตอบธรรมดาคือ <code>text</code> block เดียว แต่ถ้าเปิด tool หรือ thinking จะมี <code>tool_use</code> และ <code>thinking</code> block ปนมา โค้ดที่อ่าน <code>content[0].text</code> ตรงๆ จะพังทันที</li>
+  <li><code>usage</code> บอก <code>input_tokens</code> และ <code>output_tokens</code> ใช้คิดเงินและติดตามขนาด context</li>
+</ul>
+<pre><code># อ่านเฉพาะ text block อย่างปลอดภัย ไม่สมมติว่าอยู่ index 0
+text = "".join(b.text for b in resp.content if b.type == "text")</code></pre>
+
+<h3>stop_reason บอกอะไร</h3>
+<div class="table-wrap"><table>
+  <tr><th>ค่า</th><th>ความหมาย</th></tr>
+  <tr><td><code>end_turn</code></td><td>ตอบจบตามธรรมชาติ</td></tr>
+  <tr><td><code>max_tokens</code></td><td>ชนเพดาน คำตอบถูกตัด ยังไม่ใช่คำตอบที่จบ</td></tr>
+  <tr><td><code>stop_sequence</code></td><td>เจอ custom stop string ที่เราตั้งไว้</td></tr>
+  <tr><td><code>tool_use</code></td><td>Claude อยากเรียก tool</td></tr>
+  <tr><td><code>refusal</code></td><td>Claude ปฏิเสธ มี <code>stop_details</code> บอก policy category ให้ log ได้โดยไม่ต้อง parse ข้อความ</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ส่ง model + max_tokens + messages (และ system ถ้ามี) ได้กลับมาเป็น block array พร้อม stop_reason กับ usage อย่าสมมติว่า content มีแค่ text</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีม trust &amp; safety อยากเก็บสถิติว่า Claude ปฏิเสธคำขอแต่ละครั้งเพราะ policy หมวดไหน ควรอ่านจากตรงไหน?</p>
+  <ol type="A">
+    <li>ใช้ regex หาคำว่า "ขออภัย" ใน text</li>
+    <li>object <code>stop_details</code> ที่มากับ <code>stop_reason: "refusal"</code></li>
+    <li>field <code>stop_sequence</code></li>
+    <li>object <code>usage</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>stop_details</code> บอก category มาเป็น structured data ส่วน regex เปราะ <code>stop_sequence</code> บอกแค่ stop string ที่ match และ <code>usage</code> มีแค่จำนวน token</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Conversation state อยู่ในโค้ดเรา</h3>
+<p>หลังได้คำตอบทุกครั้ง: append assistant message → append user turn ถัดไป → ส่งทั้ง list อะไรก็ตามที่อยากให้ Claude เห็นใน turn นั้น (เอกสาร, screenshot, tool result) ต้องอยู่ใน request ของ turn นั้น <code>msg_</code> ID เอาไปดึงประวัติไม่ได้</p>
+<pre><code>history = []
+
+def ask(question):
+    history.append({"role": "user", "content": question})
+    resp = client.messages.create(model=MODEL, max_tokens=1024,
+                                  system=SYSTEM, messages=history)  # ส่งทั้งก้อนทุกครั้ง
+    history.append({"role": "assistant", "content": resp.content})
+    return resp</code></pre>
+<p>assistant turn ไม่จำเป็นต้องมาจาก Claude จริง จะเขียน few-shot exchange ขึ้นมาเองก็ได้</p>
+
+<h3>Prefill และ system message กลางบท</h3>
+<ul>
+  <li><strong>Prefill:</strong> บน model เก่าอย่าง Sonnet 4.5 ถ้า message สุดท้ายเป็น assistant Claude จะเขียนต่อจากตรงนั้น (เช่น prefill <code>"คำตอบคือ ("</code> คู่กับ <code>max_tokens: 1</code> เพื่อได้ตัวอักษรเดียว) แต่ <strong>ไม่แนะนำสำหรับโค้ดใหม่</strong>: Opus 4.6 ปฏิเสธ prefilled assistant turn และ checklist การย้ายไป Opus 5.5 บอกให้เอาออก</li>
+  <li><strong>Mid-conversation system message:</strong> บน model ใหม่ (Opus 5.5, Sonnet 5.5) ใส่ <code>role: "system"</code> ต่อท้าย user turn เพื่อเพิ่มคำสั่งกลางทางได้ แต่ห้ามเป็นตัวแรกของ <code>messages</code> และเพราะมันต่อท้าย จึงไม่ทำให้ cached prefix ก่อนหน้าเสีย</li>
+</ul>
+
+<h3>Prompt caching กับ breakpoint</h3>
+<p>ใส่ <code>cache_control</code> บน content block = ตั้ง <strong>cache breakpoint</strong> ทุกอย่างตั้งแต่ต้นจนถึง block นั้นกลายเป็น prefix ที่ reuse ได้ cache key คือ hash ของ prompt จนถึง breakpoint ถ้ามีอะไรเปลี่ยนก่อนหน้า (timestamp ใน system prompt, สลับลำดับ tool, แก้ turn เก่า) จะ miss ทันที <strong>ของที่เปลี่ยนบ่อยให้ไว้ท้ายสุด</strong></p>
+<pre><code>system = [
+    {"type": "text", "text": MANUAL_40K,                   # เนื้อหานิ่ง
+     "cache_control": {"type": "ephemeral", "ttl": "1h"}},  # breakpoint ตรงนี้
+    {"type": "text", "text": f"เวลาปัจจุบัน: {now}"},        # ของที่เปลี่ยน อยู่หลัง breakpoint
+]</code></pre>
+<ul>
+  <li><code>usage.cache_read_input_tokens</code> = token ที่อ่านจาก cache, <code>usage.cache_creation_input_tokens</code> = token ที่เขียนใหม่ ถ้า read ค้างที่ 0 ตลอดแปลว่า prefix ไม่เคยซ้ำ</li>
+  <li><strong>TTL default 5 นาที</strong> refresh ฟรีทุกครั้งที่ใช้ นับจากตอนเริ่ม request (response ที่ stream นานๆ จะกินอายุไปด้วย)</li>
+  <li><strong>TTL 1 ชั่วโมง</strong>: ใส่ <code>"ttl": "1h"</code></li>
+  <li>ค่าเขียน: แบบ 5 นาทีแพงกว่า base input <strong>25%</strong> แบบ 1 ชั่วโมงแพงเป็น <strong>2 เท่า</strong> ของ base input คุ้มเมื่อ request ห่างกันเกิน 5 นาที หรือ response ยาว</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Claude เห็นรูปหรือเอกสารไปแล้วใน turn ก่อน turn หลังอ้างถึงได้เลยไม่ต้องส่งซ้ำ"</strong> ไม่ได้ API ไม่จำอะไรข้าม call ต้องมีตัวเนื้อหาหรือ <code>file_id</code> ในทุก request ที่ต้องใช้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เราถือ history เองและส่งทั้งหมดทุกครั้ง วาง breakpoint หลังของนิ่ง ก่อนของที่เปลี่ยน เลือก TTL ตามความถี่ของ request</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>backend เก็บ <code>msg_</code> ID จาก turn แรกไว้ แล้วใน turn ที่สองส่งแค่คำถามใหม่ Claude จะเห็นอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>เห็นแค่คำถามใหม่ API ไม่เก็บ history และ message ID ไม่ได้ใช้ดึง turn เก่า</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ผู้ช่วย HR cache คู่มือพนักงาน 50,000 token ไว้ แต่พนักงานถามห่างกันประมาณ 15–40 นาที ทำให้ cache หมดอายุแทบทุกครั้ง ควรปรับยังไง?</p>
+  <ol type="A">
+    <li>เพิ่ม breakpoint อีกจุด</li>
+    <li>ตั้ง <code>ttl: "1h"</code> บน block คู่มือ ยอมจ่ายค่าเขียนแพงขึ้นเพื่อไม่ต้องเขียนใหม่บ่อย</li>
+    <li>ตัดคู่มือให้เล็กกว่าขนาดขั้นต่ำที่ cache ได้</li>
+    <li>เปลี่ยนไปใช้ automatic caching</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ช่วงห่างเกิน 5 นาทีคือเคสที่ TTL 1 ชั่วโมงคุ้ม breakpoint เพิ่มหรือ automatic caching ไม่ได้ยืดอายุ 5 นาที และถ้าเล็กกว่าขั้นต่ำก็ cache ไม่ได้เลย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>system prompt มี 2 block: block แรกเป็น style guide 8,000 token ที่ไม่เปลี่ยน block ที่สองเป็น "วันที่วันนี้: …" และ <code>cache_control</code> อยู่บน block ที่สอง <code>cache_read_input_tokens</code> เป็น 0 ตลอด แก้ยังไง?</p>
+  <ol type="A">
+    <li>เพิ่ม TTL เป็น 1h</li>
+    <li>ย้าย <code>cache_control</code> ไปไว้บน block style guide ให้ breakpoint อยู่ก่อนวันที่</li>
+    <li>ใส่ <code>cache_control</code> เพิ่มบน block วันที่อีกอัน</li>
+    <li>ย้ายวันที่ไปไว้ใน block แรก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ตอนนี้ prefix ที่ cache รวมวันที่ซึ่งเปลี่ยนทุกวันเข้าไปด้วย hash เลยไม่เคยซ้ำ ต้องให้ breakpoint จบก่อนส่วนที่เปลี่ยน</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Tool call และ thinking block ใน request loop</h3>
+<h3>Client-side tools</h3>
+<p>Claude ไม่ได้รันอะไรเอง ถ้าอยากใช้ tool response จะมี <code>stop_reason: "tool_use"</code> พร้อม <code>tool_use</code> block (ชื่อ tool + argument เป็น JSON) โค้ดเราเป็นคนรัน แล้วส่ง <code>tool_result</code> กลับใน user message ใหม่ต่อจาก assistant turn วนไปเรื่อยๆ <strong>ตราบใดที่ stop_reason เป็น tool_use</strong> ค่าอื่นแปลว่าจบลูป (เรื่องออกแบบ tool schema อยู่ในบทหลัง)</p>
+<pre><code>while True:
+    resp = client.messages.create(model=MODEL, max_tokens=16000,
+                                  tools=TOOLS, messages=messages)
+    # append ทั้ง content ตามที่ได้มา รวม thinking block และ signature
+    messages.append({"role": "assistant", "content": resp.content})
+    if resp.stop_reason != "tool_use":
+        break
+    results = [{"type": "tool_result", "tool_use_id": b.id,
+                "content": run_tool(b.name, b.input)}
+               for b in resp.content if b.type == "tool_use"]
+    messages.append({"role": "user", "content": results})</code></pre>
+
+<h3>Server tools</h3>
+<ul>
+  <li><code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code> รันฝั่ง Anthropic เราไม่ต้องสร้าง <code>tool_result</code> เอง</li>
+  <li>ใน response จะเห็นเป็น <code>server_tool_use</code> block</li>
+  <li>ถ้า server loop ชน iteration cap จะได้ <code>stop_reason: "pause_turn"</code> ให้ส่ง conversation ใหม่โดยรวม response ที่ pause ไว้ เพื่อให้ทำต่อ</li>
+</ul>
+
+<h3>Thinking blocks</h3>
+<p>Extended และ adaptive thinking จะเพิ่ม <code>thinking</code> block ที่มี <code>signature</code> ใน tool loop ต้อง <strong>ส่งกลับแบบเดิมเป๊ะ</strong> รวมถึง block ที่ข้อความ thinking ว่างเปล่า วิธีที่ปลอดภัยสุดคือ append assistant message ตามที่ได้รับ ไม่ filter ตาม type ไม่ประกอบใหม่ ถ้าแก้ สลับลำดับ หรือตัดบางส่วนทิ้ง จะได้ <strong>400 error</strong></p>
+
+<h3>พฤติกรรมของ Claude Opus 5.5</h3>
+<ul>
+  <li>Thinking ทำงานทุก request response จึงอาจขึ้นต้นด้วย thinking block</li>
+  <li>Thinking token คิดเงินเป็น output token แม้ไม่ได้ส่งข้อความกลับมา และนับรวมใน <code>max_tokens</code> (hard limit ของ thinking + คำตอบ) ค่าที่จูนไว้สมัยไม่มี thinking อาจทำให้คำตอบถูกตัด migration guide แนะนำเริ่มที่ราว 64k เมื่อใช้ effort <code>xhigh</code> หรือ <code>max</code></li>
+  <li>คุมความลึกด้วย <code>effort</code> (ผ่าน <code>output_config</code>) ไม่ใช่ thinking budget default คือ <code>medium</code> ลดลงถ้าอยากใช้ thinking token น้อยลง</li>
+  <li>รูปแบบเก่า <code>{"type": "enabled", "budget_tokens": N}</code> ถูกแทนด้วย <code>{"type": "adaptive"}</code> + effort หรือไม่ใส่ field thinking เลย</li>
+  <li><code>thinking.display</code> default เป็น <code>"omitted"</code> block จะมา <code>thinking</code> ว่างพร้อม signature ตั้งเป็น <code>"summarized"</code> ถ้าอยากได้สรุปที่อ่านได้ ถือว่าเป็น display text เท่านั้น</li>
+</ul>
+<p>บน model ที่ยังใช้ manual extended thinking: <code>budget_tokens</code> ขั้นต่ำ <strong>1,024</strong>, นับรวมใน <code>max_tokens</code> และต้อง <strong>น้อยกว่า</strong> <code>max_tokens</code></p>
+<pre><code># model รุ่นเก่าที่ยังใช้ manual budget
+client.messages.create(
+    model=OLDER_MODEL,
+    max_tokens=20000,
+    thinking={"type": "enabled", "budget_tokens": 12000},  # ต้อง &gt;= 1024 และ &lt; max_tokens
+    messages=messages,
+)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Thinking block เป็นแค่ข้อความโชว์ ตัดทิ้งเหลือแค่ tool_use ก็ได้"</strong> ไม่ได้ ต้องส่งกลับครบพร้อม signature ตัดหรือแก้ = 400</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>วนลูปตราบที่ stop_reason เป็น tool_use, server tool ไม่ต้องทำ tool_result เอง (ระวัง pause_turn), thinking block ส่งกลับครบทุกตัว และบน Opus 5.5 คุมด้วย effort ไม่ใช่ budget_tokens</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>dev อยากประหยัด token เลยเขียนให้ agent สร้าง assistant turn ใหม่จากแค่ <code>tool_use</code> block ก่อนส่งกลับ ทั้งที่เปิด thinking อยู่ จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>ทำงานได้และประหยัด token จริง</li>
+    <li>Claude จะ thinking ใหม่ตั้งแต่ต้นโดยไม่มี error</li>
+    <li>API ตอบ 400 เพราะ thinking block ถูกตัดทิ้ง</li>
+    <li>ได้ <code>stop_reason: "pause_turn"</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> การตัด thinking block ทิ้งนับเป็น partial drop ซึ่ง API ปฏิเสธ ต้อง echo assistant message กลับไปทั้งก้อน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>request บน model ที่ใช้ manual thinking ตั้ง <code>max_tokens: 8000</code> และ <code>budget_tokens: 10000</code> แล้วไม่ผ่าน validation แก้ยังไง?</p>
+  <ol type="A">
+    <li>ลด <code>budget_tokens</code> ให้ต่ำกว่า <code>max_tokens</code> (และไม่ต่ำกว่า 1,024)</li>
+    <li>ลบ <code>max_tokens</code> ออก</li>
+    <li>ตั้ง <code>max_tokens</code> ให้เป็น 2 เท่าของ budget เป๊ะ</li>
+    <li>ใส่ budget เป็นค่าติดลบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> budget ต้องอยู่ภายในเพดาน output ข้ออื่นไม่ใช่กฎของ API (<code>max_tokens</code> เป็น field บังคับ และไม่มีกฎอัตราส่วน 2 เท่า)</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Streaming แบบ server-sent events</h3>
+<p>ใส่ <code>"stream": true</code> จะได้ server-sent events (SSE) UI โชว์ข้อความระหว่าง generate ได้ ถ้า <code>max_tokens</code> สูงมาก SDK จะ <strong>บังคับ</strong> ให้ stream เพื่อกัน HTTP timeout และ SDK มี helper ที่ stream ภายในแล้วคืน <code>Message</code> object ตัวเดียวกับที่ <code>messages.create()</code> คืน</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Event</th><th>มีอะไร</th></tr>
+  <tr><td><code>message_start</code></td><td>Message object ที่ content ยังว่าง</td></tr>
+  <tr><td><code>content_block_start</code> / <code>content_block_delta</code> / <code>content_block_stop</code></td><td>สร้าง block ทีละชิ้นจาก delta โดย index ตรงกับตำแหน่งใน content array สุดท้าย</td></tr>
+  <tr><td><code>message_delta</code></td><td>การเปลี่ยนระดับบน เช่น <code>stop_reason</code> และ output usage</td></tr>
+  <tr><td><code>message_stop</code></td><td>จบ stream</td></tr>
+  <tr><td><code>ping</code>, <code>error</code></td><td>keep-alive โผล่ได้ทุกจังหวะ และ error เช่น <code>overloaded_error</code> กลาง stream</td></tr>
+</table></div>
+<p>ประเภท delta:</p>
+<ul>
+  <li><code>text_delta</code> ชิ้นส่วนข้อความ</li>
+  <li><code>input_json_delta</code> <strong>ชิ้นส่วน string ของ JSON</strong> สำหรับ input ของ <code>tool_use</code> ต้องเก็บต่อกันแล้ว parse ตอน <code>content_block_stop</code> (หรือใช้ helper ของ SDK)</li>
+  <li><code>thinking_delta</code> ข้อความ thinking และมี <code>signature_delta</code> มาก่อน block ปิด signature นี้ต้องส่งกลับใน tool loop</li>
+</ul>
+<p><code>overloaded_error</code> กลาง stream เทียบเท่า HTTP 529 และ parser ควร <strong>ข้าม event type ที่ไม่รู้จัก</strong> แทนที่จะ crash เพราะอาจมี type ใหม่เพิ่มในอนาคต</p>
+<pre><code># ให้ SDK รวม event ให้ แล้วเอา Message ตัวเต็มตอนจบ
+with client.messages.stream(model=MODEL, max_tokens=128000,
+                            messages=messages) as stream:
+    for chunk in stream.text_stream:      # โชว์ข้อความทีละชิ้น
+        print(chunk, end="", flush=True)
+    final = stream.get_final_message()    # Message เต็ม เหมือน create()</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"input_json_delta แต่ละตัวเป็น JSON object ครบ parse ได้เลย"</strong> ไม่ใช่ มันเป็นแค่เศษ string ต้องต่อให้ครบก่อน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>message_start → (block start/delta/stop)* → message_delta → message_stop มี ping กับ error แทรกได้ เก็บ JSON delta ให้ครบก่อน parse และข้าม event ที่ไม่รู้จัก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (เติมคำ)</span>
+  <p>ใช้ <code>with client.messages.stream(..., max_tokens=128000) as s:</code> แล้วต้องการ Message object ตัวเต็มตอนจบ เพื่อเอาไป append ลง history ต้องเรียก method อะไร?</p>
+  <details><summary>ดูเฉลย</summary><p><strong><code>s.get_final_message()</code></strong> รวมทุก event เป็น Message ที่สมบูรณ์ ส่วน <code>text_stream</code> ให้แค่ชิ้นส่วนข้อความ ไม่ใช่ message ทั้งก้อน</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. รูปภาพและไฟล์</h3>
+<p>รูปคือ content block ใน user turn มี source 3 แบบ:</p>
+<ul>
+  <li><code>base64</code> ฝัง byte ลงไปเลย ต้องระบุ <code>media_type</code></li>
+  <li><code>url</code> รูปที่ host ไว้</li>
+  <li><code>file</code> ไฟล์ที่อัปโหลดผ่าน Files API อ้างด้วย <code>file_id</code></li>
+</ul>
+<p>media type ที่รองรับ: <code>image/jpeg</code>, <code>image/png</code>, <code>image/gif</code>, <code>image/webp</code> และควรวาง image block <strong>ก่อน</strong> text ที่ถามถึงรูป</p>
+<pre><code>{"role": "user", "content": [
+  {"type": "image", "source": {"type": "base64",
+     "media_type": "image/png", "data": "iVBORw0KGgo..."}},
+  {"type": "text", "text": "ในรูปนี้มี error อะไร"}
+]}</code></pre>
+
+<h3>ต้นทุนของ stateless และทางออก: Files API</h3>
+<p>รูป base64 ต้องส่งซ้ำทุก turn เพราะ API ไม่จำ Files API แก้เรื่องนี้: อัปโหลดครั้งเดียวได้ <code>file_id</code> แล้วอ้างถึงใน request ต่อๆ ไป history ยังมีรูปอยู่ แต่เป็นแค่ reference สั้นๆ ใช้กับ PDF ได้เหมือนกัน และ list / retrieve / delete ไฟล์ได้</p>
+<pre><code># อัปโหลดครั้งเดียว แล้วใช้ id ซ้ำทุก turn
+f = client.files.upload(file=("spec.pdf", open("spec.pdf", "rb"), "application/pdf"))
+doc_block = {"type": "document", "source": {"type": "file", "file_id": f.id}}</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>รูปมา 3 ทาง: base64 / url / file และ API ไม่จำรูป ถ้าใช้ซ้ำหลาย turn ให้อัปโหลดเข้า Files API แล้วอ้าง file_id</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>แชทช่วยออกแบบส่ง mockup ขนาด 3 MB เป็น base64 ซ้ำทุก turn ทำให้ request ใหญ่และช้า วิธีไหนแก้ตรงจุด?</p>
+  <ol type="A">
+    <li>ส่งรูปแค่ turn แรก turn ต่อไป Claude จำได้เอง</li>
+    <li>เปลี่ยนเป็น <code>url</code> source เพราะ Claude จะ cache รูปไว้ฝั่งเซิร์ฟเวอร์</li>
+    <li>อัปโหลดเข้า Files API ครั้งเดียว แล้วใช้ <code>file</code> source อ้าง <code>file_id</code> ทุก turn</li>
+    <li>ลด <code>max_tokens</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Claude ไม่จำรูปข้าม turn (A ผิด) และ url source ไม่ได้ทำให้ Claude cache เนื้อหา (B ผิด) Files API ทำให้ส่งแค่ reference สั้นๆ</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. เรียก Claude ผ่าน cloud vendor</h3>
+<div class="table-wrap"><table>
+  <tr><th>เรื่อง</th><th>Claude API</th><th>Google Cloud Agent Platform</th></tr>
+  <tr><td>model อยู่ตรงไหน</td><td>field <code>model</code> ใน request body</td><td>อยู่ใน endpoint URL ของ Google Cloud</td></tr>
+  <tr><td>API version</td><td>ส่งเป็น header</td><td><code>anthropic_version</code> ใน body ค่า <code>vertex-2023-10-16</code></td></tr>
+  <tr><td>SDK</td><td>Anthropic client SDK</td><td>SDK เดียวกัน ติดตั้ง extra <code>vertex</code></td></tr>
+</table></div>
+<ul>
+  <li><strong>Google Cloud:</strong> ใช้ <code>AnthropicVertex</code> รับ <code>project_id</code> และ <code>region</code> region <code>global</code> เปิด dynamic routing เพื่อ availability ต้อง authenticate ก่อน ปกติใช้ <code>gcloud auth application-default login</code></li>
+  <li><strong>Amazon Bedrock (model ใน guide ของ Opus 4.6 ลงไป):</strong> ส่ง <strong>inference profile</strong> (regional prefix + Bedrock ID หรือ ARN เต็ม) แทน base model ID ติดตั้ง <code>anthropic[bedrock]</code> ใช้ <code>AnthropicBedrock</code> รับ AWS key, default credential provider หรือ bearer token จาก env <code>AWS_BEARER_TOKEN_BEDROCK</code></li>
+  <li><strong>Opus 4.7 ขึ้นไปบน Bedrock:</strong> รันผ่าน Claude in Amazon Bedrock ด้วย <code>AnthropicBedrockMantle</code> ใช้ AWS credential precedence มาตรฐาน และ model ID ขึ้นต้นด้วย <code>anthropic.</code></li>
+  <li>lifecycle และวัน retirement บน partner กำหนดโดย partner อาจต่างจาก Claude API</li>
+  <li>prompt cache แยกระดับ <strong>workspace</strong> บน Claude API แต่แยกระดับ <strong>organization</strong> บน Bedrock และ Google Cloud</li>
+</ul>
+<pre><code>from anthropic import AnthropicVertex
+
+# Google Cloud: auth ผ่าน gcloud ก่อน แล้วระบุ project กับ region
+client = AnthropicVertex(project_id="my-proj", region="global")</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Claude API: model ใน body, version ใน header Google Cloud: model ใน URL, <code>anthropic_version: vertex-2023-10-16</code> ใน body Bedrock (รุ่นเก่า): ใช้ inference profile และรุ่นใหม่ใช้ Mantle client</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่ platform กับรายละเอียดของ request:</p>
+  <ol>
+    <li>Google Cloud Agent Platform</li>
+    <li>Amazon Bedrock (Opus 4.6 และก่อนหน้า)</li>
+    <li>Claude API</li>
+  </ol>
+  <ul>
+    <li>(x) ใส่ชื่อ model เป็น field ใน body</li>
+    <li>(y) model อยู่ใน endpoint URL และใส่ <code>anthropic_version: "vertex-2023-10-16"</code> ใน body</li>
+    <li>(z) อ้าง model ด้วย inference profile ID</li>
+  </ul>
+  <details><summary>ดูเฉลย</summary><p>1 → y · 2 → z · 3 → x</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Docs: Messages API</li>
+  <li>Claude Docs: Tool use</li>
+  <li>Claude Docs: Opus 5.5 migration guide</li>
+  <li>Claude Docs: Prompt caching</li>
+  <li>Claude API reference</li>
+  <li>Claude Docs: Streaming messages</li>
+  <li>Claude Docs: Files API</li>
+  <li>Claude Docs: Vision</li>
+  <li>Claude Docs: Claude on Vertex AI</li>
+  <li>Claude Docs: Claude on Amazon Bedrock</li>
+</ul>
+</section>

@@ -1,0 +1,219 @@
+<section class="lesson" id="l-2-2">
+<h2>2.2 Claude model lifecycle: deprecation, retirement และ migration</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-model-lifecycle-deprecation-retirement-and-migration">CertSafari 2.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอก lifecycle state ทั้ง 4 แบบ และผลที่เกิดกับ app ที่รันอยู่</li>
+    <li>แยกได้ว่า platform ไหนใช้วัน retirement ของ Anthropic และ platform ไหนกำหนดเอง</li>
+    <li>วางแผน migration โดยใช้ notice period, usage audit ใน Console และการเทสต์ก่อน retire</li>
+    <li>อธิบายว่า header <code>anthropic-version</code> รับประกันอะไร และ feature classification แบบไหนปลอดภัยสำหรับ production</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: model มีนาฬิกาของมันเอง</span>
+  <p>Model retire ตามตารางของมัน ไม่ได้รอ release cycle ของเรา พอ retire แล้ว request จะ fail ทันที ดังนั้น migration <strong>ต้องเสร็จก่อนวัน retirement</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. สี่ state ที่ model ต้องผ่าน</h3>
+<p>dependency ทั่วไปเราเลือกเองได้ว่าจะอัปเกรดเมื่อไหร่ แต่ model ไม่ใช่ Anthropic จะ retire model เก่าเมื่อมีตัวใหม่ออกมา ลูกค้าที่โดนผลกระทบจะได้รับแจ้งทาง email และในหน้า docs</p>
+
+<div class="table-wrap"><table>
+  <tr><th>State</th><th>ความหมายต่อ app</th><th>ตัวอย่างจาก status table</th></tr>
+  <tr><td><strong>Active</strong></td><td>support เต็มที่และแนะนำให้ใช้</td><td><code>claude-haiku-4-5-20251001</code> retire ไม่เร็วกว่า 15 ต.ค. 2026</td></tr>
+  <tr><td><strong>Legacy</strong></td><td>ไม่ได้รับ update แล้ว และอาจถูก deprecate ภายหลัง</td><td>ตอนนี้ไม่มี model ที่อยู่ใน state นี้</td></tr>
+  <tr><td><strong>Deprecated</strong></td><td>ยังใช้ได้ มี replacement แนะนำ และมีวัน retirement แล้ว</td><td><code>claude-mythos-preview</code> deprecate 9 มิ.ย. 2026 วัน retire รอประกาศ</td></tr>
+  <tr><td><strong>Retired</strong></td><td>ไม่มีให้ใช้แล้ว request fail</td><td><code>claude-opus-4-1-20250805</code> deprecate 5 มิ.ย. 2026, retire 5 ส.ค. 2026</td></tr>
+</table></div>
+<p>จำง่ายๆ: <strong>deprecation เปิดหน้าต่าง migration ส่วน retirement ปิดหน้าต่าง</strong> เหมือนป้าย "ร้านจะปิดสิ้นเดือน" ระหว่างนี้ยังเข้าร้านได้ แต่พอถึงวันก็ประตูปิดเลย ไม่มีใครพาไปร้านใหม่ให้</p>
+<pre><code># โค้ดที่ hardcode model id ไว้ จะพังทันทีที่ model retire
+MODEL = "claude-opus-4-1-20250805"   # retired แล้ว request จะ fail
+# ไม่มีการ reroute อัตโนมัติไป model ใหม่ ต้องเปลี่ยนเอง</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Deprecated แปลว่าใช้ไม่ได้แล้ว"</strong> หรือ <strong>"เดี๋ยวระบบสลับไป model ใหม่ให้เอง"</strong> ผิดทั้งคู่ deprecated ยังทำงานได้จนถึงวัน retire และพอ retire แล้ว request ก็ fail ไปเลย ไม่มี auto-reroute</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Active → Legacy → Deprecated → Retired (ไม่จำเป็นต้องผ่านทุกขั้น) deprecation คือคำเตือน ไม่ใช่ outage ส่วน retirement คือ outage จริงถ้ายังไม่ย้าย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>workflow ใน production เรียก model ที่เพิ่งถูกติดสถานะ Deprecated เมื่อวาน จะเกิดอะไรขึ้น?</p>
+  <details><summary>ดูเฉลย</summary><p>ยังทำงานปกติ แค่ไม่แนะนำให้ใช้ต่อ และมีวัน retirement กำหนดไว้แล้ว ถือเป็นสัญญาณให้เริ่ม migrate</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>cron job รายสัปดาห์ยังเรียก model ที่เลยวัน retirement มาแล้ว 3 วัน ผลคืออะไร?</p>
+  <ol type="A">
+    <li>ทำงานได้ แต่มี warning ใน response</li>
+    <li>Anthropic route ไปยัง replacement ที่แนะนำให้อัตโนมัติ</li>
+    <li>request fail เพราะ model ไม่มีให้บริการแล้ว</li>
+    <li>ทำงานได้ต่ออีก 60 วัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> retired = ไม่มีให้ใช้ request จะ fail และไม่มีการสลับ model ให้อัตโนมัติ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. วัน retirement ของใครที่ใช้กับเรา</h3>
+<p>วันที่ในหน้า deprecations ของ Anthropic ใช้กับ platform ที่ <strong>Anthropic เป็นคน operate</strong> เท่านั้น</p>
+<div class="table-wrap"><table>
+  <tr><th>Platform</th><th>ใคร operate</th><th>ดูวันที่จากไหน</th></tr>
+  <tr><td>Claude API</td><td>Anthropic</td><td>หน้า deprecations ของ Anthropic</td></tr>
+  <tr><td>Claude Platform on AWS</td><td>Anthropic</td><td>หน้า deprecations ของ Anthropic</td></tr>
+  <tr><td>Microsoft Foundry</td><td>Anthropic</td><td>หน้า deprecations ของ Anthropic</td></tr>
+  <tr><td>Amazon Bedrock</td><td>Partner</td><td>model table ของ Bedrock เอง</td></tr>
+  <tr><td>Google Cloud</td><td>Partner</td><td>model table ของ Google Cloud เอง</td></tr>
+</table></div>
+<p>model ตัวเดียวกันอาจมี lifecycle status และวันที่ต่างกันบน partner platform ผลคือ <strong>deprecation notice ฉบับเดียวอาจสร้างหลาย deadline</strong> ต้องวางแผนแต่ละ deployment ตามตารางของ platform ที่มันรันอยู่จริง</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"วัน retire ของ Anthropic ใช้กับ model เดียวกันบน Bedrock และ Google Cloud ด้วย"</strong> ไม่ใช่ partner ประกาศตารางของตัวเอง ต้องไปเช็กที่ฝั่ง partner</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Claude API, Claude Platform on AWS, Microsoft Foundry ใช้วันของ Anthropic ส่วน Bedrock กับ Google Cloud ใช้วันของตัวเอง หนึ่ง model อาจมีหลาย deadline</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>บริษัทรัน chatbot บน Claude API และรัน pipeline สรุปเอกสารบน Amazon Bedrock ใช้ model ตัวเดียวกัน Anthropic เพิ่งประกาศวัน retire ของ model นี้ ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>ทั้งสองระบบต้องย้ายภายในวันเดียวกัน</li>
+    <li>ฝั่ง Claude API ใช้วันของ Anthropic ส่วนฝั่ง Bedrock ต้องดูตารางของ Bedrock ซึ่งอาจต่างกัน</li>
+    <li>Bedrock จะยังให้ใช้ไปตลอด</li>
+    <li>ฝั่ง Bedrock จะ retire ก่อนเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> partner platform กำหนด status และวันที่เอง จึงอาจมีคนละ deadline</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ทำ migration ให้เสร็จก่อน deadline</h3>
+<div class="box key"><span class="tag">ตัวเลขที่ต้องจำ</span>
+  <p>สำหรับ model ที่ release สู่สาธารณะ Anthropic ให้ notice ลูกค้าที่มี deployment ใช้งานอยู่ <strong>อย่างน้อย 60 วัน</strong> ก่อน retirement</p>
+</div>
+<ol class="steps">
+  <li><strong>Audit:</strong> เข้าหน้า <strong>Usage</strong> ใน Claude Console → กด <strong>Export</strong> → ดู CSV ที่แยกการใช้งานตาม API key และ model จะรู้ว่า service/key ไหนต้องย้ายก่อน</li>
+  <li><strong>Test:</strong> เทสต์ app กับ model ใหม่ให้เร็วที่สุดก่อนถึงวัน retire เพื่อวัดผลกับงานจริงของเรา และจับ <em>breaking change ใน request</em> ด้วย ไม่ใช่แค่ดูคุณภาพ อ่าน migration guide ของ model นั้นก่อนเปลี่ยน model ID</li>
+  <li><strong>Update:</strong> ย้ายโค้ดไป replacement ที่แนะนำโดยเร็ว ติดตามหน้า deprecations ต่อ และติดต่อ support ถ้า migration ติดขัด</li>
+</ol>
+
+<h3>ตัวอย่าง breaking change: thinking budget</h3>
+<p>บน Claude Opus 4.7 ขึ้นไป รูปแบบ manual thinking budget ไม่รองรับแล้ว ส่งไปจะได้ <strong>400 error</strong> ต้องเปลี่ยนเป็น adaptive thinking คู่กับ effort</p>
+<pre><code># แบบเก่า: ใช้ได้กับ model รุ่นก่อน แต่ Opus 4.7+ ตอบ 400
+thinking = {"type": "enabled", "budget_tokens": 8000}
+
+# แบบใหม่: ให้ model ปรับเอง แล้วคุมความลึกด้วย effort
+thinking = {"type": "adaptive"}
+output_config = {"effort": "medium"}</code></pre>
+<p>retry, backoff, เพิ่ม <code>max_tokens</code> หรือ pin header ไม่ช่วยอะไร เพราะ request แบบนั้นไม่ถูก support ตั้งแต่แรก</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>มีเวลาอย่างน้อย 60 วัน: export usage CSV เพื่อหาว่าใครยังเรียก → เทสต์กับ model ใหม่ (ทั้งคุณภาพและ request shape) → ย้ายให้เสร็จ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>CTO อยากได้รายการว่า API key ไหนยังเรียก model ที่กำลังจะ retire อยู่บ้าง แยกตาม key และ model วิธีไหนตรงที่สุด?</p>
+  <ol type="A">
+    <li>grep log ของทุก service</li>
+    <li>เปิดหน้า Usage ใน Claude Console แล้ว export CSV</li>
+    <li>เปิด extended thinking แล้วให้ Claude สรุปให้</li>
+    <li>ส่ง ticket ถาม support</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> CSV จาก Usage page แยกตาม API key และ model ให้อยู่แล้ว grep log ไม่ครบและเหนื่อย ส่วน C และ D ไม่ใช่วิธีหลัก</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอน audit การใช้งาน:</p>
+  <ol type="a">
+    <li>กด Export</li>
+    <li>ดู CSV แยกตาม API key และ model</li>
+    <li>เข้าหน้า Usage ใน Claude Console</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → a → b</strong></p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีม legal เขียน policy ภายในว่า "ต้องมีเวลาเตรียมตัวขั้นต่ำเท่าไหร่ก่อน model ที่ใช้อยู่ถูก retire" ควรอ้างอิงตัวเลขไหนจาก commitment ของ Anthropic สำหรับ model ที่ release สู่สาธารณะ?</p>
+  <ol type="A">
+    <li>อย่างน้อย 30 วัน</li>
+    <li>อย่างน้อย 60 วัน</li>
+    <li>อย่างน้อย 90 วัน</li>
+    <li>อย่างน้อย 180 วัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ขั้นต่ำที่ commit ไว้คือ 60 วัน ตัวเลขอื่นมากหรือน้อยกว่าที่สัญญาไว้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>หลังเปลี่ยน model ID จาก <code>claude-opus-4-6</code> ไป Opus รุ่นใหม่ request ที่ใส่ <code>budget_tokens</code> เริ่มได้ 400 ทุกครั้ง ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>ใส่ retry พร้อม exponential backoff</li>
+    <li>เพิ่ม <code>max_tokens</code></li>
+    <li>เปลี่ยนเป็น adaptive thinking และคุมด้วย effort ตาม migration guide</li>
+    <li>pin <code>anthropic-version</code> เป็นค่าเก่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> 400 เพราะ request รูปแบบนั้นไม่ support แล้ว retry หรือปรับค่าอื่นไม่ทำให้มันถูกต้อง</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. API versioning และ feature classification</h3>
+<p>ทุก request ต้องส่ง header <code>anthropic-version</code> เช่น <code>2023-06-01</code> (SDK ใส่ให้อัตโนมัติ)</p>
+<pre><code>curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model": "claude-sonnet-5-5", "max_tokens": 256,
+       "messages": [{"role": "user", "content": "ping"}]}'</code></pre>
+<p>ภายใน version เดียวกัน Anthropic สัญญาว่า parameter ที่มีอยู่จะไม่หาย แต่ <strong>ยังอาจ</strong>:</p>
+<ul>
+  <li>เพิ่ม optional input ใหม่</li>
+  <li>เพิ่มค่าใหม่ใน output</li>
+  <li>เปลี่ยนเงื่อนไขของ error บางประเภท</li>
+  <li>เพิ่ม variant ใหม่ใน output ที่เป็นแบบ enum เช่น streaming event type</li>
+</ul>
+<p>แปลว่าโค้ดที่ handle enum แบบ strict (เจอค่าที่ไม่รู้จักแล้ว throw) ยังพังได้แม้ไม่เปลี่ยน version ควรเขียนให้ข้ามค่าที่ไม่รู้จัก Anthropic แนะนำให้ใช้ version ล่าสุด และ version เก่าอาจไม่เปิดให้ user ใหม่</p>
+<pre><code>// ข้าม event ที่ไม่รู้จัก แทนที่จะ throw
+switch (event.type) {
+  case "content_block_delta": handleDelta(event); break;
+  case "message_stop": finish(); break;
+  default: break;   // event ใหม่ในอนาคต ไม่ทำให้พัง
+}</code></pre>
+
+<h3>Feature classification</h3>
+<div class="table-wrap"><table>
+  <tr><th>Label</th><th>ความหมาย</th><th>ใช้ใน production?</th></tr>
+  <tr><td>ไม่มี label</td><td>Stable, support เต็มที่, มี versioning guarantee ปกติ</td><td>แนะนำ</td></tr>
+  <tr><td>Beta</td><td>Preview อาจเปลี่ยนมากหรือถูกยกเลิก</td><td>ไม่รับประกัน</td></tr>
+  <tr><td>Deprecated</td><td>ยังใช้ได้ มี migration path และ timeline การถอด</td><td>ควรวางแผนย้าย</td></tr>
+  <tr><td>Retired</td><td>ไม่มีให้ใช้แล้ว</td><td>ไม่ได้</td></tr>
+</table></div>
+<p>feature ไม่จำเป็นต้องไล่ผ่านทุก stage อาจเข้ามาที่ stage ไหนก็ได้</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Beta feature ปลอดภัยพอๆ กับ stable สำหรับ workflow สำคัญ"</strong> ไม่ใช่ มีแค่ feature ที่ไม่มี label เท่านั้นที่แนะนำสำหรับ production</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>anthropic-version</code> ปกป้อง parameter เดิม แต่ไม่ได้ห้ามการเพิ่มของใหม่ เขียน parser ให้ทนค่าที่ไม่รู้จัก และใช้เฉพาะ feature ไม่มี label กับงาน critical</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ label กับสถานการณ์ที่เหมาะ:</p>
+  <ol>
+    <li>Feature ที่ทีมกล้าวางในระบบจ่ายเงินลูกค้าได้เลย</li>
+    <li>Feature ที่อาจเปลี่ยน shape หรือหายไปเดือนหน้า เหมาะแค่ลองใน staging</li>
+    <li>Feature ที่ยังเรียกได้ แต่มีประกาศวันถอดและแนวทางย้าย</li>
+    <li>Feature ที่เรียกแล้วไม่มีอยู่จริงแล้ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → ไม่มี label (stable) · 2 → Beta · 3 → Deprecated · 4 → Retired</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Docs: Model deprecations</li>
+  <li>Claude Docs: Opus 5.5 migration guide</li>
+  <li>Claude Docs: API versioning</li>
+  <li>Claude Docs: Build with Claude overview</li>
+</ul>
+</section>

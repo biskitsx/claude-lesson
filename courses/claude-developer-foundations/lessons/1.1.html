@@ -1,0 +1,275 @@
+<section class="lesson" id="l-1-1">
+<h2>1.1 Agent architecture: workflows, agents และ orchestrator–subagent</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/workflows-vs-agents-choosing-an-agentic-architecture">CertSafari 1.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แยก workflow กับ agent ออกจากกันได้ ด้วยคำถามข้อเดียว: <strong>ใครเป็นคนตัดสินว่าขั้นต่อไปคืออะไร โค้ดของเราหรือโมเดล</strong></li>
+    <li>เลือกระดับความอิสระ (autonomy) ที่ต่ำที่สุดที่ยังตอบโจทย์ได้ และบอกได้ว่าการให้อิสระเพิ่มต้องแลกกับอะไร</li>
+    <li>อธิบายได้ว่า orchestrator ส่งงานให้ subagent ยังไง และอะไรถูกส่งกลับมา</li>
+    <li>บอกได้ว่ามี 3 สถานการณ์ที่ subagent ดีกว่าการใช้ agent ตัวเดียว และประเมินต้นทุนเรื่อง token กับเวลาได้คร่าวๆ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ใครถือพวงมาลัย</span>
+  <p>ใน <strong>workflow</strong> ลำดับการเรียก LLM และ tool ถูกเขียนตายตัวไว้ในโค้ดของเรา ส่วนใน <strong>agent</strong> โมเดลเป็นคนเลือกเองตอนรันว่าจะทำอะไรต่อและจะเรียก tool ไหน</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ความต่างอยู่ที่ว่า "ใครคุม control flow"</h3>
+<p>Anthropic เรียกระบบทั้งหมดในกลุ่มนี้รวมๆ ว่า <strong>agentic systems</strong> แล้วแบ่งย่อยเป็น 2 แบบ:</p>
+<ul>
+  <li><strong>Workflow</strong> คือ LLM กับ tool ทำงานตามเส้นทางที่เราเขียนโค้ดกำหนดไว้ล่วงหน้า</li>
+  <li><strong>Agent</strong> คือ LLM เป็นคนกำหนดขั้นตอนและเลือกใช้ tool เอง โดยคุมทั้งกระบวนการว่างานจะเสร็จด้วยวิธีไหน</li>
+</ul>
+<p>เปรียบง่ายๆ workflow เหมือนสูตรอาหารที่เขียนไว้ทีละขั้น ใครทำก็ทำตามลำดับเดิม ส่วน agent เหมือนเชฟที่เปิดตู้เย็น ดูว่ามีอะไร แล้วค่อยคิดว่าจะทำอะไรต่อ</p>
+
+<h3>ดูจากโค้ดจะเห็นชัด</h3>
+<p>Workflow: ลำดับขั้นอยู่ในโค้ด อ่านโค้ดแล้วรู้เลยว่ามีกี่ขั้น</p>
+<pre><code>def localize(brief):
+    draft = llm("เขียนข้อความจาก brief นี้", brief)
+    checked = llm("ตรวจข้อความตามเกณฑ์", draft)
+    return llm("แปลเป็นภาษาไทย", checked)</code></pre>
+<p>Agent: โค้ดเป็นแค่ลูป ในแต่ละรอบ Claude ตัดสินเองว่าจะตอบเลย จะเรียก tool หรือทำทั้งสองอย่าง ลูปจบเมื่อ Claude ตอบกลับมาโดยไม่ขอเรียก tool แล้ว</p>
+<pre><code>messages = [{"role": "user", "content": task}]
+while True:
+    reply = claude(messages, tools=TOOLS)
+    messages.append(reply)
+    if not reply.tool_calls:          # ไม่ขอ tool แล้ว = งานเสร็จ
+        break
+    messages.append(run_tools(reply.tool_calls))</code></pre>
+<p>สังเกตว่าในโค้ด agent ไม่มีตรงไหนบอกว่าจะวนกี่รอบ หรือจะเรียก tool ไหนก่อนหลัง ทุกอย่างโมเดลเป็นคนเลือก</p>
+
+<h3>แต่ละแบบได้อะไร เสียอะไร</h3>
+<ul>
+  <li><strong>Workflow</strong> คาดเดาได้ ผลลัพธ์สม่ำเสมอ เทสต์ได้ทุกเส้นทาง และรู้ต้นทุนล่วงหน้า</li>
+  <li><strong>Agent</strong> ยืดหยุ่น เหมาะกับงานที่บอกขั้นตอนล่วงหน้าไม่ได้ ตัวอย่างคลาสสิกคืองานรีเสิร์ช ที่จะค้นอะไรต่อขึ้นอยู่กับว่าผลค้นครั้งก่อนเจออะไร</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อย่าดูแค่ว่ามี LLM ตัดสินใจอะไรบางอย่างหรือเปล่า ให้ดูว่า <em>เส้นทางที่เป็นไปได้ทั้งหมด</em> ถูกเขียนไว้ในโค้ดหรือไม่ ถ้าใช่ ก็คือ workflow</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ระบบตอบอีเมลลูกค้าให้ LLM อ่านอีเมลแล้วบอกภาษา (ไทย / อังกฤษ / ญี่ปุ่น) จากนั้นโค้ด <code>match</code> เลือก template ตอบตามภาษานั้น ระบบนี้คืออะไร?</p>
+  <ol type="A">
+    <li>Agent เพราะ LLM เป็นคนตัดสินว่าเป็นภาษาอะไร</li>
+    <li>Workflow เพราะทางเลือกทั้งหมดถูกเขียนไว้ในโค้ดแล้ว LLM แค่ชี้ว่าไปทางไหน</li>
+    <li>Agent เพราะมีหลาย template</li>
+    <li>ไม่ใช่ทั้งคู่ เพราะไม่มีการเรียก tool</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ผลลัพธ์ของ LLM แค่เลือกหนึ่งในเส้นทางที่โค้ดเตรียมไว้แล้ว โมเดลสร้างเส้นทางใหม่เองไม่ได้ เลยยังเป็น workflow (แบบ routing)</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เริ่มจากขั้นล่างสุดของ "autonomy ladder"</h3>
+<p>กฎการออกแบบข้อแรกคือ <strong>ทำสิ่งที่ง่ายที่สุดที่ใช้ได้ก่อน แล้วค่อยเพิ่มความซับซ้อนเมื่อมีโจทย์บังคับจริงๆ</strong> บางครั้งคำตอบที่ถูกคือไม่ต้องมี agentic system เลย แค่เรียก LLM ครั้งเดียวที่ทำ retrieval และใส่ตัวอย่างใน prompt (in-context examples) ดีๆ ก็มักจะพอ</p>
+<p>ยิ่งขึ้นบันไดสูง ก็ยิ่งยก control flow ไปให้โมเดลมากขึ้น ระหว่างการเรียก LLM ครั้งเดียวกับ agent เต็มรูปแบบ มี workflow pattern คั่นอยู่ 5 แบบ: <strong>prompt chaining, routing, parallelization, orchestrator-workers และ evaluator-optimizer</strong> (รายละเอียดอยู่ในบทเรียน 1.3)</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ขั้นบันได</th><th>ใครตัดสินขั้นตอน</th><th>ใช้ขั้นนี้ก็พอ เมื่อ…</th></tr>
+  <tr><td>เรียก LLM ครั้งเดียว + retrieval + ตัวอย่างใน prompt</td><td>ไม่มีใคร (มีขั้นเดียว)</td><td>prompt ดีๆ ครั้งเดียวก็ได้คุณภาพตามเป้า</td></tr>
+  <tr><td>Workflow แบบตายตัว (chaining, routing, parallelization)</td><td>โค้ดของเรา</td><td>งานแบ่งเป็นงานย่อยที่รู้ล่วงหน้าได้ชัดเจน</td></tr>
+  <tr><td>Orchestrator-workers</td><td>LLM ตัวกลางเลือกงานย่อย ส่วนโครงสร้างโค้ดเป็นคนรัน</td><td>เดางานย่อยล่วงหน้าไม่ได้ เช่น ไม่รู้ว่าการแก้ครั้งนี้จะกระทบกี่ไฟล์</td></tr>
+  <tr><td>Agent อิสระเต็มตัว</td><td>โมเดล ตัดสินทีละรอบ</td><td>งานต้องการความยืดหยุ่นและให้โมเดลตัดสินใจเองในสเกลใหญ่</td></tr>
+</table></div>
+
+<h3>การขึ้นบันไดมีราคาที่ต้องจ่าย</h3>
+<p>การเปลี่ยนจาก workflow ที่เทสต์ผ่านแล้วไปเป็น agent ไม่ได้มีผลแค่เรื่องคุณภาพ:</p>
+<ul>
+  <li>Agent กำหนดจำนวนรอบเอง ดังนั้น <strong>ค่า token และเวลาตอบไม่ได้ถูกล็อกไว้ในโค้ดอีกต่อไป</strong> อาจถูกหรือแพง เร็วหรือช้าก็ได้</li>
+  <li>Framework บางตัวซ่อน prompt และ response จริงไว้ ทำให้ debug ยากขึ้น</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Orchestrator-workers ก็คือ parallelization ที่มี LLM ครอบอีกชั้น"</strong> ไม่ใช่ ใน orchestrator-workers โมเดลเป็นคนคิดงานย่อยตอนรันโดยดูจาก input ส่วน parallelization งานย่อยถูกกำหนดไว้ตั้งแต่แรก</p>
+  <p><strong>"Agent อิสระคือเวอร์ชันอัปเกรดของ workflow เสมอ"</strong> ไม่ใช่ ระบบแบบ agent เอาเวลาและค่าใช้จ่ายไปแลกกับประสิทธิภาพ ถ้างานนิยามได้ชัด workflow หรือการเรียก LLM ครั้งเดียวที่จูนดีแล้วมักดีกว่า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถามตัวเองว่า "ขั้นที่ต่ำกว่านี้ทำได้ไหม" ถ้าทำได้ ให้หยุดที่ขั้นนั้น ความอิสระที่เกินความจำเป็นคือค่า token กับเวลาที่เสียไปฟรีๆ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมมี pipeline สรุปรายงานประชุม (ดึง action items → จัดหมวด → เขียนสรุป) ที่ได้คุณภาพตามเป้าแล้ว มีคนเสนอให้เปลี่ยนเป็น agent อิสระ "เพื่อความทันสมัย" ข้อโต้แย้งไหนหนักแน่นที่สุด?</p>
+  <ol type="A">
+    <li>Agent ให้ผลคุณภาพแย่กว่า workflow เสมอ</li>
+    <li>Agent ใช้ tool อย่าง retrieval ไม่ได้</li>
+    <li>ระบบเดิมตอบโจทย์อยู่แล้ว การเปลี่ยนเป็น agent จะเสียความคาดเดาได้ และเพิ่มเวลากับต้นทุนที่งานนี้ไม่ต้องการ</li>
+    <li>Workflow ใส่การตรวจด้วยโค้ดระหว่างขั้นไม่ได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ข้ออื่นเป็นข้อกล่าวอ้างที่ไม่จริง Agent ไม่ได้แย่กว่าเสมอ ใช้ tool ได้ และ workflow ก็ใส่ด่านตรวจระหว่างขั้นได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบรับคำขอคืนสินค้าแบ่งเคสได้ 4 ประเภทที่รู้แน่นอน แต่ละประเภทมีขั้นตอนดำเนินการตายตัว ควรใช้สถาปัตยกรรมไหน?</p>
+  <ol type="A">
+    <li>Orchestrator-workers ให้ LLM ตัวกลางคิดตอนรันว่าจะเรียกระบบไหน</li>
+    <li>Routing workflow: จัดประเภทคำขอ แล้วรันขั้นตอนตายตัวของประเภทนั้น</li>
+    <li>Agent อิสระที่เลือก tool และจุดหยุดเอง</li>
+    <li>เรียก LLM 4 ครั้งตามลำดับเดิมทุกครั้ง ไม่ว่าเคสจะเป็นประเภทไหน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> งานย่อยรู้ล่วงหน้าหมดแล้ว A จึงเพิ่มความยืดหยุ่นที่ไม่จำเป็น C ทำให้ขั้นตอนคาดเดาไม่ได้ ส่วน D ไม่มีการจัดประเภท เลยแยกเส้นทางตามประเภทไม่ได้</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ลำดับชั้นแบบหัวหน้า–ลูกทีม: orchestrator กับ subagent</h3>
+<p><strong>Orchestrator–subagent pattern</strong> คือระบบ multi-agent ที่มี <strong>agent หัวหน้า (lead) หนึ่งตัว</strong> ทำหน้าที่แตกงานเป็นส่วนๆ สร้าง subagent เฉพาะทางขึ้นมาทำแต่ละส่วน แล้วคอยดูแล แต่ละ agent เป็น LLM instance แยกกัน มี context ของตัวเอง และมีโค้ดเป็นตัวประสาน ในบรรดา multi-agent pattern ทั้งหมด แบบนี้ประสานงานง่ายที่สุด จึงมักเป็นจุดเริ่มต้น</p>
+
+<div class="box key"><span class="tag">ข้อเท็จจริงสำคัญ</span>
+  <p>tool call ระหว่างทางและผลลัพธ์ของ subagent <strong>อยู่ในบทสนทนาของ subagent เอง</strong> สิ่งที่ส่งกลับไปให้ตัวแม่มี <strong>แค่ข้อความสุดท้าย</strong> หัวหน้าเลยทำงานจากภาพที่ถูกย่อแล้ว เหมือนผู้จัดการที่อ่านแค่รายงานสรุป ไม่ได้นั่งดูลูกทีมทำงานทุกขั้น</p>
+</div>
+
+<h3>ตัวอย่างโค้ดแบบย่อ</h3>
+<pre><code>async def research_topic(query):
+    facets = await lead_plan(query)                    # 1. หัวหน้าแตกคำถามเป็นประเด็นย่อย
+    findings = await asyncio.gather(                   # 2. ปล่อย subagent ประเด็นละตัว พร้อมกัน
+        *(run_subagent(f) for f in facets))
+    return await lead_synthesize(query, findings)      # 3. หัวหน้ารวมผล</code></pre>
+
+<h3>ตัวอย่างจริง: ฟีเจอร์ Research ของ Anthropic</h3>
+<ol class="steps">
+  <li><strong>LeadResearcher</strong> วางแผนแล้ว <strong>บันทึกแผนลง memory</strong> เพราะถ้า context ยาวเกิน 200,000 token จะถูกตัดทิ้ง</li>
+  <li>สร้าง subagent แต่ละตัวพร้อมโจทย์รีเสิร์ชเฉพาะ</li>
+  <li>subagent แต่ละตัวค้นข้อมูลแยกกันเอง แล้วส่งสิ่งที่เจอกลับมา</li>
+  <li>หัวหน้ารวมผลแล้วตัดสินว่าต้องค้นเพิ่มอีกไหม (ถ้าต้อง ก็วนกลับไปข้อ 2)</li>
+  <li>เมื่อจบลูปรีเสิร์ช ผลทั้งหมดถูกส่งให้ <strong>CitationAgent</strong> แยกต่างหาก เพื่อผูกแต่ละข้อความเข้ากับแหล่งอ้างอิง</li>
+</ol>
+<p>ผลลัพธ์: ใช้ Claude Opus 4 เป็นหัวหน้าและ Sonnet 4 เป็น subagent ทำคะแนนใน eval รีเสิร์ชภายในได้ดีกว่า Opus 4 แบบ agent ตัวเดียวถึง 90.2%</p>
+
+<h3>ทางเลือกเชิงโครงสร้าง 2 เรื่อง</h3>
+<ul>
+  <li><strong>รอแบบ synchronous:</strong> หัวหน้ารอ subagent ทั้งชุดเสร็จก่อนค่อยไปต่อ ประสานงานง่าย แต่ถ้ามีตัวไหนช้า ทุกอย่างก็ช้าตาม</li>
+  <li><strong>ส่งทุกอย่างผ่านหัวหน้าทำให้รายละเอียดหาย:</strong> อีกทางคือให้ subagent เขียนผลลงที่เก็บภายนอก (ไฟล์, DB) แล้วส่งกลับแค่ reference สั้นๆ</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Orchestrator เห็นทุก tool call และทุกไฟล์ที่ subagent ทำผ่านมา"</strong> ไม่ใช่ ตัวแม่ได้แค่ข้อความสุดท้าย ซึ่งปกติเป็นสรุปสั้นๆ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>หัวหน้าแตกงาน → ลูกทีมทำใน context ของตัวเอง → ส่งกลับแค่สรุป → หัวหน้ารวมผลและตัดสินว่าจะไปต่อหรือหยุด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอนของลูป orchestrator ในระบบ Research ให้ถูก:</p>
+  <ol type="a">
+    <li>CitationAgent ผูกข้อความกับแหล่งอ้างอิง</li>
+    <li>หัวหน้าสร้าง subagent พร้อมโจทย์เฉพาะ</li>
+    <li>หัวหน้าวางแผนและบันทึกแผนลง memory</li>
+    <li>หัวหน้ารวมผลและตัดสินว่าต้องค้นเพิ่มไหม</li>
+    <li>subagent แต่ละตัวค้นข้อมูลเองแล้วส่งผลกลับ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → b → e → d → a</strong> การทำ citation เป็นขั้นแยกที่เกิดหลังจากลูปรีเสิร์ชจบแล้ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบสร้างคำบรรยายสินค้าทำงานแบบนี้ทุกครั้ง: เขียนร่าง → ตรวจคำต้องห้ามตามเกณฑ์ตายตัว → ย่อให้สั้นสำหรับมือถือ แต่ละขั้นรับ output ของขั้นก่อนหน้าไปทำต่อ เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Orchestrator-workers</li>
+    <li>Evaluator-optimizer</li>
+    <li>Routing</li>
+    <li>Prompt chaining</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ลำดับตายตัวและส่งต่อ output ทีละขั้น ไม่มีการเลือกเส้นทาง (routing) ไม่มีการวนแก้จนผ่าน (evaluator-optimizer) และไม่มี LLM คิดงานย่อยตอนรัน (orchestrator-workers)</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เมื่อไหร่ subagent คุ้ม และต้องจ่ายเท่าไหร่</h3>
+<p>Subagent ช่วยได้จริงแค่ใน <strong>3 สถานการณ์</strong> นอกจากนั้นต้นทุนการประสานงานมักแพงกว่าสิ่งที่ได้กลับมา หลายทีมพบว่าแค่ปรับ prompt ของ agent ตัวเดียวให้ดีขึ้นก็ได้ผลพอๆ กับ multi-agent แล้ว</p>
+
+<div class="table-wrap"><table>
+  <tr><th>สถานการณ์</th><th>ปัญหาเมื่อใช้ agent ตัวเดียว</th><th>subagent ช่วยยังไง</th></tr>
+  <tr><td><strong>Context pollution</strong> </td><td>ผลจากงานย่อยหนึ่ง เช่น ประวัติคำสั่งซื้อยาว 2,000+ token ไปเบียดพื้นที่คิดของงานถัดไป</td><td>มี context สะอาดแยกต่างหาก แล้วส่งกลับแค่สรุปสั้นๆ</td></tr>
+  <tr><td><strong>Parallel work</strong></td><td>agent ตัวเดียวค้นทีละขั้น ครอบคลุมได้น้อย</td><td>หลาย subagent สำรวจคนละมุมพร้อมกัน</td></tr>
+  <tr><td><strong>Specialization</strong></td><td>tool เยอะเกินไป (มักเกิน 20 ตัว) ข้ามหลายโดเมน ทำให้เลือก tool ผิด</td><td>แต่ละตัวมีชุด tool และ system prompt เฉพาะหน้าที่ของตัวเอง</td></tr>
+</table></div>
+<ul>
+  <li>การแยก context คุ้มที่สุดเมื่องานย่อยสร้าง output เกินประมาณ <strong>1,000 token</strong> และส่วนใหญ่ไม่เกี่ยวกับงานหลัก</li>
+  <li>การแยกความเชี่ยวชาญยัง <strong>ช่วยเรื่องความปลอดภัย</strong> ด้วย ใน Agent SDK แต่ละ subagent กำหนด system prompt และจำกัด tool ของตัวเองได้ เช่น ถ้าให้ reviewer มีแค่ tool อ่าน ก็วิเคราะห์ไฟล์ได้แต่แก้ไฟล์ไม่ได้</li>
+</ul>
+
+<h3>ต้นทุนที่ต้องรู้</h3>
+<ul>
+  <li>ระบบ multi-agent มักใช้ token <strong>มากกว่า agent ตัวเดียว 3–10 เท่า</strong> ส่วนที่เพิ่มมาจาก context ที่ซ้ำกัน ข้อความที่ agent ส่งหากัน และสรุปตอนส่งต่องาน</li>
+  <li>subagent ที่รันขนานกันเสร็จพร้อมตัวที่ช้าที่สุด แต่ <strong>เวลารวมของงานทั้งหมดมักนานขึ้น</strong> เพราะปริมาณการคำนวณรวมเพิ่มขึ้นมาก</li>
+  <li>สิ่งที่ได้จริงจากการรันขนานคือ <strong>ความครอบคลุม ไม่ใช่ความเร็ว</strong></li>
+  <li>งานที่ไม่เหมาะ: งานที่ทุก agent ต้องใช้ context ชุดเดียวกัน หรือ agent ต้องพึ่งพากันมาก งานเขียนโค้ดส่วนใหญ่มีส่วนที่แยกทำขนานได้น้อยกว่างานรีเสิร์ช</li>
+  <li>ความล้มเหลวที่เคยเกิด: ระบบ Research รุ่นแรกๆ ปล่อย subagent 50 ตัวกับคำถามง่ายๆ บางทีมแยก วางแผน / ลงมือ / รีวิว เป็นคนละ agent แล้วเสีย context ทุกครั้งที่ส่งต่อ จนใช้ token ไปกับการประสานงานมากกว่าการทำงานจริง</li>
+</ul>
+
+<h3>จำกัด tool ของ subagent ใน Agent SDK</h3>
+<pre><code>agents: {
+  "code-reviewer": {
+    description: "รีวิวโค้ดโดยไม่แก้ไฟล์",
+    prompt: "คุณคือ reviewer ...",
+    tools: ["Read", "Grep", "Glob"],   // subagent ตัวนี้ใช้ได้แค่ tool เหล่านี้
+    model: "sonnet"
+  }
+}</code></pre>
+<ul>
+  <li><code>tools</code> (อยู่ในนิยามของ agent) คือรายชื่อ tool ที่ subagent ตัวนั้นใช้ได้</li>
+  <li><code>allowedTools</code> เป็น option ระดับบนสุด ใช้อนุมัติ tool อัตโนมัติสำหรับทั้ง query ไม่ได้จำกัดเฉพาะ subagent</li>
+  <li><code>disallowedTools</code> ใช้ตัด tool ที่ระบุชื่อออก ไม่ได้เป็นรายชื่อ tool ที่อนุญาต</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แบ่งงานให้ subagent รันขนานกันแล้วจะเสร็จเร็วกว่า agent ตัวเดียว"</strong> ไม่ใช่ การรันขนานซื้อความครอบคลุม แต่ปริมาณงานรวมก็เพิ่มขึ้นมาก</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใช้ subagent เมื่อเจอ 1 ใน 3 ปัญหานี้: context pollution, ต้องสำรวจหลายมุมพร้อมกัน หรือ tool เยอะจนเลือกผิด และต้องยอมจ่าย token 3–10 เท่า</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>งานรีเสิร์ชที่ agent ตัวเดียวทำได้ ถ้าเปลี่ยนเป็น subagent 4 ตัวรันขนาน เวลาจริง (wall-clock) จะเป็นยังไง?</p>
+  <ol type="A">
+    <li>ลดเหลือประมาณ 1 ใน 4</li>
+    <li>ลดลงนิดหน่อย เพราะการประสานงานกินเวลาไปบ้าง</li>
+    <li>หลายครั้งกลับนานขึ้น เพราะปริมาณการคำนวณรวมเพิ่มขึ้นมาก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> สิ่งที่ได้คือความครอบคลุม ไม่ใช่ความเร็ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>อยากให้ subagent "security-auditor" อ่านโค้ดได้แต่แก้ไม่ได้ ต้องใส่ <code>["Read", "Grep", "Glob"]</code> ที่ field ไหนในนิยามของ agent?</p>
+  <ol type="A">
+    <li><code>allowedTools</code></li>
+    <li><code>tools</code></li>
+    <li><code>disallowedTools</code></li>
+    <li><code>permissionMode</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>tools</code> ในนิยาม agent คือรายชื่อ tool ที่ตัวนั้นใช้ได้ ส่วน <code>allowedTools</code> เป็นการอนุมัติอัตโนมัติระดับทั้ง query และ <code>disallowedTools</code> ใช้ตัด tool ออก</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่อาการของ agent ตัวเดียวกับประโยชน์ของ subagent:</p>
+  <ol>
+    <li>ดึง log ระบบมาหมื่น token ก่อนวิเคราะห์ แล้ว agent วิเคราะห์ประเด็นหลักพลาด</li>
+    <li>คำถามเปรียบเทียบคู่แข่ง 6 เจ้า แต่ agent ค้นทีละเจ้าแล้วไม่ทั่วถึง</li>
+    <li>เพิ่ม tool ฝั่ง billing เข้าไปแล้ว agent กลับเลือก tool ผิดในงานซัพพอร์ตที่เคยทำได้ดี</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → แยก context (context isolation) · 2 → สำรวจขนาน (parallel exploration) · 3 → แยกความเชี่ยวชาญด้วยชุด tool เฉพาะ (specialization)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทุกครั้งที่มีการอัปโหลดสัญญา ระบบให้ LLM 3 ตัวตรวจพร้อมกันคนละเรื่อง (ข้อกฎหมาย / ตัวเลขการเงิน / วันที่สำคัญ) แล้วรวมผลเป็นรายงานเดียว เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Parallelization แบบ sectioning: แบ่งงานย่อยอิสระมาตรวจ input เดียวกันพร้อมกัน แล้วรวมผล</li>
+    <li>Parallelization แบบ voting: รัน prompt เดียวกันหลายรอบแล้วเอาเสียงข้างมาก</li>
+    <li>Evaluator-optimizer: ตัวหนึ่งหาปัญหา อีกตัววิจารณ์วนไปเรื่อยๆ</li>
+    <li>Orchestrator-workers: LLM ตัวกลางเลือกตอนรันว่าจะตรวจเรื่องไหนบ้าง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> หมวดการตรวจถูกกำหนดตายตัว (ไม่ใช่ D) แต่ละตัวทำคนละเรื่อง (ไม่ใช่ voting) และไม่มีการวนแก้ (ไม่ใช่ C)</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Anthropic Agent SDK docs: agent loop และ subagents</li>
+  <li>Anthropic Engineering: "Building effective agents"</li>
+  <li>Anthropic Engineering: "How we built our multi-agent research system"</li>
+  <li>Claude blog: multi-agent systems</li>
+</ul>
+</section>

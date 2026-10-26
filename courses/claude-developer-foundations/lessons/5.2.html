@@ -1,0 +1,296 @@
+<section class="lesson" id="l-5-2">
+<h2>5.2 Claude API REST fundamentals: endpoints, headers, SDKs และ errors</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-api-rest-fundamentals-endpoints-headers-sdks-and-errors">CertSafari 5.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกชื่อ endpoint หลักของ Claude API พร้อม HTTP method ของแต่ละตัวได้</li>
+    <li>รู้ว่า raw HTTP request ต้องมี header อะไรบ้าง และตัวไหนที่ SDK ใส่ให้อัตโนมัติ</li>
+    <li>อ่านฝั่ง response ได้: <code>request-id</code> header, รูปร่าง error JSON และ request size limit</li>
+    <li>จับคู่ method ของ SDK กับ REST endpoint ที่มันห่ออยู่ และตั้งค่า retry กับ pagination ที่ติดมากับ SDK ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: SDK ห่อ contract ไม่ได้แทนที่มัน</span>
+  <p>Claude API คือ REST ธรรมดาๆ ผ่าน HTTPS ที่ <code>api.anthropic.com</code> ใช้ header ชุดตายตัวและ body เป็น JSON ส่วน SDK แค่ช่วยประกอบ request กับ parse response ให้ <strong>กติกาของ API (contract) ยังเหมือนเดิมทุกอย่าง</strong> เข้าใจ REST ก่อน แล้วจะเข้าใจว่า SDK ทำอะไรให้เรา</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Endpoint ทั้งหมดอยู่ใต้ base URL เดียว</h3>
+<p>ทุกอย่างวิ่งไปที่ <code>https://api.anthropic.com</code> แล้วแยกกันด้วย path คิดเหมือนห้างเดียวที่มีหลายร้าน แต่ละร้านขายของคนละอย่าง:</p>
+<div class="table-wrap"><table>
+  <tr><th>API</th><th>Method + path</th><th>ใช้ทำอะไร</th></tr>
+  <tr><td>Messages</td><td><code>POST /v1/messages</code></td><td>คุยกับ Claude ปกติ (ส่ง messages ได้คำตอบกลับ)</td></tr>
+  <tr><td>Message Batches</td><td><code>POST /v1/messages/batches</code></td><td>งานปริมาณมากแบบ asynchronous ส่งไปทีเดียวแล้วค่อยมาเก็บผล</td></tr>
+  <tr><td>Token Counting</td><td><code>POST /v1/messages/count_tokens</code></td><td>นับ token ของ request ก่อนส่งจริง</td></tr>
+  <tr><td>Models</td><td><code>GET /v1/models</code></td><td>ดูรายชื่อ model ที่ใช้ได้และรายละเอียด</td></tr>
+  <tr><td>Files</td><td><code>POST /v1/files</code>, <code>GET /v1/files</code></td><td>อัปโหลดและจัดการไฟล์ที่จะใช้ซ้ำหลาย call</td></tr>
+  <tr><td>Skills</td><td><code>POST /v1/skills</code>, <code>GET /v1/skills</code></td><td>สร้างและจัดการ custom agent skill</td></tr>
+</table></div>
+<ul>
+  <li>นอกจากนี้ยังมี <strong>Agents, Sessions และ Environments API</strong> ที่อยู่เบื้องหลัง Claude Managed Agents ตอนนี้ยังเป็น <strong>beta</strong></li>
+  <li>สังเกตว่า count_tokens เป็น <code>POST</code> ไม่ใช่ GET เพราะต้องส่ง body (messages, system, tools) ไปให้นับ</li>
+</ul>
+
+<h3>Pagination ของ list endpoint</h3>
+<p>Endpoint ที่คืนค่าเป็นรายการ (เช่น list models, list files) ใช้ cursor-based pagination:</p>
+<ul>
+  <li>request ส่ง <code>limit</code> (เอากี่รายการต่อหน้า) กับ <code>page</code> (cursor ของหน้าที่ต้องการ)</li>
+  <li>response มี array <code>data</code> กับ cursor <code>next_page</code> ถ้า <code>next_page</code> เป็น <code>null</code> แปลว่าหมดแล้ว</li>
+</ul>
+<pre><code># ตัวอย่าง response ของ list endpoint (ย่อ)
+{
+  "data": [ { "id": "claude-opus-5-5", ... }, ... ],
+  "next_page": "page_abc123"   # null = หน้าสุดท้ายแล้ว
+}</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Base URL เดียว แยกด้วย path: Messages, Batches, count_tokens, Models, Files, Skills ส่วน list endpoint ใช้ <code>limit</code> + <code>page</code> แล้วตามไปเรื่อยๆ จนกว่า <code>next_page</code> จะเป็น <code>null</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีม finance อยากใส่ด่านกันงบ: ก่อนส่ง prompt ยาวๆ ให้ Claude ประมวลผล ต้องรู้ก่อนว่า prompt นี้กี่ input token ถ้าเกินเกณฑ์จะไม่ส่ง ควรเรียก endpoint ไหน?</p>
+  <ol type="A">
+    <li><code>GET /v1/models</code></li>
+    <li><code>POST /v1/messages</code> แล้วอ่าน usage จาก response</li>
+    <li><code>POST /v1/messages/count_tokens</code></li>
+    <li><code>POST /v1/messages/batches</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> count_tokens บอกจำนวน input token โดยไม่รัน model ส่วน B ต้องจ่ายเงินรันไปแล้วถึงจะรู้ ซึ่งสายเกินไปสำหรับด่านกันงบ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Header ที่ raw HTTP call ต้องมี</h3>
+<p>ถ้ายิงเองด้วย curl หรือ HTTP client ธรรมดา ต้องใส่ header ให้ครบเอง:</p>
+<div class="table-wrap"><table>
+  <tr><th>Header</th><th>ค่า</th><th>บังคับไหม</th></tr>
+  <tr><td><code>x-api-key</code></td><td>API key จาก Console</td><td>ต้องมี ถ้าไม่ได้ใช้ <code>Authorization</code></td></tr>
+  <tr><td><code>Authorization</code></td><td><code>Bearer &lt;token&gt;</code> (API key หรือ token จาก Workload Identity Federation)</td><td>ต้องมี ถ้าไม่ได้ใช้ <code>x-api-key</code></td></tr>
+  <tr><td><code>anthropic-version</code></td><td>version แบบวันที่ เช่น <code>2023-06-01</code></td><td>ต้องมีเสมอ</td></tr>
+  <tr><td><code>content-type</code></td><td><code>application/json</code></td><td>ต้องมี</td></tr>
+  <tr><td><code>anthropic-workspace-id</code></td><td>Workspace ID</td><td>ต้องมีเมื่อใช้ API key ที่ผูกหลาย workspace</td></tr>
+</table></div>
+<ul>
+  <li>แบบ <code>Authorization: Bearer</code> มีไว้สำหรับ token อายุสั้นจาก <strong>Workload Identity Federation</strong> ส่วน <code>x-api-key</code> ยังใช้ได้ในฐานะทางเลือกแบบ legacy</li>
+  <li>โจทย์ข้อสอบส่วนใหญ่ใช้ชุดคลาสสิก 3 ตัว: <strong><code>x-api-key</code>, <code>anthropic-version</code>, <code>content-type</code></strong></li>
+  <li><code>anthropic-version</code> คือการ "pin" พฤติกรรมของ API ที่โค้ดเราเขียนไว้รองรับ ถ้าลืมใส่ request จะ fail <strong>ถึง key จะถูกต้องก็ตาม</strong></li>
+</ul>
+<pre><code># raw HTTP call ที่ครบชุดคลาสสิก
+curl https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "claude-opus-5-5",
+    "max_tokens": 512,
+    "messages": [{"role": "user", "content": "สรุปข่าวนี้ให้หน่อย"}]
+  }'</code></pre>
+
+<h3>ย้ายจาก raw HTTP ไปใช้ SDK</h3>
+<ol class="steps">
+  <li>ส่ง credential ให้ client ครั้งเดียวตอนสร้าง (หรือปล่อยให้อ่านจาก env)</li>
+  <li>ลบบรรทัดที่ตั้ง header ในทุก call ทิ้งได้เลย</li>
+  <li>เก็บ <code>anthropic-workspace-id</code> ไว้ <strong>เฉพาะ</strong> ถ้า key ของเราต้องใช้</li>
+</ol>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"raw call ต้องมีแค่ key กับ content-type ส่วน version เดี๋ยว API ดูจาก model เอง"</strong> ไม่ใช่ <code>anthropic-version</code> ต้องอยู่ในทุก request ชื่อ model ไม่ได้บอก version ของ API</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Raw call ต้องมี auth (<code>x-api-key</code> หรือ <code>Authorization: Bearer</code>) + <code>anthropic-version</code> + <code>content-type: application/json</code> และเพิ่ม <code>anthropic-workspace-id</code> ถ้า key ครอบหลาย workspace</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>เพื่อนเขียน Go service ยิง <code>POST /v1/messages</code> ด้วย <code>net/http</code> ล้วนๆ body ถูกต้อง key ถูกต้อง แต่ได้ error กลับมา เพื่อนใส่ header ไว้แค่ <code>x-api-key</code> กับ <code>content-type</code> ขาดอะไร?</p>
+  <ol type="A">
+    <li><code>Authorization</code> เพราะ <code>x-api-key</code> เลิกใช้แล้ว</li>
+    <li><code>anthropic-version</code></li>
+    <li><code>anthropic-workspace-id</code> ซึ่งต้องมีทุก request</li>
+    <li>ไม่ขาดอะไร น่าจะเป็นปัญหาฝั่ง server</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>anthropic-version</code> บังคับทุก request <code>x-api-key</code> ยังใช้ได้ (A ผิด) และ workspace-id บังคับเฉพาะ key ที่ครอบหลาย workspace (C ผิด)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (streaming)</span>
+  <p>ตอน stream response แอปของเราอยากรู้ว่า content block ที่ index 1 "ปิดแล้ว" จะไม่มี delta ของ block นี้มาอีก เพื่อจะได้ render block นั้นให้เสร็จ ต้องดัก event ไหน?</p>
+  <ol type="A">
+    <li><code>message_delta</code></li>
+    <li><code>content_block_start</code></li>
+    <li><code>content_block_stop</code></li>
+    <li><code>message_stop</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>content_block_stop</code> บอกว่า block ที่ index นั้นจบแล้ว ส่วน <code>message_delta</code> คือการเปลี่ยนแปลงระดับ message (เช่น stop_reason, usage) <code>content_block_start</code> คือ block เริ่ม และ <code>message_stop</code> คือ stream ทั้งก้อนจบ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. SDK เพิ่มอะไรให้บน REST</h3>
+<p>Anthropic มี official SDK สำหรับ <strong>Python, TypeScript, C#, Go, Java, PHP และ Ruby</strong> สิ่งที่ SDK ทำให้:</p>
+<ul>
+  <li>ใส่ header auth, <code>anthropic-version</code>, <code>content-type</code> ให้อัตโนมัติ</li>
+  <li>มี typed request/response object (IDE ช่วย autocomplete ได้)</li>
+  <li>retry ความล้มเหลวชั่วคราว (transient failure) ให้เอง</li>
+  <li>throw typed exception แทนการคืน JSON ดิบ</li>
+  <li>รองรับ streaming และจัดการ timeout กับ connection ให้</li>
+</ul>
+
+<h3>รายละเอียดราย SDK ที่ควรจำ</h3>
+<ul>
+  <li><strong>Python:</strong> ถ้าไม่ส่ง key ให้ client จะอ่านจาก env <code>ANTHROPIC_API_KEY</code> เอง มี 2 client คือ <code>Anthropic</code> (sync) กับ <code>AsyncAnthropic</code> (async)</li>
+  <li><strong>TypeScript:</strong> รันบน Node.js, Deno, Bun และ edge runtime ได้ แต่ <strong>ไม่ยอมรันใน browser</strong> ถ้าไม่ตั้ง <code>dangerouslyAllowBrowser</code> เพราะกลัว secret key หลุดไปฝั่ง client</li>
+</ul>
+
+<h3>Method ของ SDK ↔ REST endpoint</h3>
+<div class="table-wrap"><table>
+  <tr><th>SDK method</th><th>REST endpoint</th></tr>
+  <tr><td><code>client.messages.create</code></td><td><code>POST /v1/messages</code></td></tr>
+  <tr><td><code>client.messages.batches.create</code></td><td><code>POST /v1/messages/batches</code></td></tr>
+  <tr><td><code>client.messages.count_tokens</code></td><td><code>POST /v1/messages/count_tokens</code></td></tr>
+</table></div>
+<p>ชื่อ parameter ใน SDK ใช้ชื่อเดียวกับ REST เป๊ะ ดังนั้น JSON body แปลงเป็น keyword argument ได้แทบจะตรงตัว</p>
+<pre><code>import anthropic
+
+client = anthropic.Anthropic()  # ไม่ส่ง key = อ่านจาก ANTHROPIC_API_KEY
+
+# ห่อ POST /v1/messages/count_tokens
+count = client.messages.count_tokens(
+    model="claude-opus-5-5",
+    messages=[{"role": "user", "content": "สวัสดี Claude"}],
+)
+print(count.input_tokens)  # ได้ตัวเลข input token กลับมา ไม่มีการ generate</code></pre>
+
+<h3>Retry ที่ติดมากับ SDK</h3>
+<ul>
+  <li>ค่า default: retry <strong>2 ครั้ง</strong> สำหรับ connection error, rate limit (429) และ 5xx ใช้ <strong>exponential backoff</strong> และเคารพ header <code>retry-after</code></li>
+  <li>ปรับหรือปิดได้ด้วย <code>max_retries</code></li>
+  <li>ถ้าเราเขียน retry loop ครอบอีกชั้น จำนวน attempt จะ <strong>คูณกัน</strong> ต้องเลือกว่าให้ชั้นไหนเป็นเจ้าของ retry</li>
+</ul>
+<pre><code># ให้ SDK เป็นเจ้าของ retry ชั้นเดียว
+client = anthropic.Anthropic(max_retries=4)
+
+# หรือถ้ามี retry logic ของตัวเองอยู่แล้ว ก็ปิดของ SDK
+client = anthropic.Anthropic(max_retries=0)</code></pre>
+
+<h3>Auto-pagination</h3>
+<ul>
+  <li>SDK มี iterator ที่ตาม <code>next_page</code> ให้เองใน <code>for</code> loop</li>
+  <li>แต่เดินหน้าอย่างเดียว ถ้าจะย้อนหน้า ต้องอ่าน <code>prev_page</code> จาก response แล้วส่งเป็น <code>page</code> เอง</li>
+</ul>
+<pre><code># วนครบทุก model โดยไม่ต้องจัดการ cursor เอง
+for model in client.models.list(limit=20):
+    print(model.id)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใช้ SDK แล้วไม่ต้องสนใจ header ใดๆ อีก"</strong> ไม่ใช่ <code>anthropic-workspace-id</code> ยังขึ้นกับ key ของเรา ถ้า key ครอบหลาย workspace ก็ยังต้องส่งเอง</p>
+  <p><strong>"SDK คือ framework สำหรับ agent"</strong> ไม่ใช่ client SDK เป็น low-level เรายังต้องส่งทีละ request และจัดการทีละ response เอง ของที่อยู่ชั้นสูงกว่าและมี agent loop, tool execution, runtime ให้คือ <strong>Claude Code, Claude Agent SDK และ Claude Managed Agents</strong></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>SDK = REST + header อัตโนมัติ + typed object + retry 2 ครั้งแบบ backoff + typed exception + streaming + pagination iterator ระวัง retry ซ้อนชั้น และจำไว้ว่า workspace-id ยังเป็นหน้าที่เรา</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ย้ายโค้ดจาก <code>requests.post(...)</code> มาใช้ Python SDK แล้ว header ตัวไหนที่ <em>อาจ</em> ยังต้องตั้งเอง?</p>
+  <details><summary>ดูเฉลย</summary><p><code>anthropic-workspace-id</code> ในกรณีที่ key ครอบหลาย workspace ที่เหลือ (auth, version, content-type) SDK ใส่ให้หมด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เติมคำ)</span>
+  <p>ใน CI pipeline เราสร้าง <code>anthropic.Anthropic()</code> โดยไม่ส่ง key อะไรเลย แต่ก็เรียก API ได้ปกติ เพราะ SDK ไปอ่าน key จาก env ชื่อ <code>________</code></p>
+  <details><summary>ดูเฉลย</summary><p><code>ANTHROPIC_API_KEY</code></p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Worker ตัวหนึ่งใช้ Python SDK (ค่า default) และครอบด้วย <code>for attempt in range(3)</code> ของตัวเอง วันหนึ่ง API ตอบ 529/503 ต่อเนื่อง จะเกิดอะไร?</p>
+  <ol type="A">
+    <li>ยิงแค่ 3 ครั้งตาม loop ของเรา เพราะ SDK ไม่ retry 5xx</li>
+    <li>attempt ซ้อนกัน เพราะ SDK ก็ retry 5xx ด้วย backoff อยู่แล้วในแต่ละรอบของ loop เรา</li>
+    <li>SDK จะปิด retry ของตัวเองอัตโนมัติเมื่อเจอ loop ภายนอก</li>
+    <li>ยิงครั้งเดียวแล้วโยน exception เลย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> แต่ละรอบของ loop เรา SDK ยิง 1 + retry 2 ครั้ง รวมเป็นได้ถึง 9 request แก้ด้วยการเลือกชั้นเดียวเป็นเจ้าของ retry เช่น ตั้ง <code>max_retries</code> หรือทิ้ง loop ตัวเอง</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ฝั่ง response ของ contract</h3>
+<h3>Request ID</h3>
+<ul>
+  <li>ทุก response มี header <code>request-id</code> (หน้าตา <code>req_...</code>) เอาไว้ให้ support ตามรอย call นั้น</li>
+  <li>มี <code>anthropic-organization-id</code> และ <code>anthropic-workspace-id</code> กลับมาใน header ด้วย</li>
+  <li>Python และ TypeScript SDK เปิดให้อ่าน ID ผ่าน <code>_request_id</code> ส่วน header อื่นๆ ใช้ <code>with_raw_response</code></li>
+</ul>
+<pre><code>msg = client.messages.create(model="claude-opus-5-5", max_tokens=100,
+                             messages=[{"role": "user", "content": "hi"}])
+print(msg._request_id)  # req_... เก็บลง log ไว้แจ้ง support
+
+# อยากได้ header อื่นด้วย
+raw = client.messages.with_raw_response.create(...)
+print(raw.headers.get("anthropic-organization-id"))
+msg = raw.parse()  # ได้ Message object ตามปกติ</code></pre>
+
+<h3>รูปร่างของ error</h3>
+<p>Error ทุกตัวหน้าตาเหมือนกันหมด: top-level <code>type</code> เป็น <code>"error"</code> แล้วมี object <code>error</code> ที่มี <code>type</code> กับ <code>message</code> และมี <code>request_id</code> แนบมาใน body ด้วย</p>
+<pre><code>{
+  "type": "error",
+  "error": {
+    "type": "not_found_error",
+    "message": "ไม่พบ resource ที่ขอ"
+  },
+  "request_id": "req_011ABC..."
+}</code></pre>
+<ul>
+  <li>เพราะ <code>request_id</code> อยู่ใน body ด้วย แค่ log error body ไว้ก็ตามรอยได้แล้ว ไม่ต้องมี header</li>
+  <li>SDK แปลงเป็น typed exception เช่น <code>anthropic.NotFoundError</code> ให้เรา catch ตามประเภท</li>
+</ul>
+<pre><code>try:
+    client.messages.create(...)
+except anthropic.NotFoundError as e:
+    log.error("ไม่เจอ resource", request_id=e.request_id)  # catch ตาม type ไม่ต้อง match ข้อความ
+except anthropic.RateLimitError:
+    ...  # SDK retry ให้แล้วแต่ยังไม่ผ่าน</code></pre>
+
+<h3>Request size limit</h3>
+<div class="table-wrap"><table>
+  <tr><th>Endpoint</th><th>ขนาดสูงสุด</th></tr>
+  <tr><td>Messages และ Token Counting</td><td>32 MB</td></tr>
+  <tr><td>Message Batches</td><td>256 MB</td></tr>
+  <tr><td>Files API</td><td>500 MB</td></tr>
+</table></div>
+<ul>
+  <li>ถ้าเกินจะได้ <code>413 request_too_large</code> ซึ่งถูกตีกลับ <strong>ก่อนถึง API server</strong></li>
+  <li>เอกสารใหญ่ๆ ให้อัปโหลดผ่าน Files API แล้วอ้างอิงใน Messages แทนการยัดเนื้อไฟล์ลง request</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แต่ละ endpoint คืน error คนละแบบ client เลยต้อง string-match ข้อความ"</strong> ไม่ใช่ ทุก error ใช้ JSON shape เดียวกันที่มี error object พร้อม type ให้ catch typed exception แทน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เก็บ <code>request-id</code> / <code>request_id</code> ไว้เสมอ error มี shape เดียว (<code>type: "error"</code> + <code>error.type</code> + <code>error.message</code>) และไฟล์ใหญ่ให้ไปทาง Files API (32 / 256 / 500 MB)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ลูกค้าแจ้งว่ามีคำขอหนึ่งพังเมื่อวาน ระบบ log ของเราเก็บไว้แค่ error body ที่ API ส่งกลับมา ไม่ได้เก็บ response header เลย จะเอาอะไรไปให้ Anthropic support ตามรอย?</p>
+  <ol type="A">
+    <li>ไม่ได้แล้ว เพราะ request ID อยู่ใน header เท่านั้น</li>
+    <li>field <code>request_id</code> ใน error body</li>
+    <li>ค่า <code>error.message</code></li>
+    <li>timestamp ของ log</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> error body มี <code>request_id</code> ตัวเดียวกับ header <code>request-id</code> แนบมาด้วย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>แอปอยากส่ง PDF ขนาด 120 MB ให้ Claude อ่านผ่าน <code>POST /v1/messages</code> โดย encode base64 ใส่ใน body ตรงๆ จะเกิดอะไรและควรแก้ยังไง?</p>
+  <details><summary>ดูเฉลย</summary><p>เกิน 32 MB ของ Messages จะโดน <code>413 request_too_large</code> ก่อนถึง API server ควรอัปโหลดผ่าน Files API (รับได้ถึง 500 MB) แล้วอ้างอิงไฟล์ใน request แทน</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>platform.claude.com: API overview</li>
+  <li>platform.claude.com: TypeScript SDK</li>
+  <li>platform.claude.com: CLI, SDKs and libraries overview</li>
+  <li>platform.claude.com: Python SDK</li>
+  <li>platform.claude.com: API errors</li>
+</ul>
+</section>

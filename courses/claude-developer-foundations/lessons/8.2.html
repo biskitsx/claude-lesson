@@ -1,0 +1,255 @@
+<section class="lesson" id="l-8-2">
+<h2>8.2 MCP server primitives: tools, resources และ prompts</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/mcp-server-primitives-tools-resources-and-prompts">CertSafari 8.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายบทบาทของ host, client และ server ใน MCP ได้</li>
+    <li>อธิบายว่า server ประกาศ feature ผ่าน capability declaration ยังไง</li>
+    <li>นิยาม tool ด้วย <code>inputSchema</code> ที่ถูกต้อง และคืนผลแบบ text หรือ structured ได้</li>
+    <li>expose resource และ resource template ได้ และรู้วิธีป้องกัน resource แบบ <code>file://</code></li>
+    <li>publish prompt ที่มี parameter และคืน error code ที่ถูกต้อง</li>
+    <li>เลือกระหว่าง stdio กับ Streamable HTTP และรู้ว่าทำไม stdout ของ stdio server ต้องสะอาด</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: server เล็ก ทำเรื่องเดียว ให้ 3 อย่าง</span>
+  <p>MCP server คือโปรแกรมเล็กๆ ที่ให้ host 3 อย่าง: <strong>tools</strong> ที่โมเดลเรียกได้, <strong>resources</strong> ที่เป็น context และ <strong>prompts</strong> ที่เป็น message template ใช้ซ้ำได้ host เป็นคนคุมบทสนทนาเสมอ server แค่ตอบ request ที่ส่งมาถึงมัน</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Host, client และ server</h3>
+<p>สามคำนี้สับสนง่าย ลองนึกเป็นออฟฟิศ: host คือตัวบริษัท client คือพนักงานประสานงานที่แต่ละคนดูแลซัพพลายเออร์ได้เจ้าเดียว ส่วน server คือซัพพลายเออร์</p>
+<div class="table-wrap"><table>
+  <tr><th>บทบาท</th><th>คืออะไร</th><th>หน้าที่</th></tr>
+  <tr><td><strong>Host</strong></td><td>แอปที่ user ใช้ เช่น Claude Code หรือ agent ที่เราเขียน</td><td>สร้างและจัดการ client หลายตัว, บังคับใช้ security policy และ user consent, ตัดสินเรื่อง authorization, ประสานงานกับ LLM</td></tr>
+  <tr><td><strong>Client</strong></td><td>อยู่ข้างใน host</td><td>ถือ connection กับ server ได้ <strong>ตัวเดียวเท่านั้น</strong>, แนบ protocol version และ capability ไปกับ request, ส่ง message ไปกลับ, กั้นไม่ให้ server เห็นกันเอง</td></tr>
+  <tr><td><strong>Server</strong></td><td>local process หรือ remote service</td><td>expose tools, resources, prompts</td></tr>
+</table></div>
+<p>หลักการออกแบบ: server ต้องสร้างง่าย ต่อกันได้ (composable) และ<strong>มองไม่เห็นบทสนทนาทั้งหมดหรือ server ตัวอื่น</strong> ได้รับแค่ context ที่จำเป็นต่อหน้าที่ของมัน</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Host คุมทุกอย่างและถือ consent, client หนึ่งตัวต่อ server หนึ่งตัว, server เห็นแค่ส่วนของตัวเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่หน้าที่กับบทบาท (Host / Client / Server):</p>
+  <ol>
+    <li>ถาม user ก่อนอนุญาตให้ลบไฟล์ และเปิด connection ไปหา server 4 ตัว</li>
+    <li>ให้ tool <code>query_sales</code> และ resource เป็นไฟล์ schema ของ DB</li>
+    <li>คุยกับ server Postgres ตัวเดียว ส่งต่อ message ไปกลับ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → Host (consent + จัดการ client หลายตัว) · 2 → Server · 3 → Client</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Capability declaration: ต้องประกาศก่อนถึงจะใช้ได้</h3>
+<p>ใน MCP feature ไม่ได้ถูก "เดา" แต่ถูก <strong>negotiate</strong> ตอนเริ่ม connection server ประกาศว่ามีอะไร เช่น รองรับ tools, resource subscription, prompt template ส่วน client ก็ประกาศของตัวเอง เช่น sampling และ elicitation</p>
+<p>กฎสำคัญ: feature ไหนที่ server implement ไว้ <strong>ต้องประกาศ</strong> ถ้ามี handler ของ tool ครบแต่ไม่ได้ประกาศ capability <code>tools</code> ก็ไม่มีใครเรียก tool นั้นได้</p>
+<pre><code>{
+  "capabilities": {
+    "tools":     { "listChanged": true },              // แจ้ง client เมื่อรายการ tool เปลี่ยน
+    "resources": { "subscribe": true, "listChanged": true },
+    "prompts":   { "listChanged": true }
+  }
+}</code></pre>
+<p><code>listChanged: true</code> คือสัญญาว่า server จะส่ง notification เมื่อชุด tool เปลี่ยน แล้ว client จะไป fetch list ใหม่ resources กับ prompts ใช้ pattern เดียวกันใต้ key ของตัวเอง</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เขียน handler แล้วก็พอ capability ประกาศหรือไม่ก็ได้"</strong> ไม่ใช่ การเรียก tool ต้องมี capability <code>tools</code> ประกาศไว้</p>
+  <p><strong>"stdio server พิมพ์ debug ออก stdout ได้ เดี๋ยว client ก็ข้ามข้อความที่ไม่รู้จักเอง"</strong> ไม่ใช่ stdout คือท่อของ protocol ข้อความที่ไม่ใช่ MCP จะทำให้ stream พัง ให้ log ไป stderr</p>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมเขียน server ที่ handle <code>tools/call</code> ครบ แต่ใน <code>capabilities</code> มีแค่ <code>resources</code> ผลคืออะไร?</p>
+  <ol type="A">
+    <li>ใช้ได้ปกติ เพราะ capability เป็นแค่ hint</li>
+    <li>client จะเจอ tool เองผ่าน <code>tools/list</code></li>
+    <li>เรียก tool ไม่ได้ เพราะ server ต้องประกาศ capability <code>tools</code> ก่อน</li>
+    <li>ใช้ได้ แค่จะไม่มี notification เมื่อ tool เปลี่ยน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> feature ต้องถูก advertise ก่อนถึงจะถูกใช้ ไม่ใช่แค่ <code>listChanged</code> ที่ต้องประกาศ</p></details>
+</div>
+
+<h3>Transport: stdio vs Streamable HTTP</h3>
+<p><strong>stdio (server ที่รันบนเครื่อง)</strong></p>
+<ul>
+  <li>client <strong>launch server เป็น child process</strong> server อ่าน JSON-RPC จาก stdin และเขียนออก stdout</li>
+  <li>แต่ละ message คั่นด้วย newline และห้ามมี newline อยู่ข้างใน</li>
+  <li>stdout ต้องมีแค่ MCP message ที่ถูกต้อง log ทั้งหมดไป stderr ซึ่ง client อาจเก็บ ส่งต่อ หรือทิ้งก็ได้ และ<strong>ไม่ควรถือว่า stderr คือ error</strong> โดย default</li>
+  <li>ตอนปิด: client ปิด input stream ของ child, รอให้ exit, ถ้าไม่ยอมจบก็ force kill</li>
+  <li>ฝั่ง SDK ใช้ <code>StdioServerTransport</code></li>
+</ul>
+<pre><code># คำหลัง -- คือ process ที่ Claude Code จะ spawn
+claude mcp add --transport stdio inventory -- node ./inventory-server.js</code></pre>
+<pre><code>// ใน stdio server: ห้าม console.log เด็ดขาด
+console.error("server started");   // ไป stderr ปลอดภัย
+// console.log("debug!");          // ไป stdout = ทำ protocol พัง</code></pre>
+
+<p><strong>Streamable HTTP (remote server)</strong></p>
+<ul>
+  <li>เป็น service ที่รันอยู่แล้ว มี HTTP endpoint เดียวรับ POST</li>
+  <li>ทุก JSON-RPC request หรือ notification คือ POST หนึ่งครั้ง server ตอบเป็น JSON object เดียว หรือเป็น SSE stream</li>
+  <li>Claude Code config ยังรับ transport <code>sse</code> แบบเก่า และ entry <code>ws</code> ด้วย</li>
+</ul>
+<pre><code>claude mcp add --transport http billing https://mcp.example.com/mcp</code></pre>
+<p>จำง่ายๆ: <strong>stdio = client เป็นคนเปิด server เอง</strong> ส่วน <strong>HTTP = client ไปต่อกับ server ที่รันอยู่แล้ว</strong></p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ประกาศ capability ทุก feature ที่มี, stdio ใช้ในเครื่องและ stdout ต้องสะอาด, HTTP ใช้กับ remote ที่ POST ทีละ message</p></div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Tools</h3>
+<p>Field ของ tool ใน MCP:</p>
+<ul>
+  <li><code>name</code> ต้อง unique, ยาว 1–128 ตัว, case-sensitive, ใช้ได้แค่ ASCII ตัวอักษร ตัวเลข <code>_</code> <code>-</code> และ <code>.</code></li>
+  <li><code>title</code> (optional), <code>description</code></li>
+  <li><code>inputSchema</code> ต้องเป็น JSON Schema object ที่ valid <strong>ห้ามเป็น null</strong> ถ้าไม่มี <code>$schema</code> จะถือเป็น JSON Schema 2020-12</li>
+  <li><code>outputSchema</code>, <code>annotations</code>, <code>icons</code> (optional ทั้งหมด)</li>
+</ul>
+<p>Tool ที่ไม่มี parameter เลยก็ยังต้องมี schema ให้เขียนแบบนี้:</p>
+<pre><code>{
+  "name": "get_server_time",
+  "description": "คืนเวลาปัจจุบันของ server",
+  "inputSchema": { "type": "object", "additionalProperties": false }   // ไม่ใช่ null และห้ามละไว้
+}</code></pre>
+
+<h3>Discovery, invocation และผลลัพธ์</h3>
+<ul>
+  <li><code>tools/list</code> ไว้หา tool (มี pagination ด้วย cursor)</li>
+  <li><code>tools/call</code> ไว้เรียก โดยส่ง <code>name</code> กับ <code>arguments</code></li>
+  <li>ผลลัพธ์มี <code>content</code> array ที่เป็น <code>text</code>, <code>image</code>, <code>audio</code>, <code>resource_link</code> หรือ <code>resource</code> แบบ embedded พร้อม flag <code>isError</code></li>
+  <li>ถ้าประกาศ <code>outputSchema</code> ไว้ server <strong>ต้อง</strong>คืน <code>structuredContent</code> ที่ตรง schema</li>
+</ul>
+<pre><code>// request
+{"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+ "params": {"name": "check_stock", "arguments": {"sku": "TSHIRT-M"}}}
+
+// result
+{"jsonrpc": "2.0", "id": 7,
+ "result": {"content": [{"type": "text", "text": "TSHIRT-M เหลือ 42 ตัว"}], "isError": false}}</code></pre>
+
+<h3>Stateful tool</h3>
+<p>ถ้า tool คืน handle เช่น <code>cart_id</code> ให้บอก retention policy ไว้ใน description ของ tool ที่สร้าง handle นั้น (เช่น "หมดอายุใน 30 นาที") และถ้ามีคนส่ง handle ที่หมดอายุหรือไม่รู้จักมา ให้คืน <strong>tool execution error</strong> (<code>isError: true</code>) เพื่อให้โมเดลรู้ตัวและ recover ได้</p>
+<p>ฝั่ง host ก็มีหน้าที่: ให้ human อยู่ใน loop ด้วยการแสดงว่ามี tool อะไรบ้าง โชว์ตอนถูกเรียก และขอยืนยันก่อนทำ operation</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"tool ไม่มี parameter ก็ตั้ง inputSchema เป็น null หรือไม่ใส่ก็ได้"</strong> ไม่ใช่ ต้องเป็น object schema ที่ valid เสมอ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>list ด้วย tools/list เรียกด้วย tools/call ผลเป็น content array + isError และ inputSchema ห้ามว่าง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>client อยากสั่งให้ server รัน tool <code>resize_image</code> ต้องใส่ <code>"method"</code> เป็นอะไร?</p>
+  <ol type="A">
+    <li><code>tools/execute</code></li>
+    <li><code>tools/list</code></li>
+    <li><code>tools/call</code></li>
+    <li><code>tools/run</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>tools/list</code> ไว้หา tool ส่วนอีกสองชื่อไม่มีใน spec</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Resources</h3>
+<p>Resource คือ "ข้อมูลให้อ่าน" ไม่ใช่ "action ให้ทำ" เช่น ไฟล์ config, schema ของ DB, เอกสาร</p>
+<ul>
+  <li>Field: <code>uri</code> (ตัวระบุ), <code>name</code>, และ optional <code>title</code>, <code>description</code>, <code>mimeType</code>, <code>size</code>, <code>icons</code></li>
+  <li>Method: <code>resources/list</code>, <code>resources/read</code> และ <code>resources/templates/list</code> สำหรับ URI template เช่น <code>file:///{path}</code></li>
+  <li>ผลของ read: แต่ละรายการใน <code>contents</code> มีได้ทั้ง <code>text</code> หรือ <code>blob</code> ที่เป็น base64</li>
+  <li>Annotation: <code>audience</code> (<code>user</code> และ/หรือ <code>assistant</code>), <code>priority</code> (0.0–1.0), <code>lastModified</code></li>
+  <li>Capability flag: <code>listChanged</code> (แจ้งเมื่อชุด resource เปลี่ยน) และ <code>subscribe</code> (แจ้งเมื่อ resource ตัวใดตัวหนึ่งถูกอัปเดต ผ่าน <code>subscriptions/listen</code>)</li>
+</ul>
+<pre><code>{"jsonrpc": "2.0", "id": 3, "method": "resources/read",
+ "params": {"uri": "file:///project/config/app.yaml"}}</code></pre>
+
+<h3>หน้าที่ของ server เรื่องความปลอดภัย</h3>
+<ul>
+  <li>validate ทุก URI</li>
+  <li>encode binary ให้ถูก</li>
+  <li>ทำ access control กับ resource ที่ sensitive</li>
+  <li>สำหรับ <code>file://</code> ต้อง <strong>sanitize path</strong> กัน directory traversal (เช่น <code>../../etc/passwd</code>)</li>
+</ul>
+<pre><code>from pathlib import Path
+ROOT = Path("/srv/docs").resolve()
+
+def safe_path(user_path: str) -&gt; Path:
+    p = (ROOT / user_path).resolve()
+    if not p.is_relative_to(ROOT):        # หลุดออกนอก ROOT = ปฏิเสธ
+        raise ValueError("path ไม่ได้รับอนุญาต")
+    return p</code></pre>
+<p>ถ้าหา resource ไม่เจอ ให้คืน error <code>-32602</code> พร้อมใส่ URI ไว้ใน <code>data</code></p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Resource คือ context ที่อ่านผ่าน URI ใช้ template ได้ และถ้าเป็นไฟล์ ต้อง sanitize path ทุกครั้ง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>server เปิด resource template <code>file:///{path}</code> ให้ client อ่านไฟล์ในโฟลเดอร์ docs ข้อไหนคือสิ่งที่<strong>ต้อง</strong>ทำ?</p>
+  <ol type="A">
+    <li>ตั้ง <code>priority</code> เป็น 1.0 ให้ทุกไฟล์</li>
+    <li>sanitize path เพื่อกัน directory traversal</li>
+    <li>เปิด <code>subscribe: true</code> ให้ทุกไฟล์</li>
+    <li>คืนทุกไฟล์เป็น base64 blob เท่านั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ข้ออื่นเป็นแค่ option หรือไม่จำเป็น text ไฟล์คืนเป็น <code>text</code> ได้ ไม่ต้องเป็น blob</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Prompts</h3>
+<p>Prompt คือ template ที่มีชื่อ และมี <code>arguments</code> ได้ (แต่ละตัวมี <code>name</code>, <code>description</code>, <code>required</code>) เหมือน slash command สำเร็จรูปที่ server เตรียมไว้ให้</p>
+<ul>
+  <li><code>prompts/list</code> ไว้หาว่ามี prompt อะไร</li>
+  <li><code>prompts/get</code> ส่ง argument ไป แล้วได้ <code>messages</code> กลับมา</li>
+  <li>แต่ละ message มี <code>role</code> (<code>user</code> หรือ <code>assistant</code>) และ content เป็น text, image, audio, resource link หรือ embedded resource ได้</li>
+</ul>
+<pre><code>// request
+{"jsonrpc": "2.0", "id": 9, "method": "prompts/get",
+ "params": {"name": "summarize_incident", "arguments": {"incident_id": "INC-2041"}}}
+
+// result
+{"jsonrpc": "2.0", "id": 9,
+ "result": {"messages": [{"role": "user",
+   "content": {"type": "text", "text": "สรุป incident INC-2041 ให้หัวหน้าทีมอ่าน..."}}]}}</code></pre>
+
+<h3>Error code ที่ต้องจำ</h3>
+<p>server ควร validate argument ก่อนทำอะไร:</p>
+<ul>
+  <li>ชื่อ prompt ไม่มีอยู่จริง หรือขาด required argument → <code>-32602</code> (Invalid params)</li>
+  <li>พังจากข้างใน server เอง → <code>-32603</code> (Internal error)</li>
+</ul>
+
+<h3>ตารางเทียบ 3 primitive</h3>
+<div class="table-wrap"><table>
+  <tr><th>Primitive</th><th>Discover</th><th>Use</th><th>Change notification</th></tr>
+  <tr><td>Tools</td><td><code>tools/list</code></td><td><code>tools/call</code></td><td><code>notifications/tools/list_changed</code></td></tr>
+  <tr><td>Resources</td><td><code>resources/list</code>, <code>resources/templates/list</code></td><td><code>resources/read</code></td><td><code>notifications/resources/list_changed</code>, <code>notifications/resources/updated</code></td></tr>
+  <tr><td>Prompts</td><td><code>prompts/list</code></td><td><code>prompts/get</code></td><td><code>notifications/prompts/list_changed</code></td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Prompt = template ที่ get แล้วได้ messages กลับมา ขาด argument หรือชื่อผิดคือ -32602 พังข้างในคือ -32603</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>client เรียก <code>prompts/get</code> ชื่อ <code>summarize_incident</code> แต่ลืมส่ง <code>incident_id</code> ซึ่งเป็น required server ควรตอบอะไร?</p>
+  <ol type="A">
+    <li><code>messages</code> เป็น array ว่าง</li>
+    <li>error <code>-32601</code> Method not found</li>
+    <li>error <code>-32603</code> Internal error</li>
+    <li>error <code>-32602</code> Invalid params</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> method มีอยู่จริง และ server ไม่ได้พังข้างใน แค่ input ไม่ครบ จึงเป็น Invalid params</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Model Context Protocol specification: Architecture</li>
+  <li>Model Context Protocol specification: stdio transport</li>
+  <li>Model Context Protocol specification: Streamable HTTP transport</li>
+  <li>Claude Code docs: Channels reference</li>
+  <li>Claude Code docs: MCP</li>
+  <li>Model Context Protocol specification: Tools</li>
+  <li>Model Context Protocol specification: Resources</li>
+  <li>Model Context Protocol specification: Prompts</li>
+</ul>
+</section>

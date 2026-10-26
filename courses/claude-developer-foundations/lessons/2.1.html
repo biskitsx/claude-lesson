@@ -1,0 +1,196 @@
+<section class="lesson" id="l-2-1">
+<h2>2.1 Choosing a Claude model from functional requirements (เลือก model จาก requirement)</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/choosing-a-claude-model-from-functional-requirements">CertSafari 2.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แปลง business requirement ให้เป็นเกณฑ์เลือก model 4 ข้อ: capability, speed, cost และ effort</li>
+    <li>ตัด model ที่ context window หรือ max output ไม่พอกับงานทิ้งได้ก่อนจะไปดูราคา</li>
+    <li>ใช้ eval ที่สร้างจาก functional requirement มาเทียบ model ที่เหลือ ด้วยตัวชี้วัด <strong>cost per completed task</strong></li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: requirement คือตัวเลือก model ไม่ใช่ความชอบ</span>
+  <p>ทุก requirement จะกลายเป็นเกณฑ์ด้าน capability, speed หรือ cost หรือไม่ก็เป็น <strong>hard limit</strong> ด้านขนาด model ที่ถูกต้องคือตัวที่ผ่านทุกเกณฑ์ โดยมี <strong>cost per completed task ต่ำที่สุด</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. จาก business requirement สู่ selection criteria</h3>
+<p>ฝั่ง business มักพูดเป็นภาษาคน เช่น "ต้องตอบได้ระหว่างที่ลูกค้ายังถือสายอยู่" หรือ "งบห้ามโตกว่านี้" งานแรกของเราคือแปลงประโยคพวกนี้ให้เป็นตัวเลขที่วัดได้ เช่น latency target กี่วินาที หรือ cost per request เท่าไหร่ที่ volume จริง</p>
+<p>จากนั้นถาม 4 คำถาม:</p>
+<ul>
+  <li><strong>Capabilities:</strong> งานนี้ต้องใช้ feature อะไรจริงๆ บ้าง</li>
+  <li><strong>Speed:</strong> app ต้องตอบเร็วแค่ไหน</li>
+  <li><strong>Cost:</strong> งบช่วง development กับงบช่วง production เท่าไหร่</li>
+  <li><strong>Effort:</strong> model ตัวเดียวกันแต่ปรับ effort ขึ้นหรือลง พอจะผ่าน requirement ไหม</li>
+</ul>
+
+<h3>Effort คืออะไร</h3>
+<p><strong>Effort</strong> เป็น setting รายครั้ง (per-request) ใน Messages API อยู่ที่ <code>output_config.effort</code> คิดง่ายๆ ว่าเป็นปุ่มหมุนระหว่าง "คิดละเอียด" กับ "ประหยัด token" ใน model ตัวเดิม</p>
+<pre><code>resp = client.messages.create(
+    model="claude-sonnet-5-5",
+    max_tokens=4096,
+    output_config={"effort": "low"},   # ลด effort ให้ตอบเร็วและถูกลง
+    messages=[{"role": "user", "content": "สรุปตั๋ว support นี้ให้หน่อย"}],
+)</code></pre>
+<ul>
+  <li>Fable 5.1, Opus 5.5 และ Sonnet 5.5 รองรับ effort โดยมี default เป็น <strong>high, medium, high</strong> ตามลำดับ</li>
+  <li><strong>Haiku 4.5 ไม่รองรับ effort</strong></li>
+  <li>การเปลี่ยน effort ทำให้ cached prefix ของ prompt caching ใช้ไม่ได้ (invalidate) เพราะฉะนั้นเปลี่ยนแล้วต้องวัด cost ใหม่ทุกครั้ง</li>
+</ul>
+
+<h3>Requirement หลักบอกว่าควรเริ่มที่ model ไหน</h3>
+<div class="table-wrap"><table>
+  <tr><th>ถ้า requirement หลักคือ…</th><th>เริ่มที่</th><th>งานแบบที่เจอบ่อย</th></tr>
+  <tr><td>Capability สูงสุดที่มี</td><td>Claude Fable 5.1</td><td>Agent session ที่รันเป็นชั่วโมง, deep research หลายขั้น, agentic coding ที่ซับซ้อนและงาน enterprise</td></tr>
+  <tr><td>Autonomy หลายชั่วโมง + capability</td><td>Claude Opus 5.5</td><td>Autonomous coding agent ที่รันยาว, refactor ขนาดใหญ่, computer use</td></tr>
+  <tr><td>Speed + capability สำหรับงานทั่วไป</td><td>Claude Sonnet 5.5</td><td>Code generation, data analysis, agentic tool use</td></tr>
+  <tr><td>Latency และราคาต่ำสุด</td><td>Claude Haiku 4.5</td><td>Real-time app, high-volume processing, งานของ sub-agent</td></tr>
+</table></div>
+<ul>
+  <li>ถ้า requirement ไม่ได้ชี้ไปสุดทางใดทางหนึ่ง ให้เริ่มตรงกลาง <strong>งานส่วนใหญ่เริ่มที่ Opus 5.5</strong></li>
+  <li>เริ่มที่ Haiku 4.5 เมื่อมีครบสามอย่าง: volume สูง, latency budget แน่น และกดดันเรื่อง cost</li>
+  <li>เริ่มที่ Fable 5.1 เมื่องานต้อง reasoning หนักและรันยาวเป็นชั่วโมง</li>
+</ul>
+
+<h3>Batch: อีกคันโยกด้าน cost</h3>
+<p>ถ้างานไม่ต้องได้ผลทันที (เช่นรันตอนกลางคืน เช้าค่อยดู) <strong>Message Batches API</strong> ประมวลผลแบบ asynchronous ในราคา <strong>ถูกกว่าการเรียกปกติ 50%</strong> ส่วน streaming แค่ทำให้ <em>รู้สึก</em> ว่าเร็ว ไม่ได้ลดราคาต่อ token</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตอบช้าและแพงไป ก็ต้องเปลี่ยน model"</strong> ไม่เสมอไป ถ้าคุณภาพผ่านแล้ว ลองลด effort บน model เดิมก่อนแล้ววัดใหม่ มักได้ผลดีกว่าการย้าย model</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>แปลง requirement เป็นตัวเลข → ตอบ 4 คำถาม (capability / speed / cost / effort) → เลือกจุดเริ่มจากตาราง โดย default คือ Opus 5.5 และอย่าลืมว่า effort กับ batch เป็นคันโยกที่ไม่ต้องเปลี่ยน model</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Chatbot ตอบคำถามพนักงานใช้ Sonnet 5.5 คุณภาพคำตอบผ่านเกณฑ์แล้ว แต่พอขึ้น production ค่าใช้จ่ายสูงและ latency เกินเป้า ควรลองอะไรก่อน?</p>
+  <ol type="A">
+    <li>เปลี่ยนไปใช้ Fable 5.1 เพราะฉลาดสุด จะได้ตอบจบในรอบเดียว</li>
+    <li>ลด <code>effort</code> บน Sonnet 5.5 แล้ววัด latency และ cost ใหม่</li>
+    <li>เพิ่ม <code>max_tokens</code> ให้สูงขึ้น</li>
+    <li>ย้ายไป cloud provider อื่น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> effort แลก thoroughness กับ latency/cost ภายใน model เดียวกัน เมื่อคุณภาพผ่านอยู่แล้วนี่คือคันโยกแรกที่ควรลอง ส่วน A แพงและช้ากว่าเดิม C ไม่ได้ลดอะไร D ไม่เกี่ยว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม finance ต้องจัดหมวดรายการธุรกรรม 5 ล้านรายการทุกสิ้นเดือน ขอผลภายใน 24 ชั่วโมง และเน้นประหยัดที่สุด ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>เรียก Messages API แบบ synchronous ทีละรายการ</li>
+    <li>เปิด <code>stream: true</code> ทุก request</li>
+    <li>Message Batches API</li>
+    <li>อัปโหลดไฟล์ผ่าน Files API ใหม่ทุกครั้งที่เรียก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> งานใหญ่ ไม่รีบ เน้น cost = Batches API (ถูกกว่า 50%) แบบ synchronous จ่ายราคาเต็ม streaming ช่วยแค่ perceived latency และการอัปโหลดซ้ำเพิ่ม overhead เปล่าๆ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Context window กับ max output คือ hard limit</h3>
+<p><strong>Context window</strong> คือเพดาน input ต่อ request ส่วน <strong>max output</strong> คือเพดานสิ่งที่ model เขียนได้ใน response เดียว สองตัวนี้ <strong>ไม่ได้ trade-off กับราคาหรือความเร็ว</strong> ถ้าใส่ไม่พอดีก็ตกรอบทันที ไม่ต้องไปดูราคาเลย เหมือนรถที่ถูกแค่ไหนก็ไร้ประโยชน์ถ้าของที่จะขนใส่ท้ายไม่ได้</p>
+<p>ตัวอย่าง: requirement บอกว่า "วิเคราะห์เอกสารที่ merge แล้วทั้งชุดใน request เดียว ห้าม chunking" แบบนี้ต้องกรองด้วยขนาด window ก่อน</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Model</th><th>Context window</th><th>Max output</th><th>Latency (เทียบกัน)</th><th>ราคา input / output ต่อ MTok</th></tr>
+  <tr><td>Claude Fable 5.1</td><td>1M tokens</td><td>128K tokens</td><td>ช้ากว่า</td><td>$10 / $50</td></tr>
+  <tr><td>Claude Opus 5.5</td><td>1M tokens</td><td>128K tokens</td><td>ปานกลาง</td><td>$4 / $20</td></tr>
+  <tr><td>Claude Sonnet 5.5</td><td>1M tokens</td><td>128K tokens</td><td>เร็ว</td><td>$2 / $10</td></tr>
+  <tr><td>Claude Haiku 4.5</td><td>200K tokens</td><td>64K tokens</td><td>เร็วที่สุด</td><td>$1 / $5</td></tr>
+</table></div>
+<ul>
+  <li>input ที่ใหญ่เกิน 200K แต่ไม่เกิน 1M จะเหลือ 3 ตัวเลือก แล้วค่อยใช้ราคาและ latency ตัดสิน</li>
+  <li>ถ้าต้อง generate รายงานยาวก้อนเดียว output ต้องไม่เกิน 64K บน Haiku 4.5 หรือ 128K บนตัวอื่น</li>
+  <li>ไม่ต้องจำตัวเลขใส่โค้ด <strong>Models API</strong> คืนค่า limit ของแต่ละ model มาให้ (<code>max_input_tokens</code>, <code>max_tokens</code> และ capabilities object)</li>
+</ul>
+<pre><code># ดึง limit ของ model มาเช็กก่อนส่งงานจริง
+m = client.models.retrieve("claude-haiku-4-5")
+if doc_tokens &gt; m.max_input_tokens:
+    print("input ใหญ่เกิน window ของ Haiku ตัดทิ้งจาก candidate")</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"input ใหญ่มากๆ ต้องใช้ model ที่เก่งที่สุดเท่านั้น"</strong> ไม่ใช่ Fable 5.1, Opus 5.5 และ Sonnet 5.5 มี window 1M เท่ากันหมด ตัวที่ตกรอบมีแค่ Haiku 4.5 (200K)</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>กรองด้วย hard limit ก่อนเสมอ: window ไม่พอ หรือ max output ไม่พอ = ตกรอบ ไม่ว่าจะถูกแค่ไหน ตอนนี้มี 3 ตัวที่ได้ 1M/128K และ Haiku 4.5 ได้ 200K/64K</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ใน lineup ปัจจุบัน มีกี่ model ที่มี context window 1M tokens?</p>
+  <details><summary>ดูเฉลย</summary><p><strong>3 ตัว</strong> คือ Fable 5.1, Opus 5.5 และ Sonnet 5.5 มีแค่ Haiku 4.5 ที่เป็น 200K</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบตรวจ codebase ต้องส่ง source code รวมประมาณ 450,000 tokens ใน request เดียว และอยากได้ราคาถูกที่สุดเท่าที่ทำได้ ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>Haiku 4.5 เหมาะสุดเพราะถูกที่สุด</li>
+    <li>มีแค่ Fable 5.1 ที่รับ input ขนาดนี้ได้</li>
+    <li>Sonnet 5.5 รับได้และถูกที่สุดในกลุ่มที่รับได้ ส่วน Haiku 4.5 รับไม่ได้</li>
+    <li>ไม่มี model ไหนรับได้ ต้อง chunk เท่านั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> 450K เกิน window 200K ของ Haiku 4.5 ซึ่งเป็น hard limit ราคาถูกแค่ไหนก็ไม่ช่วย ในบรรดาตัวที่มี 1M Sonnet 5.5 ถูกที่สุด</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ใช้ eval เทียบ candidate ก่อนตัดสินใจ</h3>
+<p>หลังกรองด้วย hard limit มักเหลือหลายตัว ตัวตัดสินคือ <strong>eval</strong> ที่สร้างจาก functional requirement: แปลงแต่ละ requirement เป็น test case รวมถึง edge case ที่ business สนใจ แล้วให้ทุก candidate รันชุดเดียวกัน (รายละเอียดเรื่อง eval loop อยู่ในบทเรื่อง eval-driven iteration)</p>
+<ol class="steps">
+  <li>สร้าง benchmark test เฉพาะ use case ของเรา</li>
+  <li>รันด้วย prompt และข้อมูลจริงของเรา</li>
+  <li>เทียบ accuracy, response quality และการรับมือ edge case ข้าม model</li>
+  <li>ชั่งน้ำหนัก performance กับ cost (ทำเป็นขั้นสุดท้าย)</li>
+</ol>
+
+<h3>ทำไมต้องเป็น cost per completed task</h3>
+<p>ราคาต่อ token ไม่ได้บอกต้นทุนจริง ถ้า model ถูกแต่ทำพลาดบ่อยจนต้อง retry หรือต้องให้คนแก้ ต้นทุนรวมต่องานที่ <em>สำเร็จจริง</em> อาจแพงกว่า model ที่ราคาต่อ token สูงกว่า</p>
+<pre><code># เทียบต้นทุนต่องานที่สำเร็จจริง ไม่ใช่ราคาต่อ token
+def cost_per_completed_task(total_cost_usd, tasks_passed):
+    return total_cost_usd / max(tasks_passed, 1)
+
+# model A: ถูกต่อ token แต่ผ่าน 60/100 ข้อ
+# model B: แพงกว่า แต่ผ่าน 97/100 ข้อ
+print(cost_per_completed_task(3.0, 60))   # 0.050
+print(cost_per_completed_task(4.5, 97))   # 0.046  B คุ้มกว่า</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"model ที่ราคาต่อ token ต่ำสุดคือตัวเลือกที่ถูกที่สุด"</strong> ไม่ใช่ ต้องเทียบด้วย cost per completed task เพราะการทำพลาดและการทำซ้ำมีต้นทุน</p>
+  <p><strong>ในข้อสอบ:</strong> ถ้าโจทย์ถามว่าจะเลือก model ยังไง คำตอบคือสร้าง eval set จาก prompt และข้อมูลจริง ตัวเลือกที่ให้เทียบแค่ list price คือตัวหลอก</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Eval ก่อน ราคาทีหลัง สร้าง benchmark → รันกับข้อมูลจริง → เทียบคุณภาพ → ค่อยชั่ง cost โดยดู cost per completed task</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เรียงลำดับ)</span>
+  <p>ทีมกำลังพิจารณาว่าจะย้ายจาก Opus 5.5 ไป Sonnet 5.5 ดีไหม เรียงขั้นตอนให้ถูก:</p>
+  <ol type="a">
+    <li>เอา prompt และข้อมูลจริงจาก production มารัน</li>
+    <li>ชั่งน้ำหนัก performance ที่วัดได้กับ cost</li>
+    <li>สร้างชุด benchmark test สำหรับ use case นี้</li>
+    <li>เทียบ accuracy, คุณภาพคำตอบ และ edge case ระหว่างสอง model</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → a → d → b</strong> eval set ต้องมาก่อนเพราะการเทียบทุกอย่างหลังจากนั้นอิงกับมัน ส่วน cost ชั่งเป็นขั้นสุดท้ายเทียบกับ performance ที่วัดได้จริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Opus 5.5 กับ Sonnet 5.5 ผ่าน hard limit ทั้งคู่สำหรับงานสกัดข้อมูลจากใบแจ้งหนี้ ควรใช้ตัวชี้วัดไหนตัดสิน?</p>
+  <ol type="A">
+    <li>ราคาต่อล้าน input token</li>
+    <li>ตัวไหนออกมาใหม่กว่า</li>
+    <li>Cost per completed task จาก eval ที่สร้างจาก requirement ของเรา</li>
+    <li>Latency อย่างเดียว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ราคาต่อ token ไม่นับงานที่ล้มเหลวหรือต้องทำซ้ำ cost per completed task รวมเรื่องว่าแต่ละ model ผ่าน requirement บ่อยแค่ไหนไว้แล้ว</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Docs: Choosing a model</li>
+  <li>Claude Docs: Build with Claude overview (effort parameter)</li>
+  <li>Claude Docs: Models overview</li>
+  <li>Claude Docs: Prompt caching</li>
+  <li>Claude Docs: Optimizing for cost and intelligence</li>
+</ul>
+</section>

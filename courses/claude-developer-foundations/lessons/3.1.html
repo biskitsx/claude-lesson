@@ -1,0 +1,216 @@
+<section class="lesson" id="l-3-1">
+<h2>3.1 Claude Code project configuration: CLAUDE.md, rules, auto memory และ settings.json</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-code-project-configuration-claude-md-rules-auto-memory-and-settings-json">CertSafari 3.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่า instruction แต่ละข้อควรอยู่ใน CLAUDE.md scope ไหน: managed, user, project หรือ local</li>
+    <li>ใช้ <code>/init</code> เริ่มต้น repo ใหม่ และใช้ <code>.claude/rules/</code> ทำ rule ที่โหลดเฉพาะบางไฟล์</li>
+    <li>แยก CLAUDE.md ออกจาก auto memory ได้ และรู้วิธีย้ายหรือปิด auto memory</li>
+    <li>เลือก scope ของ settings.json ถูก และบอกได้ว่าถ้า key เดียวกันถูกตั้งหลายที่ ค่าไหนชนะ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: context แบบซ้อนชั้นที่อยู่บน disk</span>
+  <p>Claude Code ไม่ได้จำแชทเมื่อวาน ทุก session เริ่มใหม่จากไฟล์บน disk ล้วนๆ เราเขียนคำสั่งไว้ใน <strong>CLAUDE.md</strong> หลายระดับ Claude จดสิ่งที่เรียนรู้เองไว้ใน <strong>auto memory</strong> ส่วน <strong>settings.json</strong> เป็นตัวคุมว่า tool ทำอะไรได้บ้าง จำง่ายๆ: CLAUDE.md = "ควรทำอะไร" ส่วน settings.json = "อนุญาตให้ทำอะไร"</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ลำดับชั้นของ CLAUDE.md</h3>
+<p>CLAUDE.md คือไฟล์ instruction ที่เราเขียนเอง และถูกโหลดเข้าไปทุก session คำถามที่ต้องตอบให้ได้มีแค่สองข้อ: <strong>ใครควรได้คำสั่งนี้</strong> และ <strong>ควร commit เข้า git ไหม</strong> ตอบสองข้อนี้ได้ก็รู้ scope แล้ว</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Scope</th><th>ที่อยู่ไฟล์</th><th>ใครได้รับ</th></tr>
+  <tr><td>Managed policy</td><td><code>/Library/Application Support/ClaudeCode/CLAUDE.md</code> (macOS)<br><code>/etc/claude-code/CLAUDE.md</code> (Linux / WSL)</td><td>ทุกคนในองค์กร</td></tr>
+  <tr><td>User</td><td><code>~/.claude/CLAUDE.md</code></td><td>เราคนเดียว ทุกโปรเจกต์</td></tr>
+  <tr><td>Project</td><td><code>./CLAUDE.md</code> หรือ <code>./.claude/CLAUDE.md</code></td><td>ทั้งทีม ผ่าน source control</td></tr>
+  <tr><td>Local</td><td><code>./CLAUDE.local.md</code></td><td>เราคนเดียว เฉพาะโปรเจกต์นี้</td></tr>
+</table></div>
+<ul>
+  <li><code>CLAUDE.local.md</code> เหมาะกับของส่วนตัวในโปรเจกต์ เช่น URL ของ sandbox ตัวเอง อย่าลืมใส่ใน <code>.gitignore</code></li>
+  <li>ไฟล์ project คือตัวที่ทีมใช้ร่วมกัน</li>
+  <li><strong>AGENTS.md</strong>: Claude จะอ่าน AGENTS.md ก็ต่อเมื่อ <em>ไม่มี</em> CLAUDE.md, <code>.claude/CLAUDE.md</code> หรือ <code>CLAUDE.local.md</code> อยู่ใน working directory หรือ directory แม่เลย (ไฟล์ระดับ user และ managed ไม่นับในเงื่อนไขนี้)</li>
+</ul>
+
+<h3>เขียนยังไงให้ได้ผล</h3>
+<ul>
+  <li><strong>เจาะจง</strong> "ใช้ indent 2 space" ดีกว่า "จัด format โค้ดให้ดีๆ" เยอะ</li>
+  <li>ยาวไม่เกินประมาณ <strong>200 บรรทัดต่อไฟล์</strong> และจัดกลุ่มเป็นหัวข้อ</li>
+  <li>ถ้าสองคำสั่ง <strong>ขัดกัน</strong> Claude อาจทำตามข้อไหนก็ได้ ไม่มีกฎว่าอันไหนชนะ ดังนั้นอย่าปล่อยให้ขัดกัน</li>
+  <li>แยกไฟล์ยาวด้วย <code>@path</code> import ได้ แต่ <strong>ไม่ได้ประหยัด context</strong> เพราะไฟล์ที่ import ก็โหลดตอนเปิด session เหมือนกัน</li>
+</ul>
+<pre><code># CLAUDE.md ของโปรเจกต์
+ภาพรวมดูที่ @README และคำสั่งที่รันได้ดูที่ @package.json
+
+# Workflow
+- วิธีแตก branch ดู @docs/branching.md   &lt;!-- ไฟล์นี้โหลดตอนเริ่ม session ด้วย --&gt;</code></pre>
+<p>ถ้าสงสัยว่าไฟล์ไหนถูกโหลดจริง ใช้ <code>/context</code> ดูรายการ memory file ที่โหลดอยู่ และใช้ <code>/memory</code> เปิดไฟล์พวกนั้นขึ้นมาแก้</p>
+<p>อีกเรื่องที่ควรรู้: ตัว parser ของ import <strong>ข้าม code span และ fenced code block</strong> ถ้าเขียน <code>@docs/x.md</code> ไว้ใน backtick มันจะเป็นแค่ข้อความธรรมดา ไม่ถูก import</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ย้ายเนื้อหา CLAUDE.md ไปไว้ในไฟล์ @import จะช่วยประหยัด context"</strong> ไม่จริง ไฟล์ที่ import โหลดตอนเริ่มเหมือนเดิม กิน context เท่าเดิม ถ้าอยากประหยัดจริงต้องใช้ path-scoped rules (หัวข้อถัดไป)</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ทั้งองค์กร → managed, ตัวเราทุกโปรเจกต์ → <code>~/.claude/CLAUDE.md</code>, ทั้งทีม → <code>./CLAUDE.md</code>, ตัวเราโปรเจกต์เดียว → <code>CLAUDE.local.md</code> (gitignore) และ import ไม่ได้ลด context</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>คุณอยากให้ Claude รู้ว่าใน repo นี้คุณชอบรันเทสต์ด้วย database container ส่วนตัวที่ port 55432 แต่เพื่อนในทีมไม่ได้ใช้แบบนี้ ควรเขียนไว้ที่ไหน?</p>
+  <ol type="A">
+    <li><code>~/.claude/CLAUDE.md</code></li>
+    <li><code>./CLAUDE.md</code> แล้ว commit</li>
+    <li><code>./CLAUDE.local.md</code> และใส่ใน <code>.gitignore</code></li>
+    <li>Managed policy CLAUDE.md</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> เป็นของส่วนตัวและใช้แค่ใน repo นี้ ถ้าใส่ใน user file จะไปติดทุกโปรเจกต์ ถ้าใส่ใน project file เพื่อนทั้งทีมจะได้ไปด้วย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ใน CLAUDE.md มีประโยค "ขั้นตอน release ดูได้ที่ <code>`@docs/release.md`</code>" (ครอบ path ด้วย backtick) ตอนเริ่ม session จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>import ไฟล์ตามปกติ เพราะ <code>@</code> ถูก resolve ก่อน markdown</li>
+    <li>ไม่ import เพราะ path อยู่ใน code span ซึ่ง parser ข้ามไป</li>
+    <li>เกิด parse error แล้วไฟล์ทั้งไฟล์ไม่ถูกโหลด</li>
+    <li>import แค่ย่อหน้าแรกของไฟล์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> import parser ไม่มองใน code span และ code block ถ้าอยาก import จริงต้องเขียน <code>@docs/release.md</code> แบบไม่มี backtick</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เริ่ม repo ด้วย /init และใช้ path-scoped rules</h3>
+<p>repo ใหม่ไม่ต้องนั่งเขียน CLAUDE.md เองตั้งแต่ศูนย์ พิมพ์ <code>/init</code> แล้ว Claude จะสำรวจ codebase และร่าง CLAUDE.md ให้ ซึ่งปกติจะมีคำสั่ง build/test ภาพรวมโครงสร้าง และ convention ที่มันเจอ</p>
+<ol class="steps">
+  <li>พิมพ์ <code>/init</code> ในโปรเจกต์</li>
+  <li>Claude สำรวจ codebase แล้วร่างไฟล์</li>
+  <li>เรารีวิว ลบส่วนที่ไม่ถูกต้องออก (อย่าเชื่อร่างแรก 100%)</li>
+  <li>commit ให้ทีมใช้ร่วมกัน</li>
+</ol>
+
+<h3>Rules: instruction ที่โหลดเฉพาะตอนจำเป็น</h3>
+<p>คำสั่งที่ใช้กับแค่บางส่วนของ codebase ให้แยกเป็นไฟล์ markdown ใน <code>.claude/rules/</code> ถ้าใส่ frontmatter <code>paths</code> ไว้ rule นั้นจะโหลดก็ต่อเมื่อ Claude ทำงานกับไฟล์ที่ match เท่านั้น เช่น กฎของ database migration จะไม่กิน context ตอนกำลังแก้ CSS อยู่ rule ส่วนตัวก็ใส่ใน <code>~/.claude/rules/</code> ได้</p>
+<pre><code>---
+paths:
+  - "db/migrations/**/*.sql"
+---
+
+# Migration rules
+- ทุก migration ต้องมี down script คู่กัน
+- ห้าม DROP COLUMN ในไฟล์เดียวกับที่เพิ่ม column ใหม่</code></pre>
+<p><code>paths</code> รับ glob pattern ได้ทั้งแบบ YAML list และแบบ string คั่นด้วย comma และเป็น field เดียวที่ rules รองรับสำหรับเรื่องนี้ (ไม่ใช่ <code>include</code>, <code>files</code> หรือ <code>globs</code>)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>/init</code> → รีวิว → commit ส่วนคำสั่งเฉพาะไฟล์ให้ไปอยู่ใน <code>.claude/rules/</code> พร้อม <code>paths</code> ซึ่งเป็นวิธีที่ประหยัด context ได้จริง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอนตั้งค่า CLAUDE.md ใน repo ใหม่:</p>
+  <ol type="a">
+    <li>commit ไฟล์</li>
+    <li>Claude สำรวจโค้ดแล้วร่างไฟล์</li>
+    <li>พิมพ์ <code>/init</code></li>
+    <li>อ่านร่างแล้วลบส่วนที่ผิด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>c → b → d → a</strong> ต้องรีวิวก่อน commit เสมอ เพราะร่างอาจเดา convention ผิด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมอยากให้กฎการเขียน Storybook โหลดเฉพาะตอนแก้ไฟล์ <code>*.stories.tsx</code> ต้องใส่ glob ไว้ใน frontmatter field ชื่ออะไร?</p>
+  <ol type="A">
+    <li><code>globs</code></li>
+    <li><code>files</code></li>
+    <li><code>paths</code></li>
+    <li><code>include</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>paths</code> เป็น field เดียวที่ rules ใช้กำหนดว่าจะโหลดกับไฟล์ไหน</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Auto memory: สมุดจดของ Claude เอง</h3>
+<p>CLAUDE.md คือสิ่งที่ <em>เราบอก</em> Claude ส่วน auto memory คือสิ่งที่ <em>Claude เรียนรู้เอง</em> จากการที่เราแก้มัน หรือยืนยันว่าวิธีไหนใช้ได้ เหมือนพนักงานใหม่ที่มีคู่มือบริษัท (CLAUDE.md) กับสมุดโน้ตส่วนตัวที่จดเองระหว่างทำงาน (auto memory)</p>
+
+<div class="table-wrap"><table>
+  <tr><th></th><th>CLAUDE.md</th><th>Auto memory</th></tr>
+  <tr><td>ใครเขียน</td><td>เรา</td><td>Claude</td></tr>
+  <tr><td>เนื้อหา</td><td>instruction และกฎ</td><td>สิ่งที่เรียนรู้และ pattern</td></tr>
+  <tr><td>Scope</td><td>project, user หรือ org</td><td>ต่อ repo (ใช้ร่วมกันข้าม worktree)</td></tr>
+  <tr><td>โหลดเข้า</td><td>ทุก session</td><td>ทุก session แต่แค่ <strong>200 บรรทัดแรก หรือ 25KB</strong></td></tr>
+</table></div>
+
+<p>ที่เก็บคือ <code>~/.claude/projects/&lt;project&gt;/memory/</code> มีไฟล์ <code>MEMORY.md</code> เป็น index ชี้ไปยังไฟล์ memory แยกทีละเรื่อง แต่ละ memory มี type หนึ่งในสี่แบบ:</p>
+<ul>
+  <li><strong>user</strong> บทบาท ความถนัด และความชอบในการทำงานของเรา</li>
+  <li><strong>feedback</strong> สิ่งที่เราเคยแก้ให้ และวิธีที่เรายืนยันว่าโอเค</li>
+  <li><strong>project</strong> งานที่กำลังทำ deadline และการตัดสินใจที่ดูจากโค้ดไม่ออก</li>
+  <li><strong>reference</strong> ไปหาข้อมูลภายนอกได้ที่ไหน เช่น issue tracker</li>
+</ul>
+<p>ตั้งค่าใน settings.json ได้สองตัว: <code>autoMemoryDirectory</code> ย้ายโฟลเดอร์ และ <code>autoMemoryEnabled</code> เปิด/ปิด</p>
+<pre><code>{
+  "autoMemoryEnabled": false   // ปิด auto memory ทั้งหมด
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ทุกอย่างที่ auto memory จดไว้ถูกโหลดเข้า session ใหม่ทั้งหมด"</strong> ไม่ใช่ โหลดแค่ส่วนต้นของ index คือ 200 บรรทัดแรกหรือ 25KB</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>CLAUDE.md = เราเขียน, auto memory = Claude เขียน เก็บใน <code>~/.claude/projects/&lt;project&gt;/memory/</code> มี 4 type และโหลดแค่หัว index</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่ข้อความที่ Claude จดไว้กับ memory type:</p>
+  <ol>
+    <li>"bug ของ payment ถูก track อยู่ใน Linear project PAY"</li>
+    <li>"ผู้ใช้เป็น backend dev ถนัด Go ไม่ค่อยเขียน frontend"</li>
+    <li>"ผู้ใช้บอกว่าอย่าใช้ mock DB ใน integration test"</li>
+    <li>"ต้อง freeze โค้ดก่อนวันที่ 15 เพราะมี audit"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → reference · 2 → user · 3 → feedback · 4 → project</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. settings.json: scope และใครชนะ</h3>
+<p>settings.json คุมพฤติกรรมของตัว Claude Code: permissions, hooks, plugins, env vars และ model ไม่ใช่ที่สำหรับเขียนคำแนะนำให้โมเดลอ่าน</p>
+<div class="table-wrap"><table>
+  <tr><th>Scope</th><th>ไฟล์</th><th>ใช้กับ</th></tr>
+  <tr><td>User</td><td><code>~/.claude/settings.json</code></td><td>ความชอบส่วนตัวทุกโปรเจกต์</td></tr>
+  <tr><td>Shared project</td><td><code>.claude/settings.json</code></td><td>permissions, hooks, plugins, env vars ของทีม (commit)</td></tr>
+  <tr><td>Project local</td><td><code>.claude/settings.local.json</code></td><td>override ส่วนตัวในโปรเจกต์นี้ (ไม่เข้า git)</td></tr>
+  <tr><td>Managed</td><td><code>managed-settings.json</code> และ managed source อื่น</td><td>นโยบาย security/compliance ขององค์กร</td></tr>
+</table></div>
+<pre><code>{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": ["Bash(make build)", "Bash(pytest *)"],     // รันได้เลยไม่ต้องถาม
+    "deny":  ["Read(./secrets/**)"]                      // ห้ามอ่านโฟลเดอร์ secrets
+  }
+}</code></pre>
+
+<h3>Precedence: สูงไปต่ำ</h3>
+<ol class="steps">
+  <li><strong>Managed settings</strong> ไม่มีอะไรของเรา override ได้</li>
+  <li><strong>Command-line arguments</strong> เช่น <code>--settings</code> ที่ส่ง JSON มาใช้แค่ session เดียว</li>
+  <li><strong>Project local</strong> <code>.claude/settings.local.json</code></li>
+  <li><strong>Shared project</strong> <code>.claude/settings.json</code></li>
+  <li><strong>User</strong> <code>~/.claude/settings.json</code></li>
+</ol>
+<ul>
+  <li>Claude Code สร้าง <code>.claude/settings.local.json</code> เองเมื่อเรากดอนุมัติแบบถาวรตอนมัน prompt ขอ permission และกันไม่ให้ไฟล์นี้เข้า commit</li>
+  <li>ถ้า <code>~/.claude.json</code> parse ไม่ได้ การรันแบบ <code>-p</code> (print mode) จะแสดง error แล้ว exit</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Managed → CLI args → local → shared project → user ยิ่งใกล้ "ตัวเราใน session นี้" ยิ่งชนะ ยกเว้น managed ที่อยู่บนสุดเสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (เรียงลำดับ)</span>
+  <p>key <code>model</code> ถูกตั้งไว้ 3 ที่: <code>.claude/settings.json</code> ของทีม, <code>--settings</code> ตอนรัน และ managed settings ขององค์กร เรียงจากชนะมากไปน้อย</p>
+  <details><summary>ดูเฉลย</summary><p><strong>managed → <code>--settings</code> → <code>.claude/settings.json</code></strong> CLI argument อยู่เหนือไฟล์ของเราทุกไฟล์ แต่แตะ managed key ไม่ได้</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Code docs: Memory</li>
+  <li>Claude Help Center: giving Claude context</li>
+  <li>Claude Code docs: Settings</li>
+</ul>
+</section>

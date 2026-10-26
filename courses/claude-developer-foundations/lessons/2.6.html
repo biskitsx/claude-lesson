@@ -1,0 +1,284 @@
+<section class="lesson" id="l-2-6">
+<h2>2.6 Configuration management: CLAUDE.md, settings.json scopes และ precedence</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-md-and-settings-json-scopes-and-precedence">CertSafari 2.6</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>วาง instruction ให้ถูก scope ของ CLAUDE.md และบอกได้ว่า AGENTS.md กับ path-scoped rule โหลดเมื่อไหร่</li>
+    <li>เรียง scope ของ settings.json ตาม precedence และรู้ว่าอะไรบังคับได้เฉพาะจาก managed settings</li>
+    <li>แยก model ID ที่ pin ไว้กับ alias และไล่ได้ว่า Claude Code session เริ่มด้วย model ไหน</li>
+    <li>Pin, promote และ rollback prompt version แยกตาม environment</li>
+    <li>ประกาศ plugin dependency ด้วย version range และ pin แบบ exact ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: pin vs pointer</span>
+  <p><strong>Pin</strong> ชี้ไปที่ของชิ้นเดียวที่ตายตัว (snapshot model ID, plugin version แบบ exact, prompt version ที่มีเลข) และจะทำงานเหมือนเดิมจนกว่าเราจะแก้เอง <strong>Pointer</strong> (alias, version range, default ที่ไม่ระบุ) จะ resolve ไปหา "ตัวล่าสุด ณ ตอนนั้น" พฤติกรรมเลยเปลี่ยนได้โดยที่เราไม่ได้แก้อะไรเลย ทั้งบทนี้คือการถามว่า "ตรงนี้เราถือ pin หรือ pointer อยู่"</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. CLAUDE.md scopes, AGENTS.md และ path-scoped rules</h3>
+<div class="table-wrap"><table>
+  <tr><th>Scope</th><th>ที่อยู่ไฟล์</th><th>ใครเห็น</th></tr>
+  <tr><td>Managed policy</td><td>macOS: <code>/Library/Application Support/ClaudeCode/CLAUDE.md</code><br>Linux/WSL: <code>/etc/claude-code/CLAUDE.md</code></td><td>ทุกคนในองค์กร (IT deploy ให้)</td></tr>
+  <tr><td>User</td><td><code>~/.claude/CLAUDE.md</code></td><td>เราคนเดียว ทุก project</td></tr>
+  <tr><td>Project</td><td><code>./CLAUDE.md</code> หรือ <code>./.claude/CLAUDE.md</code></td><td>ทั้งทีม (commit เข้า source control)</td></tr>
+  <tr><td>Local</td><td><code>./CLAUDE.local.md</code></td><td>เราคนเดียว เฉพาะ project นี้ (ควร gitignore)</td></tr>
+</table></div>
+<ul>
+  <li>Scope ของ CLAUDE.md <strong>บวกกัน</strong> ไม่ได้ override กัน ถ้าสองไฟล์ขัดกัน Claude อาจทำตามข้อไหนก็ได้ ต้องเคลียร์เอง</li>
+  <li>Import แบบ <code>@path</code> ช่วยหั่นไฟล์ยาวให้อ่านง่าย แต่ <strong>ไม่ได้ประหยัด context</strong> เพราะ import ก็โหลดตอน launch เหมือนกัน</li>
+  <li><code>claudeMdExcludes</code> ใช้ข้ามไฟล์ที่ match glob (มีประโยชน์ใน monorepo)</li>
+  <li><strong>จังหวะการโหลด:</strong> ไฟล์ใน working directory และ directory แม่ทั้งหมดโหลดตอน launch (เรียงจาก root ลงมา) ส่วน CLAUDE.md ใน subdirectory และไฟล์ใน <code>.claude/rules/</code> โหลดเมื่อ Claude อ่านไฟล์ในนั้นเท่านั้น</li>
+</ul>
+
+<h3>Path-scoped rules</h3>
+<p>ไฟล์ใน <code>.claude/rules/</code> ที่มี frontmatter <code>paths</code> จะโหลดเฉพาะเมื่อ Claude แตะไฟล์ที่ match ช่วยให้ CLAUDE.md หลักไม่บวม (เป้าคือแต่ละไฟล์ไม่เกินราวๆ 200 บรรทัด) rule ส่วนตัวใส่ใน <code>~/.claude/rules/</code></p>
+<pre><code>---
+paths:
+  - "src/api/**/*.ts"
+---
+# กฎสำหรับ API layer (โหลดเฉพาะตอนแตะไฟล์ใน src/api)
+- validate input ทุก endpoint
+- ใช้ error format มาตรฐานของทีม
+- ใส่ OpenAPI comment ทุก handler</code></pre>
+
+<h3>AGENTS.md เป็นแค่ fallback</h3>
+<p>โดย default, AGENTS.md จะโหลด <strong>ก็ต่อเมื่อไม่มี</strong> CLAUDE.md, <code>.claude/CLAUDE.md</code> หรือ CLAUDE.local.md อยู่ใน working directory หรือ directory แม่เลย (ไฟล์ระดับ user, managed และ rules ไม่นับในเงื่อนไขนี้)</p>
+<p>ถ้าอยากโหลดทั้งคู่ มี 2 ทาง:</p>
+<ul>
+  <li>เพิ่มบรรทัด <code>@AGENTS.md</code> ใน CLAUDE.md (บน Windows ให้ใช้วิธี import นี้ อย่าใช้ symlink)</li>
+  <li>ตั้ง option <code>instructionFiles</code> ของ plugin agents-md ที่มากับระบบเป็น <code>claude-md-and-agents-md</code></li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"AGENTS.md โหลดคู่กับ CLAUDE.md เสมอ"</strong> ไม่ใช่ มันเป็น fallback ที่โหลดเฉพาะตอนไม่มี CLAUDE.md ในสาย directory</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>4 scope บวกกัน, ไฟล์สาย parent โหลดตอนเริ่ม, subdirectory กับ rules โหลดเมื่อแตะไฟล์, AGENTS.md มาเฉพาะตอนไม่มี CLAUDE.md</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Repo มี <code>AGENTS.md</code> ที่ root และมี <code>.claude/CLAUDE.md</code> ด้วย ไม่ได้ตั้งค่าอะไรเพิ่ม เปิด Claude Code ที่ root จะโหลดอะไร?</p>
+  <ol type="A">
+    <li>ทั้งสองไฟล์ AGENTS.md ก่อน</li>
+    <li>เฉพาะ <code>.claude/CLAUDE.md</code></li>
+    <li>เฉพาะ AGENTS.md เพราะอยู่ที่ root</li>
+    <li>ไม่โหลดอะไรเพราะชนกัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> แค่มี <code>.claude/CLAUDE.md</code> ใน working directory ก็พอให้ AGENTS.md ไม่ถูกโหลดแล้ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Monorepo มี <code>CLAUDE.md</code> ที่ root และ <code>services/billing/CLAUDE.md</code> ถ้า launch Claude Code จาก <code>services/billing/</code> ตอนเริ่ม session มีไฟล์ไหนโหลดบ้าง และลำดับยังไง?</p>
+  <details><summary>ดูเฉลย</summary><p>โหลด<strong>ทั้งสองไฟล์</strong>ตอน launch เพราะเป็น working directory กับ directory แม่ เรียงจาก filesystem root ลงมา ไฟล์ root จึงมาก่อน</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. settings.json scopes, precedence และ managed settings</h3>
+<p>ต่างจาก CLAUDE.md ตรงที่ settings <strong>resolve ทีละ key</strong>: scope ที่สูงกว่าซึ่งตั้ง key นั้นไว้ชนะ ส่วน key ที่ไม่ได้ตั้งจะ inherit จาก scope ที่ต่ำกว่า</p>
+<div class="table-wrap"><table>
+  <tr><th>Scope (แรงสุดก่อน)</th><th>ไฟล์</th><th>ใช้ทำอะไร</th></tr>
+  <tr><td>Managed</td><td>managed-settings.json, MDM policy หรือ server-managed</td><td>Security และ compliance</td></tr>
+  <tr><td>Project local</td><td><code>.claude/settings.local.json</code></td><td>Override ส่วนตัวราย project</td></tr>
+  <tr><td>Shared project</td><td><code>.claude/settings.json</code></td><td>Permission, hook, plugin, env var ของทีม</td></tr>
+  <tr><td>User</td><td><code>~/.claude/settings.json</code></td><td>ค่าส่วนตัว, model default, rule ของตัวเอง</td></tr>
+</table></div>
+<p>ลำดับเต็มคือ <strong>Managed → command-line args (รวม <code>--settings</code> JSON) → local → shared project → user</strong></p>
+<ul>
+  <li>ไฟล์ local ถูกเพิ่มเข้า global git excludes อัตโนมัติตอนเขียนครั้งแรก และการกด "Don't ask again" จะถูกบันทึกเป็น allow rule ในไฟล์นี้</li>
+  <li><code>permissions.allow</code> <strong>merge</strong> ข้าม scope ได้ แต่ allow ใน local ไม่ได้ชนะ ask rule จาก project หรือ managed</li>
+</ul>
+<pre><code>// .claude/settings.json (แชร์ทั้งทีม)
+{
+  "permissions": {
+    "allow": ["Bash(npm run lint)", "Bash(npm run test *)"],
+    "deny":  ["Read(./.env)", "Read(./.env.*)"]   // กันอ่าน secret
+  }
+}</code></pre>
+
+<h3>สิ่งที่บังคับได้จริงจาก managed เท่านั้น</h3>
+<ul>
+  <li><code>permissions.deny</code>, <code>sandbox.enabled</code>, <code>env</code> สำหรับ provider routing</li>
+  <li><code>forceLoginMethod</code>, <code>forceLoginOrgUUID</code></li>
+  <li><code>allowManagedPermissionRulesOnly</code></li>
+</ul>
+<p>คำแนะนำเชิงพฤติกรรมให้ใส่ใน managed CLAUDE.md ส่วนกฎอย่าง "ห้าม push เข้า main" ต้องมี <strong>ทั้ง</strong> คำสั่งใน managed CLAUDE.md และ deny rule ใน managed settings เพราะอันแรกแค่บอก อันหลังบล็อกจริง</p>
+<p>Security key บางตัวเป็นแบบ <strong>"strictest wins"</strong> จาก scope ไหนก็ได้ เช่น project ตั้ง <code>disableClaudeAiConnectors: true</code> แม้ managed ตั้ง false ก็ยังปิดอยู่</p>
+
+<h3>Clone-time trust</h3>
+<p>ตอน clone repo มาใหม่ <code>permissions.allow</code>, <code>extraKnownMarketplaces</code> และ <code>env</code> ส่วนใหญ่จะรอจนกว่าเพื่อนร่วมทีมจะ trust โฟลเดอร์ ส่วน <code>deny</code> กับ <code>ask</code> มีผลทันที และ <code>permissions.defaultMode: bypassPermissions</code> ตั้งได้จาก user หรือ managed เท่านั้น (repo แปลกๆ เลยเปิด bypass ให้เราเองไม่ได้)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง <code>model</code> ใน managed settings แล้ว user จะเปลี่ยน model ไม่ได้"</strong> ไม่ใช่ ถ้าอยากจำกัดตัวเลือกต้องใช้ <code>availableModels</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Settings ชนะกันทีละ key ตามลำดับ managed → CLI args → local → project → user แต่ allow merge กัน, บาง security key strictest wins และ deny/ask มีผลก่อน trust</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (เรียงลำดับ)</span>
+  <p>เรียงจาก precedence สูงไปต่ำ: (a) <code>~/.claude/settings.json</code> (b) <code>claude --settings '{...}'</code> (c) managed-settings.json (d) <code>.claude/settings.json</code> (e) <code>.claude/settings.local.json</code></p>
+  <details><summary>ดูเฉลย</summary><p><strong>c → b → e → d → a</strong> Managed → command-line args → project local → shared project → user</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ระหว่าง session ที่เปิดค้างอยู่ เพื่อนแก้ <code>.claude/settings.json</code> เพิ่ม <code>permissions.allow</code> หนึ่งตัว และเปลี่ยน <code>model</code> ด้วย อะไรมีผลทันที?</p>
+  <ol type="A">
+    <li>ทั้งสองอย่างมีผลทันที</li>
+    <li>ไม่มีอะไรมีผลจนกว่าจะ restart</li>
+    <li>allow entry ใหม่ hot-reload ทันที แต่ <code>model</code> ต้อง restart</li>
+    <li><code>model</code> มีผลทันที แต่ allow ต้อง restart</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> permission rule reload ระหว่าง session ได้ แต่ model ของ session ถูกเลือกตอนเริ่ม</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Model ID, alias และ model ตอนเริ่ม session</h3>
+<p>ลองเดาก่อน: production ตั้ง <code>claude-sonnet-4-6</code> (ไม่มีวันที่) ไว้ พอมีรุ่นใหม่ออก มันจะอัปเกรดเองไหม? <strong>ไม่</strong> ID ไม่มีวันที่ <em>คือ</em> snapshot ตัวนั้นเลย ยังรันตัวเดิม</p>
+<ul>
+  <li>ตั้งแต่รุ่น 4.6 เป็นต้นมา ID ไม่มีวันที่ (เช่น <code>claude-opus-4-6</code>, <code>claude-sonnet-5</code>) และแต่ละ ID คือหนึ่ง snapshot</li>
+  <li>รุ่นเก่ามีวันที่ (เช่น <code>claude-sonnet-4-5-20250929</code>) และมี API alias (เช่น <code>claude-sonnet-4-5</code>) ที่ชี้ไป dated snapshot ล่าสุดของ minor version นั้น</li>
+  <li>แต่ละ ID มีตาราง deprecation และ retirement ของตัวเอง ถ้า ID ที่ pin ไว้ทำตัวเปลี่ยนไป ให้สงสัยเรื่อง infrastructure ก่อน</li>
+  <li>ข้าม provider: ID ไม่มีวันที่ใช้ชื่อเดียวกันบน Claude API กับ Google Cloud ส่วน Bedrock มี prefix <code>anthropic.</code> สำหรับ ID มีวันที่ ตัวคั่นต่างกัน (เช่น <code>@</code> บน Google Cloud, ต่อท้าย <code>-v1:0</code> บน Bedrock)</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>Claude Code alias</th><th>พฤติกรรม</th></tr>
+  <tr><td><code>opus</code></td><td>Opus ล่าสุด สำหรับงาน reasoning หนักๆ</td></tr>
+  <tr><td><code>sonnet</code></td><td>Sonnet ล่าสุด สำหรับเขียนโค้ดประจำวัน</td></tr>
+  <tr><td><code>opusplan</code></td><td>Opus ตอน plan mode, Sonnet ตอนลงมือ</td></tr>
+  <tr><td><code>default</code></td><td>ล้าง override กลับไปใช้ default ของ runtime (ตัวมันเองไม่ใช่ alias)</td></tr>
+</table></div>
+<ul>
+  <li><code>opus</code> resolve ต่างกันตาม provider เช่น Opus 5.5 บน Anthropic API แต่เป็น Opus 4.6 บน Microsoft Foundry</li>
+  <li>อยาก freeze alias: ตั้ง <code>ANTHROPIC_DEFAULT_OPUS_MODEL</code>, <code>ANTHROPIC_DEFAULT_SONNET_MODEL</code>, <code>ANTHROPIC_DEFAULT_HAIKU_MODEL</code> หรือ <code>ANTHROPIC_DEFAULT_FABLE_MODEL</code> เป็น full ID ถ้ามี <code>availableModels</code> ตัวแปรพวกนี้จะพา alias ที่อนุญาตไปหา model นอกลิสต์ไม่ได้</li>
+</ul>
+
+<h3>Session เริ่มด้วย model ไหน</h3>
+<ol class="steps">
+  <li>flag <code>--model</code></li>
+  <li>env <code>ANTHROPIC_MODEL</code></li>
+  <li>ค่า <code>model</code> ใน settings ใดๆ (รวมค่าที่ <code>/model</code> บันทึกไว้)</li>
+  <li>default ขององค์กร / account</li>
+</ol>
+<ul>
+  <li><code>model</code> ที่ตั้งใน project หรือ managed มีผลทุกครั้งที่ launch และชนะค่าที่ <code>/model</code> บันทึกไว้ header ตอนเริ่มจะบอกว่ามาจากไฟล์ไหน</li>
+  <li>Session ที่ resume มักใช้ model เดิม และถ้า model ไม่อยู่ใน <code>availableModels</code> จะถูกสลับตอนเริ่มพร้อม warning</li>
+  <li><code>default</code> อาจ resolve ไปที่ตัวเลือกเก่าที่บันทึกไว้ เว้นแต่ข้อจำกัดตัดมันออก ก็จะ resolve เหมือนไม่เคยบันทึกอะไร</li>
+  <li><code>/model</code> มีผลทันที ไม่ต้อง restart</li>
+</ul>
+<pre><code># pin model สำหรับ run เดียว ด้วย full ID
+claude --settings '{"model": "claude-opus-4-6"}' -p "รีวิว diff นี้"</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ID ที่ไม่มีวันที่คือ pointer ที่อัปเดตตลอด"</strong> ไม่ใช่ Anthropic ปล่อยของใหม่ภายใต้ ID ใหม่ ID เดิมคือ snapshot เดิม</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Full ID = pin, alias = pointer. Start model: <code>--model</code> → <code>ANTHROPIC_MODEL</code> → settings <code>model</code> → org default. จำกัด model ด้วย <code>availableModels</code> ไม่ใช่ <code>model</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่ ID กับความหมาย:</p>
+  <ol>
+    <li><code>claude-opus-4-6</code></li>
+    <li><code>claude-sonnet-4-5</code> (API alias)</li>
+    <li><code>opus</code> (Claude Code alias)</li>
+    <li><code>claude-sonnet-4-5-20250929</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → snapshot ตายตัว อัปเดตมาเป็น ID ใหม่ · 2 → ชี้ dated snapshot ล่าสุดของ minor version นั้น · 3 → Opus ล่าสุดที่ provider มีให้ · 4 → dated snapshot ID</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>Admin ตั้ง <code>availableModels</code> ไว้ แต่ไม่ได้ตั้ง <code>enforceAvailableModels</code> user เปิด session ใหม่โดยไม่ระบุ model อะไรเลย session จะเริ่มด้วยอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>เริ่มด้วย <strong>default ของ account type หรือองค์กร</strong> เพราะ <code>availableModels</code> อย่างเดียวไม่ได้บังคับตัวเลือก Default</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Prompt version: pin, promote, rollback</h3>
+<p>ปฏิบัติกับ prompt เหมือน model: แต่ละ version immutable, แต่ละ environment pin ไว้ที่ version เดียว และการเปลี่ยนคือการย้าย version อย่างตั้งใจ ข้อดีคือพอเกิด regression เราบอกได้ว่าเพราะ prompt หรือเพราะ model</p>
+<ul>
+  <li><strong>Managed Agents</strong> เก็บ agent (รวม system prompt) ไว้ฝั่ง server</li>
+  <li><code>agents.update</code> สร้าง version ใหม่ที่ immutable</li>
+  <li><code>sessions.create</code> เริ่ม session บน version ที่เลือก</li>
+</ul>
+<pre><code># pointer: ส่ง agent id เปล่าๆ = ได้ version ล่าสุดเสมอ
+client.sessions.create(agent="agent_abc")
+
+# pin: ส่ง object ระบุ version = ได้ version นั้นเป๊ะ
+client.sessions.create(agent={"type": "agent", "id": "agent_abc", "version": 3})</code></pre>
+<p>Caller ใน production ที่ส่ง ID เปล่า จะได้ prompt ใหม่ทันทีใน session ถัดไป และ <code>agents.update</code> <strong>ไม่มี approval gate</strong> key ไหนใน workspace ก็เรียกได้ การ review จึงต้องไปเกิดที่การ pin: config production ใส่เลข version ชัดๆ แล้วผ่าน review ตามปกติ</p>
+<ol class="steps">
+  <li>สร้าง v1</li>
+  <li>Evaluate v1 กับ test set ที่ label ไว้</li>
+  <li>Ship v2 แล้ว evaluate</li>
+  <li>เจอ regression → ชี้ caller กลับไป v1</li>
+</ol>
+<p>Rollback ไม่ต้อง deploy อะไรเลย เพราะ v1 ยังอยู่เหมือนเดิม</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ส่ง agent ID เปล่าๆ ก็ยังอยู่ที่ version ที่ test แล้ว"</strong> ไม่ใช่ มีแค่ object ที่ระบุ <code>version</code> เท่านั้นที่ pin</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Prompt version immutable + production pin เลข version ผ่าน review = rollback ได้ทันทีโดยไม่ deploy</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (เรียงลำดับ)</span>
+  <p>เรียง release cycle ของ prompt: (a) พบ regression (b) evaluate v1 (c) ship v2 (d) สร้าง v1 (e) rollback ด้วยการ pin session กลับไป v1</p>
+  <details><summary>ดูเฉลย</summary><p><strong>d → b → c → a → e</strong></p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Plugin dependency: version range และ exact pin</h3>
+<p>Plugin ประกาศ dependency ใน array <code>dependencies</code> ของ <code>plugin.json</code> แต่ละรายการเป็นชื่อเปล่าๆ หรือ object ที่มี <code>name</code>, <code>version</code> (semver range) และ <code>marketplace</code> (optional)</p>
+<pre><code>{
+  "name": "my-reviewer",
+  "dependencies": [
+    "lint-helpers",                                   // ชื่อเปล่า
+    { "name": "test-runner", "version": "^2.0" },     // range: รับ fix อัตโนมัติ
+    { "name": "secrets-scan", "version": "=2.1.0" }  // exact pin
+  ]
+}</code></pre>
+<ul>
+  <li>Claude Code ติดตั้ง <strong>git tag ที่สูงที่สุด</strong> ที่เข้า range โดย range resolve กับ git tag <strong>ไม่ใช่</strong> string <code>version</code> ใน plugin.json</li>
+  <li>ใครเป็นคน tag: plugin ที่มี repo ของตัวเอง author เป็นคน tag ส่วน plugin แบบ relative-path ผู้ดูแล marketplace เป็นคน tag</li>
+  <li><code>claude plugin tag --push</code> validate plugin, สร้าง tag และปฏิเสธถ้า tag มีอยู่แล้ว</li>
+</ul>
+<p>ถ้าไม่มี tag ไหนเข้า range:</p>
+<ul>
+  <li><strong>Dependency ที่มี repo ของตัวเอง:</strong> ติดตั้ง fail พร้อมข้อความประมาณ "no tag satisfies range"</li>
+  <li><strong>Dependency แบบ relative-path:</strong> ติดตั้ง copy ปัจจุบันของ marketplace แล้วเช็ก range ตอนโหลด ถ้าไม่เข้า plugin ที่พึ่งพามันจะถูกปิดไว้ และ <code>claude plugin list</code> แสดง range ที่ต้องการ</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>Plugin A ต้องการ</th><th>Plugin B ต้องการ</th><th>ผลลัพธ์</th></tr>
+  <tr><td><code>^2.0</code></td><td><code>&gt;=2.1</code></td><td>ติดตั้งตัวเดียวที่ tag 2.x สูงสุดที่ ≥ 2.1.0 โหลดได้ทั้งคู่</td></tr>
+  <tr><td><code>~2.1</code></td><td><code>~3.0</code></td><td>ติดตั้ง B fail เพราะ requirement ขัดกัน</td></tr>
+  <tr><td><code>=2.1.0</code></td><td>ไม่มี</td><td>ค้างที่ 2.1.0 และ auto-update ข้ามเวอร์ชันใหม่ตราบที่ A ยังติดตั้งอยู่</td></tr>
+</table></div>
+<p>ใช้ exact pin (<code>"=2.1.0"</code>) เมื่ออยากล็อก build ที่ test แล้ว ใช้ caret (<code>^</code>) หรือ tilde (<code>~</code>) เมื่ออยากได้ fix อัตโนมัติ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"range resolve กับ version ใน plugin.json"</strong> ไม่ใช่ มัน resolve กับ git tag release ที่ไม่ได้ tag จะไม่ถูกเลือกเลย</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>dependencies</code> + semver range → ได้ git tag สูงสุดที่เข้า range อยากล็อกใช้ <code>=x.y.z</code> และอย่าลืม tag ทุก release</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>Plugin ต้องการ <code>formatter</code> เฉพาะ patch release ของ 3.4 เท่านั้น ต้องเขียน key อะไรใน plugin.json และใช้ range แบบไหน? ถ้า author bump version ใน plugin.json เป็น 3.4.2 แต่ลืม tag จะเกิดอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>ใช้ key <strong><code>dependencies</code></strong> กับ <code>{"name": "formatter", "version": "~3.4.0"}</code> (tilde = รับแค่ 3.4.x) ส่วน 3.4.2 ที่ไม่ได้ tag จะไม่ถูกเลือก เพราะ range ดูจาก git tag ไม่ใช่ string ใน plugin.json</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Code docs: Memory (CLAUDE.md)</li>
+  <li>Claude Code docs: Settings</li>
+  <li>Claude Code docs: Model configuration</li>
+  <li>Claude Platform docs: Model IDs</li>
+  <li>Anthropic Cookbook: Managed Agents prompt versioning</li>
+  <li>Claude Code docs: Plugin dependencies</li>
+</ul>
+</section>

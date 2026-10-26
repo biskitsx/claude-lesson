@@ -1,0 +1,282 @@
+<section class="lesson" id="l-4-1">
+<h2>4.1 Claude API error types และ recovery strategies</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-api-error-types-and-recovery-strategies">CertSafari 4.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ดู status code กับ error type แล้วแยกได้ทันทีว่า "ต้องแก้ request" หรือ "retry ได้"</li>
+    <li>รู้ว่า SDK retry อะไรให้เองอัตโนมัติ และตั้ง <code>max_retries</code> อย่างตั้งใจ</li>
+    <li>แก้ 413 และ timeout ด้วยการลดขนาด payload หรือเปลี่ยน transport ไม่ใช่ retry</li>
+    <li>แยก 429 จาก rate limit, จาก acceleration limit, จาก spend cap และ 400 จาก spend limit ที่เราตั้งเองได้ พร้อมวิธีรับมือแต่ละแบบ</li>
+    <li>เลือกระหว่าง แก้ request / รอ SDK retry / เปลี่ยน transport / escalate จากหลักฐานใน call ที่ fail</li>
+    <li>อ่าน status, error type, request ID และ headers เพื่อบอกว่าปัญหาอยู่ที่ integration layer หรือที่ output ของโมเดล</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ต้นเหตุของ error กำหนดวิธีแก้</span>
+  <p><strong>4xx</strong> = request, key, account หรือ payload ต้องเปลี่ยนก่อน ถึงจะผ่าน ส่ง request เดิมซ้ำกี่รอบก็ไม่ผ่าน<br><strong>5xx</strong> หรือ <strong>429 แบบชั่วคราว</strong> = ส่ง request เดิมซ้ำพร้อม backoff แล้วมีโอกาสผ่าน<br>จัดกลุ่มผิดเมื่อไหร่ จะเจออย่างใดอย่างหนึ่ง: retry วนไม่จบ หรือไปนั่ง debug โค้ดที่ไม่ได้พัง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. แยก error: แก้ request หรือ retry</h3>
+<p>Error body ของ Claude API หน้าตาเหมือนกันหมด คือ JSON ที่มี object <code>error</code> (ข้างในมี <code>type</code> กับ <code>message</code>) และมี <code>request_id</code> ID เดียวกันนี้อยู่ใน header <code>request-id</code> ของทุก response ด้วย ส่วนใน Python/TypeScript SDK อ่านได้จาก <code>_request_id</code> ให้ log ค่านี้ทุกครั้งที่ fail</p>
+<pre><code>{
+  "type": "error",
+  "error": {
+    "type": "not_found_error",
+    "message": "model: claude-foo-9 ไม่มีอยู่จริง"
+  },
+  "request_id": "req_011CExample..."
+}</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>Status / type</th><th>สาเหตุ</th><th>ทำยังไง</th></tr>
+  <tr><td>400 <code>invalid_request_error</code></td><td>format หรือเนื้อหาของ request</td><td>แก้ request ห้าม retry แบบเดิม</td></tr>
+  <tr><td>401 <code>authentication_error</code></td><td>key ผิดรูปแบบ ถูก revoke หรือหมดอายุ</td><td>แก้ key</td></tr>
+  <tr><td>402 <code>billing_error</code></td><td>ปัญหา billing/การจ่ายเงิน</td><td>เช็ก payment ใน Claude Console</td></tr>
+  <tr><td>403 <code>permission_error</code></td><td>key ไม่มีสิทธิ์เข้าถึง resource</td><td>เช็กสิทธิ์ใน org และ workspace</td></tr>
+  <tr><td>404 <code>not_found_error</code></td><td>หา resource ไม่เจอ</td><td>เช็ก endpoint path และ ID</td></tr>
+  <tr><td>409 <code>conflict_error</code></td><td>ชนกับ state ปัจจุบันของ resource</td><td>แก้ conflict ก่อน แล้วค่อย retry</td></tr>
+  <tr><td>413 <code>request_too_large</code></td><td>request ใหญ่เกิน byte limit</td><td>ลด payload ให้ต่ำกว่า limit</td></tr>
+  <tr><td>429 <code>rate_limit_error</code></td><td>ชน rate limit หรือ spend cap</td><td>ขึ้นอยู่กับว่า limit ไหน (หัวข้อ 4)</td></tr>
+  <tr><td>500 <code>api_error</code></td><td>error ฝั่ง server ที่ไม่คาดคิด</td><td>retry + exponential backoff ถ้ายังเป็นอยู่ แจ้ง support พร้อม request ID</td></tr>
+  <tr><td>504 <code>timeout_error</code></td><td>ประมวลผลนานจน timeout</td><td>ใช้ streaming Messages API กับ request ยาวๆ</td></tr>
+  <tr><td>529 <code>overloaded_error</code></td><td>API overload ชั่วคราว</td><td>retry + backoff</td></tr>
+</table></div>
+<ul>
+  <li><strong>409</strong> เป็น 4xx ตัวเดียวที่ retry เองได้ แต่ต้อง <em>แก้ต้นเหตุก่อน</em> เช่น มีสอง process แก้ resource เดียวกันพร้อมกัน หรือค่าที่ต้อง unique ถูกใช้ไปแล้ว ถ้า retry โดยไม่จัดให้ทำทีละตัว ก็ชนซ้ำเหมือนเดิม</li>
+  <li><strong>500</strong> ไม่ได้เกิดจาก request ของเรา backoff แล้ว retry ถ้ายังไม่หายค่อยเปิด ticket แนบ request ID</li>
+  <li>อาจมี <code>type</code> ใหม่ๆ โผล่มาในอนาคต ให้ branch ตาม type ที่รู้จัก แล้วจัดการ type ที่ไม่รู้จักตามกลุ่ม status (4xx/5xx)</li>
+</ul>
+
+<h3>อ่าน trace ของ call ที่ fail</h3>
+<ul>
+  <li><strong>Status + <code>error.type</code></strong> บอกว่าอยู่กลุ่มไหน</li>
+  <li><strong><code>message</code></strong> มักบอกต้นเหตุตรงๆ เช่น 400 เรื่อง thinking block จะขึ้นต้นด้วยตำแหน่งของ block ที่ผิด อย่าง <code>messages.1.content.0</code></li>
+  <li><strong>Headers</strong> ถ้ามี <code>retry-after</code> แปลว่ารอแล้วผ่าน ถ้าเป็น 429 ที่ <em>ไม่มี</em> <code>retry-after</code> และ <code>error.details.error_code</code> เป็น <code>enforced_spend_limit_reached</code> แปลว่ารอไปก็ไม่ช่วย</li>
+  <li><strong><code>request_id</code></strong> ผูก log ของเรา, error body และ support ticket ให้ชี้ไปที่ call เดียวกัน</li>
+</ul>
+<p>ดู pattern จากหลายๆ trace ก็ช่วยได้:</p>
+<ul>
+  <li>call เดิม fail เหมือนเดิมทุกครั้ง → สงสัย request, key หรือ account</li>
+  <li>5xx ที่ retry รอบถัดไปก็หาย → ฝั่ง server</li>
+  <li>429 ที่ผ่านไปหลายชั่วโมงยังไม่หาย → spend cap ไม่ใช่ limit รายนาที</li>
+</ul>
+<p>จุดแบ่งแรกที่ต้องดู: ถ้าได้ <strong>error body</strong> แปลว่า integration layer พังและไม่มี output เลย แต่ถ้าได้ <strong>200 สะอาดๆ แต่ผลผิด</strong> คำถามจะย้ายไปที่ output ของโมเดล (ดูบทเรื่อง stop reason)</p>
+<p>ระวัง <strong>streaming</strong>: error อาจมาระหว่าง stream หลังจากที่ API ตอบ 200 ไปแล้ว ดังนั้น 200 ไม่ได้การันตีว่าสำเร็จ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ได้ 200 แล้ว ถ้ามีอะไรผิดก็ต้องเป็นที่ output ของโมเดล"</strong> ไม่เสมอ ตอน streaming error เกิดกลาง stream หลัง 200 ได้ และไม่ผ่าน error handling แบบปกติ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>4xx แก้ request (ยกเว้น 409 แก้ conflict แล้ว retry), 5xx/429 ชั่วคราว retry พร้อม backoff log <code>request_id</code> ทุกครั้ง และอย่าเชื่อ 200 ตอน streaming</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>คุณใช้ Python SDK ได้ <code>msg = client.messages.create(...)</code> กลับมา แล้วอยากเก็บค่าที่ใช้ทำ support ticket กับ Anthropic ได้ ควรอ่าน attribute ไหน?</p>
+  <ol type="A">
+    <li><code>msg.id</code></li>
+    <li><code>msg._request_id</code></li>
+    <li><code>msg.stop_reason</code></li>
+    <li><code>msg.request_id</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> SDK เก็บ request ID ไว้ที่ <code>_request_id</code> ส่วน <code>id</code> คือ message ID ซึ่งเป็นคนละตัวกัน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>cron job สองตัวเริ่มพร้อมกันพอดีและแก้ resource เดียวกัน ตัวหนึ่งได้ 409 <code>conflict_error</code> ควรทำยังไง?</p>
+  <ol type="A">
+    <li>เพิ่ม <code>max_retries</code> ให้ SDK จัดการ</li>
+    <li>ถือว่าเป็นปัญหาฝั่ง server แล้วแจ้ง support</li>
+    <li>จัดให้สอง job ทำงานทีละตัว แล้วค่อย retry</li>
+    <li>ไม่ retry เลย เพราะเป็น 4xx</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> 409 retry ได้ แต่ต้องแก้ต้นเหตุ (การชนกัน) ก่อน ถ้า retry เฉยๆ ก็ชนซ้ำ และ SDK ไม่ retry 4xx ให้อยู่แล้ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>สคริปต์ ingest เอกสารได้ 429 เป็นพักๆ และ response มี header <code>retry-after</code> แต่โค้ด retry ของทีมยิงซ้ำทันทีแบบ tight loop ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>สลับ API key หลายตัวเพื่อให้ได้ bucket ใหม่</li>
+    <li>อ่าน <code>retry-after</code> แล้วรออย่างน้อยเท่านั้น และเพิ่ม backoff ถ้าเจอ 429 ซ้ำ</li>
+    <li>ลด <code>max_tokens</code></li>
+    <li>เปลี่ยนไปใช้ batch แล้ว poll</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> rate limit คิดระดับ organization การสลับ key ไม่ได้ bucket ใหม่ และ <code>max_tokens</code> ไม่เกี่ยวกับ limit จำนวน request</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. สิ่งที่ SDK จัดการให้ก่อนถึงโค้ดเรา</h3>
+<p>SDK แปลง error JSON เป็น <strong>typed exception</strong> ให้ เช่นใน Python 404 จะ raise <code>anthropic.NotFoundError</code> ให้ branch ด้วย exception class ไม่ใช่ไปจับข้อความใน message และ catch class ที่เจาะจงที่สุดก่อน (ส่วน Go ใช้ type เดียวคือ <code>*anthropic.Error</code> แล้ว branch ด้วย <code>StatusCode</code>)</p>
+<p>SDK <strong>retry ให้เอง 2 ครั้งโดย default</strong> พร้อม exponential backoff สำหรับ connection error, rate limit (429) และ 5xx และเคารพ <code>retry-after</code> ถ้ามี ปรับจำนวนหรือปิดได้ด้วย <code>max_retries</code></p>
+<pre><code>import anthropic
+
+client = anthropic.Anthropic(max_retries=0)   # หน้าจอผู้ใช้: ไม่อยากให้รอนาน
+
+try:
+    msg = client.messages.create(...)
+except anthropic.BadRequestError as e:        # 400: แก้ request ไม่ต้อง retry
+    log.error("bad request %s", e.request_id)
+except anthropic.RateLimitError as e:         # 429: ดูต่อว่าเป็น limit แบบไหน
+    handle_429(e)
+except anthropic.APIStatusError as e:         # กลุ่มที่เหลือ จัดการตาม status
+    log.error("status=%s id=%s", e.status_code, e.request_id)</code></pre>
+<p>สิ่งที่ต้องคิดตอน debug:</p>
+<ul>
+  <li>error ที่ retry ได้แต่หลุดมาถึงโค้ดเรา แปลว่ามันผ่าน backoff ของ SDK มาแล้ว ปัญหาค่อนข้างถาวร</li>
+  <li>เอา retry loop ของเราไปครอบอีกชั้น = จำนวนครั้งคูณกัน (เช่น ลูป 3 รอบ × SDK 3 ครั้ง = 9 call)</li>
+  <li>ตั้ง <code>max_retries</code> ให้เท่ากับที่อยากได้จริง และจัดการ 4xx เอง เพราะ SDK ไม่ retry 4xx</li>
+</ul>
+
+<h3>4 ทางเลือกในการ recover</h3>
+<div class="table-wrap"><table>
+  <tr><th>Move</th><th>ใช้กับ</th></tr>
+  <tr><td>1. แก้ request</td><td>400, 401, 402, 403, 404, 413 (ส่งซ้ำยังไงก็ไม่ผ่าน)</td></tr>
+  <tr><td>2. รอให้ SDK retry</td><td>429 ที่มี <code>retry-after</code>, 500, 529</td></tr>
+  <tr><td>3. เปลี่ยน transport</td><td>504 หรือ call ยาวแบบ non-streaming → ย้ายไป streaming หรือ Message Batches API</td></tr>
+  <tr><td>4. หยุดแล้ว escalate</td><td>429 จาก spend cap (รอจนกลับมาใช้ได้), 500 ที่ไม่หาย (ส่ง support พร้อม request ID)</td></tr>
+</table></div>
+<ul>
+  <li>request ที่ผู้ใช้รออยู่ (latency-sensitive) ลด <code>max_retries</code> หรือตั้งเป็น 0 แล้วแสดง fallback ให้เร็ว</li>
+  <li>batch job ตอนกลางคืน รอ backoff นานได้ ใช้ default หรือเพิ่มขึ้น</li>
+  <li>error ที่รอดจาก retry มาได้ถือเป็นหลักฐาน ให้ log request ID แล้ว escalate อย่าวนต่อ</li>
+  <li>409 คือ 4xx ตัวเดียวที่ควร retry เอง และต้องหลังแก้ conflict แล้วเท่านั้น</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>SDK retry connection/429/5xx ให้ 2 ครั้ง ไม่ retry 4xx อย่าครอบ loop ซ้ำ ตั้ง <code>max_retries</code> ตามบริบท และเลือก 1 ใน 4 move ตามหลักฐาน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ใช้ SDK แบบ default ทุกอย่าง error ไหนที่ SDK จะ retry ให้เองก่อน raise ออกมา?</p>
+  <ol type="A">
+    <li>403 <code>permission_error</code></li>
+    <li>529 <code>overloaded_error</code></li>
+    <li>400 <code>invalid_request_error</code></li>
+    <li>401 <code>authentication_error</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> 529 อยู่กลุ่ม 5xx ที่ SDK retry ให้ ส่วนที่เหลือเป็น 4xx ซึ่งต้องแก้ request หรือ key</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>service หนึ่งได้ 429 <code>rate_limit_error</code> หลัง SDK retry ครบแล้ว response ไม่มี <code>retry-after</code> และ <code>error.details.error_code</code> = <code>enforced_spend_limit_reached</code> ทางไหนเหมาะสุด?</p>
+  <ol type="A">
+    <li>ครอบด้วย backoff loop ของตัวเองอีกชั้น</li>
+    <li>เพิ่ม <code>max_retries</code> เป็น 10</li>
+    <li>หยุด retry แล้ว escalate: ขอขึ้น tier หรือรอจนสิทธิ์กลับมา</li>
+    <li>ตัด prompt ให้สั้นลงแล้วส่งใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> นี่คือ spend cap ไม่ใช่ limit รายนาที retry กี่รอบก็ไม่ผ่าน และขนาด request ไม่เกี่ยว</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Request ใหญ่เกิน และ call ที่ใช้เวลานาน</h3>
+<p><strong>413 <code>request_too_large</code></strong> คือ limit เรื่อง <em>ขนาดเป็น byte</em> โมเดลไม่เคยเห็น request นี้เลย บน direct API มันถูก Cloudflare ตีกลับก่อนถึง API server ด้วยซ้ำ เปลี่ยนคำใน prompt, เปลี่ยน model หรือปรับ <code>max_tokens</code> ไม่ช่วยอะไร ทางเดียวคือทำ payload ให้เล็กลง</p>
+<div class="table-wrap"><table>
+  <tr><th>Endpoint</th><th>ขนาด request สูงสุด</th></tr>
+  <tr><td>Messages API</td><td>32 MB</td></tr>
+  <tr><td>Token Counting API</td><td>32 MB</td></tr>
+  <tr><td>Batch API</td><td>256 MB</td></tr>
+  <tr><td>Files API</td><td>500 MB</td></tr>
+</table></div>
+<p><strong>504 <code>timeout_error</code></strong> เป็นปัญหาแบบเดียวกันแต่วัดเป็นเวลา วิธีแก้คือใช้ streaming Messages API กับ request ที่ยาว</p>
+<p>อีกเคสคือ <strong>idle connection</strong>: บาง network ตัด connection ที่เงียบนานๆ ทิ้ง ถ้ายิง non-streaming พร้อม <code>max_tokens</code> สูงๆ อาจค้างหรือ fail โดยไม่มี response จาก Anthropic เลย</p>
+<ul>
+  <li>SDK ตั้ง TCP keep-alive ให้ และเช็กว่า non-streaming request ไม่น่าจะเกิน <strong>10 นาที</strong> ถ้าเช็กไม่ผ่านให้เปลี่ยนไป streaming</li>
+  <li>ใช้ streaming แล้ว SDK รวม stream ให้ได้ <code>Message</code> ตัวเต็มเหมือน non-streaming ได้ โค้ดฝั่งเราแทบไม่ต้องเปลี่ยน</li>
+  <li>อีกทางคือ Message Batches API ที่ส่งไปแล้วค่อย poll ผล ไม่ต้องถือ connection ค้างไว้</li>
+</ul>
+<pre><code># เปลี่ยนเป็น streaming แต่ยังได้ Message ตัวเต็มเหมือนเดิม
+with client.messages.stream(model=MODEL, max_tokens=64000, messages=msgs) as s:
+    msg = s.get_final_message()</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"413 คือ capacity เต็ม retry หรือเปลี่ยนไปใช้ model ที่ context ใหญ่กว่าก็หาย"</strong> ไม่ใช่ 413 ถูกตีกลับด้วยขนาด byte ก่อนถึง server ต้องลด payload อย่างเดียว</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>413 = ใหญ่เกิน byte → ลดขนาด, 504 / call ยาว → streaming หรือ Batches ไม่ใช่ retry</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมแนบ PDF สแกนความละเอียดสูงหลายไฟล์ไปใน Messages API call เดียว แล้วได้ 413 วิธีไหนแก้ได้?</p>
+  <ol type="A">
+    <li>เปลี่ยนไปใช้ model ที่มี context window 1M</li>
+    <li>ลดขนาด body ให้ต่ำกว่า 32 MB เช่น ลดความละเอียดหรือแบ่งเป็นหลาย call</li>
+    <li>ลด <code>max_tokens</code></li>
+    <li>retry พร้อม exponential backoff</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ปัญหาคือ byte ของ request ซึ่งไม่เกี่ยวกับ token window, output limit หรือจังหวะเวลา</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. แยก 429 แต่ละแบบ และ 400 ที่หน้าตาเหมือน quota</h3>
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ทุก request จาก worker ตัวหนึ่งได้ 429 <code>rate_limit_error</code> และ SDK retry ก็ fail ต่อเนื่องเป็นชั่วโมง น่าจะเป็นเพราะอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>น่าจะชน <strong>monthly spend cap</strong> ของ usage tier ไม่ใช่ limit รายนาที (ซึ่งหายเร็ว) และไม่ใช่ spend limit ที่เราตั้งเอง (อันนั้นตอบ 400)</p></details>
+</div>
+
+<div class="table-wrap"><table>
+  <tr><th>สาเหตุ</th><th>Status / type</th><th>สัญญาณที่ใช้แยก</th><th>Recovery</th></tr>
+  <tr><td>Rate limit (RPM, ITPM, OTPM)</td><td>429 <code>rate_limit_error</code></td><td>message บอก limit ที่ชน, มี <code>retry-after</code></td><td>รอตาม <code>retry-after</code> (SDK ทำให้)</td></tr>
+  <tr><td>Acceleration limit</td><td>429 <code>rate_limit_error</code></td><td>เกิดหลัง usage พุ่งขึ้นเร็ว</td><td>ชั่วคราว backoff แล้ว retry</td></tr>
+  <tr><td>Monthly spend cap ของ usage tier</td><td>429 <code>rate_limit_error</code></td><td>ไม่มี <code>retry-after</code>, <code>error_code</code> = <code>enforced_spend_limit_reached</code></td><td>หยุด retry ขึ้น tier หรือรอ reset 00:00 UTC วันที่ 1 ของเดือนถัดไป</td></tr>
+  <tr><td>Spend limit ที่เราตั้งเอง (org/workspace)</td><td>400 <code>invalid_request_error</code></td><td>message ขึ้นต้นว่า "You have reached your specified API usage limits"</td><td>เพิ่มหรือเอา limit ออก</td></tr>
+  <tr><td>Claude Code workspace limit</td><td>429</td><td>มี <code>retry-after</code></td><td>รอตาม <code>retry-after</code></td></tr>
+</table></div>
+<ul>
+  <li><code>retry-after</code> คือทางลัดที่เร็วที่สุดในการแยก quota error ที่รอแล้วหาย กับที่รอแล้วไม่หาย</li>
+  <li>limit รายนาทีอาจถูกบังคับในช่วงเวลาที่สั้นกว่านั้น เช่น 60 RPM อาจถูกคุมเป็น 1 request/วินาที ยิงเป็นชุดพร้อมกันก็ชนได้แม้ค่าเฉลี่ยดูไม่เกิน</li>
+  <li>acceleration limit เกิดจาก usage ที่ <em>เพิ่มขึ้นแรงๆ</em> ไม่ใช่จาก rate ที่คงที่ ค่อยๆ ramp up จะช่วยได้</li>
+  <li>spend-cap 429 ใช้ type เดียวกับ rate limit (<code>rate_limit_error</code>) ต้องดูที่ <code>retry-after</code> ที่หายไปและ <code>error_code</code></li>
+</ul>
+<pre><code>def handle_429(e):
+    body = e.body or {}
+    code = body.get("error", {}).get("details", {}).get("error_code")
+    if code == "enforced_spend_limit_reached":
+        raise Escalate("ชน spend cap รอไปก็ไม่หาย", e.request_id)
+    wait = e.response.headers.get("retry-after")   # มี = รอแล้วผ่าน
+    ...</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"400 <code>invalid_request_error</code> ทุกตัวแปลว่า body ผิด ต้องแก้ body"</strong> ไม่เสมอ spend limit ที่เราตั้งเองก็ตอบ 400 ทั้งที่ body ถูกต้อง สิ่งที่ต้องทำคือปรับ limit</p>
+  <p><strong>"429 <code>rate_limit_error</code> ทุกตัว ปล่อย SDK retry ไปเรื่อยๆ เดี๋ยวก็หาย"</strong> ไม่ใช่ spend-cap 429 ไม่มี <code>retry-after</code> และ fail จนกว่าสิทธิ์จะกลับมา ต้องเช็ก <code>error_code</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>มี <code>retry-after</code> → รอ, ไม่มี + <code>enforced_spend_limit_reached</code> → หยุดแล้ว escalate, 400 "specified API usage limits" → ไปปรับ limit ของเราเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ response กับสิ่งที่ควรทำ:</p>
+  <ol>
+    <li>429 มี <code>retry-after: 20</code> และ message บอกว่าเกิน OTPM</li>
+    <li>429 ไม่มี <code>retry-after</code>, <code>error_code</code> = <code>enforced_spend_limit_reached</code></li>
+    <li>400 message ขึ้นต้น "You have reached your specified API usage limits"</li>
+    <li>500 <code>api_error</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → รอ 20 วินาทีแล้ว retry · 2 → หยุด retry ขึ้น tier หรือรอสิทธิ์กลับมา · 3 → เพิ่มหรือเอา spend limit ที่ตั้งเองออก · 4 → retry + backoff ถ้าไม่หายแจ้ง support พร้อม request ID</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>agent มี tool <code>query_inventory</code> ที่รันฝั่ง client วันหนึ่ง database ล่ม executor โยน exception โค้ดส่ง <code>tool_result</code> ที่มี <code>is_error: true</code> พร้อมข้อความ error กลับไป Claude ตอบผู้ใช้ว่า "ขออภัย ตอนนี้เช็กสต็อกไม่ได้ ระบบฐานข้อมูลอาจมีปัญหา" ต้นเหตุจริงอยู่ที่ไหน?</p>
+  <ol type="A">
+    <li>Claude ควร retry tool เองอัตโนมัติ เลยเป็นความผิดของโมเดล</li>
+    <li>Integration layer: executor fail ก่อนที่โมเดลจะได้คิดอะไร Claude ตอบสนองต่อสัญญาณ error ได้ถูกต้องแล้ว</li>
+    <li><code>is_error</code> ใช้ได้แค่ตอนชื่อ tool ผิด จึงใช้ผิดที่</li>
+    <li>ควรจูน prompt ไม่ให้ Claude พูดถึง error</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> การ retry tool เป็นหน้าที่ของ application, <code>is_error</code> เป็น flag สำหรับ failure ทั่วไป และการซ่อน error จะทำให้ปัญหาจริงไม่มีใครเห็น</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude API docs: Errors</li>
+  <li>Claude API docs: Rate limits</li>
+  <li>Anthropic Python / TypeScript SDK docs: retries, timeouts และ error handling</li>
+  <li>Claude API docs: Streaming Messages และ Message Batches</li>
+</ul>
+</section>

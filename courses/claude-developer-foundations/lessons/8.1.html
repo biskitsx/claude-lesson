@@ -1,0 +1,309 @@
+<section class="lesson" id="l-8-1">
+<h2>8.1 Defining Claude tools: schemas, descriptions และ tool set design</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/defining-claude-tools-schemas-descriptions-and-tool-set-design">CertSafari 8.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แยก tool ได้ 3 ประเภท: user-defined client tool, Anthropic-schema client tool และ server tool และบอกได้ว่าแอปเราต้องทำอะไรกับแต่ละแบบ</li>
+    <li>เทียบ client tool กับ server tool ได้: ใครรันโค้ด ใครขับ loop และอะไรถูกส่งกลับมา</li>
+    <li>เขียน tool definition ด้วย <code>name</code>, <code>description</code>, <code>input_schema</code> และใช้ <code>input_examples</code> กับ <code>strict</code> เป็น</li>
+    <li>เขียน description ที่พา Claude ไปเลือก tool ถูกตัว</li>
+    <li>ออกแบบ tool set ที่โตได้: consolidation, namespacing และ response ที่ high-signal</li>
+    <li>ตั้งค่า <code>tool_choice</code> และ server tool entry ได้ รวมถึงรู้ข้อจำกัดของการ force tool</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: tool use คือสัญญา</span>
+  <p>เราประกาศว่ามี operation อะไรบ้างและ input หน้าตาแบบไหน Claude เป็นคนตัดสินว่าจะเรียกเมื่อไหร่ แล้วส่ง request แบบมีโครงสร้างออกมา <strong>Claude ไม่เคยรันโค้ดเอง</strong> คนรันคือแอปของเรา หรือ server ของ Anthropic</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Tool รันที่ไหน ตัดสินว่าเราต้องสร้างอะไร</h3>
+<p>คำถามแรกก่อนเขียน tool คือ "โค้ดของ tool นี้รันที่ไหน" เพราะคำตอบจะบอกเลยว่าฝั่งเราต้องเขียนอะไรบ้าง แบ่งได้ 3 กลุ่ม:</p>
+<div class="table-wrap"><table>
+  <tr><th>กลุ่ม</th><th>ใช้เมื่อ</th><th>แอปเราต้องจัดการ</th></tr>
+  <tr><td><strong>User-defined client tool</strong></td><td>logic เฉพาะของเรา, internal API, ข้อมูล proprietary</td><td>เขียน schema เอง, รันโค้ดเอง, ส่ง <code>tool_result</code> กลับ</td></tr>
+  <tr><td><strong>Anthropic-schema client tool</strong> (memory, bash, text_editor, computer, browser)</td><td>งานทั่วไปที่ Anthropic มี schema มาตรฐานให้แล้ว</td><td>รันโค้ดเองและส่ง <code>tool_result</code> กลับ แต่ไม่ต้องคิด schema</td></tr>
+  <tr><td><strong>Server-executed tool</strong> (web_search, web_fetch, code_execution, tool_search)</td><td>อยากได้ความสามารถพวกนี้โดยไม่ต้องเขียน handler</td><td>แค่เปิดใช้ใน request ไม่ต้องสร้าง <code>tool_result</code></td></tr>
+</table></div>
+<p>ทำไมควรใช้ schema ของ Anthropic ถ้ามีให้? เพราะ Claude ถูก train มากับ trajectory ที่ใช้ signature พวกนี้ เลยเรียกได้แม่นกว่า และ recover จาก error ได้ดีกว่า schema ที่เราคิดขึ้นเอง</p>
+
+<h3>Client tool: เราเป็นคนขับ loop</h3>
+<p>Claude ตอบกลับมาด้วย <code>stop_reason: "tool_use"</code> พร้อม <code>tool_use</code> block โค้ดเรารัน tool แล้วส่ง <code>tool_result</code> block กลับ วนแบบนี้ไปเรื่อยๆ ตราบใดที่ <code>stop_reason</code> ยังเป็น <code>tool_use</code> ถ้า tool พังให้ส่งผลกลับพร้อม <code>is_error: true</code></p>
+<pre><code>while resp.stop_reason == "tool_use":
+    results = []
+    for block in resp.content:
+        if block.type == "tool_use":
+            try:
+                out = run_tool(block.name, block.input)   # โค้ดเรารันเอง
+                results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+            except Exception as e:
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": f"ล้มเหลว: {e}", "is_error": True})
+    messages += [{"role": "assistant", "content": resp.content},
+                 {"role": "user", "content": results}]
+    resp = client.messages.create(model=MODEL, tools=TOOLS, messages=messages, max_tokens=1024)</code></pre>
+
+<h3>Server tool: Anthropic ขับ loop ให้</h3>
+<p>ใน response จะเห็น <code>server_tool_use</code> block (และผลของมัน) อยู่แล้ว เราไม่ต้องสร้าง <code>tool_result</code> และไม่ต้องจัดการ <code>is_error</code> ยกเว้น 2 กรณีพิเศษ:</p>
+<ul>
+  <li><strong><code>stop_reason: "pause_turn"</code></strong> แปลว่า loop ฝั่ง server ชน iteration limit ให้ส่ง conversation กลับไปใหม่ โดยรวม response ที่ pause ไว้ และใช้ tools ชุดเดิม เพื่อให้ทำต่อ</li>
+  <li><strong>Mixed turn</strong> ถ้า Claude เรียก server tool กับ client tool ใน parallel group เดียวกัน server tool จะยังไม่มีผล ให้เราส่งแค่ <code>tool_result</code> ของ client tool กลับไป โดยใช้ tools array เดิม แล้ว API จะไปรัน server tool ที่ค้างไว้ให้เอง</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Server tool ก็ต้องส่ง tool_result และจัดการ is_error เหมือน client tool"</strong> ไม่ใช่ งานนั้นมีแค่ client tool ส่วน server tool มีแค่กรณี <code>pause_turn</code> กับ mixed turn ที่ต้องทำอะไรเพิ่ม</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Schema ใครเขียนไม่สำคัญเท่า "ใครรัน" ถ้าเรารัน (client tool) เราต้องวน loop และส่ง tool_result ถ้า Anthropic รัน (server tool) เราแค่เปิดใช้ แล้วระวัง pause_turn กับ mixed turn</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Response หนึ่งมี <code>server_tool_use</code> ของ web_search ที่ยังไม่มีผล กับ <code>tool_use</code> ของ <code>lookup_order</code> (client tool ของเรา) ในรอบเดียวกัน ควรทำยังไง?</p>
+  <ol type="A">
+    <li>สร้าง tool_result ปลอมให้ web_search ก่อน แล้วค่อยส่งพร้อมผล lookup_order</li>
+    <li>รัน lookup_order แล้วส่งเฉพาะ tool_result ของมันกลับไป โดยใช้ tools array ชุดเดิม</li>
+    <li>ส่ง conversation เดิมกลับไปเฉยๆ แบบเดียวกับ pause_turn โดยยังไม่รัน lookup_order</li>
+    <li>ตัด web_search ออกจาก tools แล้วค่อยส่งผล lookup_order</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> นี่คือ mixed turn เราตอบเฉพาะส่วนที่เป็นของเรา (client tool) และต้องคง tools ชุดเดิมไว้ API จะรัน server tool ที่ค้างอยู่เอง ห้ามสร้างผลให้ server tool</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>แอปของคุณรัน shell command อยู่แล้ว จะใช้ custom tool ชื่อ <code>run_shell</code> หรือใช้ bash tool ของ Anthropic ก็ได้ ข้อไหนคือเหตุผลที่ถูกที่สุดที่ควรใช้ของ Anthropic?</p>
+  <ol type="A">
+    <li>Anthropic จะรัน command ให้บน server ไม่ต้องรันเอง</li>
+    <li>ไม่ต้องส่ง tool_result กลับ</li>
+    <li>Claude ถูก train มากับ schema นี้ จึงเรียกได้แม่นกว่าและ recover จาก error ได้ดีกว่า</li>
+    <li>bash tool ไม่กิน token ใน context</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> bash ยังเป็น client tool แอปเราต้องรันและส่ง tool_result เองเหมือนเดิม ข้อดีอยู่ที่ schema ที่ Claude คุ้นเคย</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Anatomy ของ tool definition</h3>
+<p>Client tool ใส่ไว้ใน parameter <code>tools</code> ระดับบนสุดของ request แต่ละตัวมี field หลัก 3 ตัว:</p>
+<ul>
+  <li><code>name</code> ต้องตรง regex <code>^[a-zA-Z0-9_-]{1,128}$</code></li>
+  <li><code>description</code> เป็น plaintext ตรงนี้สำคัญมาก เพราะ API เอา tool definition ทั้งหมดไปพับรวมเป็น system prompt พิเศษ ทุกตัวอักษรที่เขียนจึงกลายเป็น context ให้ Claude อ่าน</li>
+  <li><code>input_schema</code> เป็น JSON Schema object</li>
+</ul>
+<pre><code>{
+  "name": "book_meeting_room",
+  "description": "จองห้องประชุมในออฟฟิศกรุงเทพฯ ... (ดูหัวข้อถัดไปว่าควรเขียนยาวแค่ไหน)",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "room":   {"type": "string", "description": "รหัสห้อง เช่น BKK-12A"},
+      "start":  {"type": "string", "description": "เวลาเริ่ม ISO 8601"},
+      "seats":  {"type": "integer", "description": "จำนวนคน"},
+      "layout": {"type": "string", "enum": ["boardroom", "classroom"]}
+    },
+    "required": ["room", "start", "seats"]
+  },
+  "input_examples": [
+    {"room": "BKK-12A", "start": "2026-11-02T14:00:00+07:00", "seats": 6}
+  ],
+  "strict": true
+}</code></pre>
+
+<h3>Field เสริม: <code>input_examples</code> และ <code>strict</code></h3>
+<ul>
+  <li><strong><code>input_examples</code></strong> คือตัวอย่าง input ช่วยได้มากกับ object ซ้อนหลายชั้นหรือ parameter ที่ format จุกจิก (เช่น วันที่) แต่มีเงื่อนไข: ทุกตัวอย่างต้อง validate ผ่าน <code>input_schema</code> ไม่งั้นได้ <strong>400</strong>, ตัวอย่างกิน prompt token, และ<strong>ใช้ไม่ได้</strong>กับ server tool และ toolset ของ computer use / browser use</li>
+  <li><strong><code>strict: true</code></strong> เปิด grammar-constrained sampling ทำให้ input ที่ Claude สร้าง<strong>ตรง schema แน่นอน</strong> เช่น ได้ integer <code>2</code> ไม่ใช่ string <code>"two"</code></li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>name + description + input_schema คือขั้นต่ำ examples ช่วย "เพิ่มโอกาส" ให้เรียกถูก แต่ strict เป็นตัวเดียวที่ "การันตี" ว่า type ตรง schema</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>tool จองโต๊ะร้านอาหารมี field <code>party_size</code> เป็น integer แต่บางครั้ง Claude ส่งมาเป็น <code>"สี่"</code> อยากให้ได้ integer ทุกครั้งแบบรับประกัน ต้องแก้ตรงไหน?</p>
+  <ol type="A">
+    <li>เพิ่ม input_examples ที่ party_size เป็นตัวเลข</li>
+    <li>เขียน description ให้ชัดว่าต้องเป็นตัวเลข</li>
+    <li>ตั้ง <code>strict: true</code></li>
+    <li>ย้าย party_size ไปไว้ใน required</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> examples กับ description แค่ทำให้โอกาสดีขึ้น ส่วน strict ใช้ grammar-constrained sampling บังคับให้ตรง schema</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เขียน description ให้ Claude เลือก tool ถูก</h3>
+<p>ลองนึกเคสนี้: มี tool ดูราคาหุ้น แล้ว Claude ดันเรียกกับหุ้นที่ระบบไม่รองรับซ้ำๆ จะแก้ที่ไหน? คำตอบคือ <strong>description</strong> ไม่ใช่ strict mode และไม่ใช่การเพิ่ม required parameter</p>
+<p>Claude เลือก tool จากสองอย่าง: สิ่งที่ user ขอ กับ description ของแต่ละ tool Anthropic เองบอกว่า description ที่ละเอียดคือ<strong>ปัจจัยที่สำคัญที่สุด</strong>ต่อ performance ของ tool use</p>
+<p>Description ที่ดีควรตอบ:</p>
+<ul>
+  <li>tool นี้ทำอะไร</li>
+  <li>ควรใช้เมื่อไหร่ และ<strong>ไม่ควร</strong>ใช้เมื่อไหร่</li>
+  <li>แต่ละ parameter หมายถึงอะไร</li>
+  <li>ข้อจำกัด เช่น อะไรที่ tool นี้ไม่คืนให้</li>
+</ul>
+<p>ความยาวขั้นต่ำประมาณ <strong>3–4 ประโยคต่อ tool</strong> ถ้า tool ซับซ้อนก็เขียนยาวกว่านั้น</p>
+<pre><code>{
+  "name": "get_fx_rate",
+  "description": "คืนอัตราแลกเปลี่ยนล่าสุดระหว่างสกุลเงินคู่หนึ่ง โดยใช้รหัส ISO 4217 เช่น USD, THB, JPY. รองรับเฉพาะสกุลเงินหลัก 30 สกุลเท่านั้น ถ้าเป็นคริปโตห้ามเรียก. ใช้เมื่อ user ถามอัตราปัจจุบัน ไม่ใช่อัตราย้อนหลังหรือการพยากรณ์. คืนค่าเป็นตัวเลขอย่างเดียว ไม่มีกราฟหรือข่าว.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "base":  {"type": "string", "description": "สกุลเงินต้นทาง ISO 4217"},
+      "quote": {"type": "string", "description": "สกุลเงินปลายทาง ISO 4217"}
+    },
+    "required": ["base", "quote"]
+  }
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Claude เลือก tool ผิด เปิด strict หรือเพิ่ม parameter ก็หาย"</strong> ไม่ใช่ strict คุมแค่รูปร่างของ input ไม่ได้ช่วยเรื่องการเลือก tool ให้ไปเขียน description ใหม่</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เลือกผิดตัว = แก้ description ส่ง type ผิด = เปิด strict สองปัญหานี้คนละเรื่องกัน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ใน flow ปิดเคสลูกค้า คุณต้องการให้ Claude เรียก <code>close_ticket</code> ทุกครั้งแบบไม่มีข้อยกเว้น (บนโมเดลที่รองรับการ force tool) ควรตั้ง <code>tool_choice</code> แบบไหน?</p>
+  <ol type="A">
+    <li><code>{"type": "tool", "name": "close_ticket"}</code></li>
+    <li><code>{"type": "any"}</code></li>
+    <li><code>{"type": "auto"}</code></li>
+    <li><code>{"type": "none"}</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> <code>any</code> บังคับแค่ว่าต้องใช้สัก tool อาจเป็นตัวอื่นได้ <code>auto</code> ให้ Claude เลือกเอง ส่วน <code>none</code> ห้ามใช้ tool เลย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ข้อไหน<strong>ไม่จำเป็น</strong>ต้องใส่ใน description ของ tool?</p>
+  <ol type="A">
+    <li>เคสที่ไม่ควรใช้ tool นี้</li>
+    <li>ความหมายของแต่ละ parameter</li>
+    <li>ว่า tool นี้เขียนด้วย Go และ deploy บน Kubernetes</li>
+    <li>ข้อมูลที่ tool นี้ไม่คืนให้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Claude เห็นแค่ schema กับผลลัพธ์ implementation ข้างหลังไม่ช่วยอะไรในการตัดสินใจ แถมกิน token เปล่าๆ</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. สร้าง tool set ที่ scale ได้</h3>
+<p>พอ tool เริ่มเยอะ ปัญหาไม่ได้อยู่ที่ tool ตัวใดตัวหนึ่ง แต่อยู่ที่ "ทั้งชุด" มี 3 หลักให้จำ:</p>
+<ul>
+  <li><strong>Consolidate</strong> รวม tool ที่ทำงานเรื่องเดียวกันเป็นตัวเดียวที่มี parameter <code>action</code> เช่น แทนที่จะมี create / review / merge แยก 3 ตัว ก็มี tool PR ตัวเดียว tool น้อยลง = ความกำกวมตอนเลือกน้อยลง</li>
+  <li><strong>Namespace</strong> ใส่ prefix ชื่อ service เช่น <code>github_</code>, <code>slack_</code> ช่วยมากโดยเฉพาะเมื่อใช้ tool search</li>
+  <li><strong>คืนผลที่ high-signal</strong> ส่ง stable identifier (slug, UUID) และเฉพาะ field ที่ขั้นต่อไปต้องใช้ ผลที่บวมเต็มไปด้วย field ภายในคือการเผา context ทิ้ง</li>
+</ul>
+<pre><code>// แทน create_pr / review_pr / merge_pr
+{
+  "name": "github_pull_request",
+  "description": "จัดการ pull request ใน repo ... action=create เปิด PR ใหม่, review ส่ง review, merge รวม PR ...",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": {"type": "string", "enum": ["create", "review", "merge"]},
+      "pr_id":  {"type": "string", "description": "ไม่ต้องใส่ถ้า action=create"}
+    },
+    "required": ["action"]
+  }
+}</code></pre>
+
+<h3>เมื่อไหร่ควรเป็น tool เมื่อไหร่ไม่ควร</h3>
+<div class="table-wrap"><table>
+  <tr><th>ควรเป็น tool</th><th>ไม่ต้องเป็น tool</th></tr>
+  <tr><td>มี side effect (ส่งเมล, เขียน DB)</td><td>สรุปความ</td></tr>
+  <tr><td>ต้องการข้อมูลสด/ข้อมูลภายนอก</td><td>Q&amp;A ครั้งเดียว</td></tr>
+  <tr><td>ต้องการ output รูปร่างตายตัว</td><td>งานง่ายๆ ที่โมเดลทำได้เอง</td></tr>
+  <tr><td>เรียกเข้าระบบที่มีอยู่แล้ว</td><td></td></tr>
+</table></div>
+<p><strong>Rule of thumb:</strong> ถ้าคุณกำลังเขียน regex เพื่อแกะ "การตัดสินใจ" ออกจากข้อความที่โมเดลตอบ การตัดสินใจนั้นควรเป็น tool call ตั้งแต่แรก</p>
+
+<h3>เมื่อ tool ล้มเหลว</h3>
+<p>อย่าเงียบ และอย่าส่ง error body กลับไปเหมือนเป็นข้อมูลปกติ ให้ส่ง <code>tool_result</code> ที่มี <code>tool_use_id</code> ตรงกัน, content อธิบายว่าพังเพราะอะไรและแนะนำให้ retry ได้ไหม, และ <code>is_error: true</code></p>
+<pre><code>{
+  "type": "tool_result",
+  "tool_use_id": "toolu_01abc",
+  "content": "Inventory API ตอบ 504 timeout ลองใหม่ได้ในอีกสักครู่",
+  "is_error": true
+}</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tool น้อยแต่ชัด ชื่อมี namespace ผลลัพธ์กระชับ และ error ต้องติดธง is_error เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>tool <code>check_stock</code> เรียก inventory API แล้วได้ HTTP 502 อยากให้ Claude รู้ว่ามันพัง และไม่เอา HTML error page ไปตีความเป็นข้อมูลสต็อก ควรส่งอะไรกลับ?</p>
+  <ol type="A">
+    <li>tool_result ที่มี tool_use_id ตรงกัน, content บอกว่า API ล่มและลองใหม่ได้ และ <code>is_error: true</code></li>
+    <li>ส่ง HTML error page ทั้งหน้ากลับไปใน content โดยไม่ใส่ is_error</li>
+    <li>ไม่ส่ง tool_result เลย ข้ามไปเรียก API รอบหน้า</li>
+    <li>ส่ง content ว่า "สต็อก = 0" และ <code>is_error: false</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ต้องมี tool_result ทุก tool_use และต้องติดธง error ให้ชัด ข้อ D อันตรายที่สุดเพราะโกหกว่าเป็นข้อมูลจริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ปัญหากับวิธีแก้:</p>
+  <ol>
+    <li>มี tool จัดการ invoice แยก 8 ตัวตาม action แล้ว Claude เลือกผิดบ่อย</li>
+    <li>tool ของ Jira กับ Notion ชื่อคล้ายกันจนสับสน</li>
+    <li>ผลของ tool มี field ภายในเป็นร้อยตัว</li>
+    <li>โค้ดใช้ regex หาคำว่า "APPROVE" ในคำตอบของ Claude</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → consolidate เป็น tool เดียวที่มี <code>action</code> · 2 → namespace ด้วย prefix ชื่อ service · 3 → คืนเฉพาะ field high-signal และ stable ID · 4 → ทำการตัดสินใจนั้นให้เป็น tool call</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ตั้งค่า request: <code>tool_choice</code> และ server tool</h3>
+<p>ค่า default ของ <code>tool_choice</code> คือ <code>auto</code> (เมื่อมี tools) ถ้าอยากให้ Claude ใช้ tool บ่อยขึ้น ลองเขียนใน prompt เช่น "ใช้ tool ตรวจสอบก่อนตอบ" ก็ช่วยได้ ส่วนถ้าอยากให้เรียกได้<strong>ทีละไม่เกิน 1 tool ต่อ turn</strong> ให้ตั้ง <code>disable_parallel_tool_use: true</code></p>
+<div class="table-wrap"><table>
+  <tr><th>ค่า</th><th>ความหมาย</th></tr>
+  <tr><td><code>auto</code></td><td>Claude ตัดสินเอง (default เมื่อส่ง tools มา)</td></tr>
+  <tr><td><code>any</code></td><td>ต้องใช้ tool สักตัวใน list แต่ไม่ระบุตัว</td></tr>
+  <tr><td><code>tool</code></td><td>ต้องใช้ tool ที่ระบุชื่อ</td></tr>
+  <tr><td><code>none</code></td><td>ห้ามใช้ tool (default เมื่อไม่ได้ส่ง tools)</td></tr>
+</table></div>
+
+<h3>ราคาของการ force tool</h3>
+<ul>
+  <li>เมื่อใช้ <code>any</code> หรือ <code>tool</code> API จะ prefill assistant turn ให้ ผลคือ Claude <strong>ไม่เขียนคำอธิบายใดๆ ก่อน</strong> tool_use block</li>
+  <li>Manual extended thinking <strong>ไม่รับ</strong> <code>any</code> และ <code>tool</code></li>
+  <li>Claude Opus 5.5, Sonnet 5.5, Fable 5.1 และ Mythos 5.1 จะตอบ <strong>400</strong> ถ้าใช้ <code>any</code> หรือ <code>tool</code> ให้ใช้ <code>auto</code> คู่กับ strict tool use หรือใช้ structured outputs แทน</li>
+</ul>
+
+<h3>Server tool และ MCP connector</h3>
+<p>เปิด server tool ด้วย entry เดียว มี <code>type</code> ที่มีวันที่เป็น version และ <code>name</code> ไม่ต้องเขียน handler ใดๆ</p>
+<pre><code>resp = client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=1024,
+    tools=[{"type": "web_search_20250305", "name": "web_search"}],  # type มีวันที่เป็น version
+    messages=[{"role": "user", "content": "ข่าวล่าสุดเรื่อง ..."}],
+)</code></pre>
+<p>ส่วน remote MCP server ต่อเข้ากับ Messages API ได้ตรงๆ ผ่าน <strong>MCP connector</strong> ไม่ต้องมี MCP client แยกต่างหาก</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"<code>tool_choice: tool</code> ใช้ได้ทุกที่"</strong> ไม่ใช่ บางโมเดลและ manual extended thinking จะตอบ 400</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>auto คือ default, any/tool คือการบังคับที่แลกกับการไม่มีคำอธิบายและใช้ไม่ได้บนบางโมเดล server tool เปิดด้วย entry เดียวที่มี type แบบมีวันที่</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ส่ง request ไป Sonnet 5.5 พร้อม <code>tool_choice: {"type": "tool", "name": "lookup_invoice"}</code> จะเกิดอะไรขึ้น และควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>ทำงานปกติ Claude เรียก lookup_invoice ทันที</li>
+    <li>ได้ 400 ให้เปลี่ยนเป็น <code>auto</code> คู่กับ strict tool use (หรือ structured outputs)</li>
+    <li>API เปลี่ยนเป็น <code>any</code> ให้อัตโนมัติ</li>
+    <li>Claude ไม่สนใจ tool_choice แล้วตอบเป็นข้อความ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> Sonnet 5.5 อยู่ในกลุ่มที่ไม่รับ <code>any</code>/<code>tool</code> ทางออกคือ auto + strict</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Platform docs: How tool use works</li>
+  <li>Claude Platform docs: Server tools</li>
+  <li>Claude Platform docs: Define tools</li>
+  <li>Claude Platform docs: Strict tool use</li>
+  <li>Claude Platform docs: Tool use overview</li>
+  <li>Claude Platform docs: Handle tool calls</li>
+</ul>
+</section>

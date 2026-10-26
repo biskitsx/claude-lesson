@@ -1,0 +1,213 @@
+<section class="lesson" id="l-6-1">
+<h2>6.1 Context window budget และ tool output pruning</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/context-window-budget-and-tool-output-pruning">CertSafari 6.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ไล่ได้ครบว่าใน request หนึ่งของ Claude API มีอะไรบ้างที่กิน context window รวมถึง cached prefix และ thinking</li>
+    <li>อธิบายได้ว่าทำไม <strong>context rot</strong> ทำให้การ "คัดของเข้า window" สำคัญพอๆ กับขนาดของ window</li>
+    <li>ตั้งค่า tool result clearing และ thinking block clearing ผ่าน context editing ได้ และบอกได้ว่าแต่ละแบบกระทบ prompt caching ยังไง</li>
+    <li>เลือกระหว่าง tool search, programmatic tool calling, prompt caching และ context editing ได้ตามต้นเหตุที่ทำให้ context บวม</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: context rot</span>
+  <p>ยิ่ง context window เต็ม ความแม่นและความสามารถในการดึงข้อมูลกลับมาใช้ (recall) ของโมเดลก็ยิ่งตก เพราะฉะนั้นอย่าคิดว่า "ที่ยังเหลือ ก็ยัดเข้าไปเถอะ" ให้คิดแบบภัณฑารักษ์ คือเลือกเฉพาะของที่ควรอยู่ใน window จริงๆ (ใน exam guide จะเรียกอาการนี้ว่า <strong>context drift</strong>)</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. อะไรบ้างที่กินพื้นที่ใน context window</h3>
+<p>มอง context window เป็น working memory ของ Claude สำหรับ request เดียว และอย่าลืมว่า <strong>คำตอบที่โมเดลกำลังเขียนก็ใช้พื้นที่ในนั้นด้วย</strong></p>
+<p>ใน conversation ปกติผ่าน API จะไม่มีอะไรถูกทิ้งเองอัตโนมัติ ทุก turn ถูกเก็บไว้ครบ แปลว่าทุก request เราส่ง history ทั้งก้อนกลับไปใหม่หมด คุยยิ่งยาว request ยิ่งอ้วน</p>
+<ul>
+  <li>โมเดล 1M token: Claude Opus 5.5, Claude Sonnet 5.5, Claude Fable 5.1</li>
+  <li>โมเดล 200k token: เช่น Claude Sonnet 4.5</li>
+  <li>อยากรู้ว่า request ที่ส่งไปแล้วใช้ไปเท่าไหร่ ให้ดู field <code>usage</code> ใน response ส่วนถ้าอยากประมาณก่อนส่ง ใช้ token counting API</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>ส่วนประกอบ</th><th>นับใน window ไหม</th><th>หมายเหตุ</th></tr>
+  <tr><td>System prompt และ tool definitions</td><td>นับ</td><td>ถูกส่งไปทุก request</td></tr>
+  <tr><td>Tool results, รูปภาพ, เอกสารใน messages</td><td>นับ</td><td>สะสมเพิ่มขึ้นเรื่อยๆ ทุก turn</td></tr>
+  <tr><td>Output ของ turn ปัจจุบัน รวม extended thinking</td><td>นับ</td><td>thinking tokens เป็นส่วนหนึ่งของ <code>max_tokens</code></td></tr>
+  <tr><td>Thinking blocks ของ turn ก่อนๆ</td><td>ขึ้นกับโมเดล</td><td>ถูกเก็บไว้บน Opus 4.5+, Sonnet 4.6+, Fable และ Mythos แต่ถูกตัดทิ้งบน Opus/Sonnet รุ่นก่อนหน้า และ Haiku ทุกรุ่น</td></tr>
+  <tr><td>Cached prompt prefix</td><td>นับ</td><td>ทั้ง <code>cache_read_input_tokens</code> และ <code>cache_creation_input_tokens</code> นับเต็ม</td></tr>
+</table></div>
+
+<h3>Context awareness: โมเดลรู้ตัวว่าเหลืองบเท่าไหร่</h3>
+<ul>
+  <li><strong>Claude Sonnet 5, Sonnet 4.6, Sonnet 4.5 และ Haiku 4.5</strong> มี context awareness ตัว API จะแทรก tag <code>&lt;budget:token_budget&gt;</code> เข้าไปใน system prompt และส่ง usage <code>system_warning</code> หลัง tool call แต่ละครั้ง ให้โมเดลคุมจังหวะเองได้ เราไม่ต้องส่งของพวกนี้เอง</li>
+  <li><strong>Claude Opus 4.7+, Claude Sonnet 5.5, Fable และ Mythos</strong> ไม่ได้ของพวกนี้ ถ้าอยากกำหนดงบ ให้ใช้ฟีเจอร์ beta <strong>task budgets</strong> ตั้ง budget แบบ explicit</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด prompt caching แล้ว prefix ใหญ่ๆ จะกินพื้นที่ window น้อยลง"</strong> ไม่จริง cached tokens ยังนับเต็มจำนวนใน window caching แค่ทำให้ <em>ราคา</em> ถูกลง ไม่ได้ทำให้ <em>ขนาด</em> เล็กลง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ทุกอย่างที่ส่งไป (system, tools, history, cache) บวกกับสิ่งที่โมเดลกำลังเขียน (รวม thinking) อยู่ใน window เดียวกันหมด และ API ไม่ตัดอะไรทิ้งให้เอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมหนึ่งมี system prompt + tool definitions รวม 60k token และ cache ไว้ ทุก request หลังจากนั้นเป็น cache hit หมด ถามว่า prefix 60k นี้กิน context window ไปเท่าไหร่ต่อ request?</p>
+  <ol type="A">
+    <li>ไม่กินเลย เพราะอ่านจาก cache</li>
+    <li>ประมาณ 10% ตามอัตราลดราคาของ cache read</li>
+    <li>ครบ 60k</li>
+    <li>เฉพาะตอนที่เป็น cache write ครั้งแรก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> caching เปลี่ยนแค่ต้นทุน ไม่ได้เปลี่ยนว่า token พวกนั้นยังนั่งอยู่ใน window หรือไม่</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ตัด tool output เก่าทิ้งด้วย context editing</h3>
+<p>ใน agentic workflow ของที่บวมเร็วที่สุดมักเป็น tool results เช่น ผลอ่านไฟล์เมื่อ 20 รอบก่อน หรือผล search ที่ใช้เสร็จไปแล้ว มันยังนั่งกินทั้งพื้นที่และ "ความสนใจ" ของโมเดลอยู่</p>
+<p><strong>Context editing</strong> คือการให้ API ลบเนื้อหาบางส่วนออกจาก history ตามกฎที่เราตั้ง แนวคิดเบื้องหลังคือ context มีจำกัด ใส่เพิ่มแล้วได้ผลตอบแทนลดลงเรื่อยๆ และของที่ไม่เกี่ยวยังทำให้โฟกัสเสียด้วย</p>
+<ul>
+  <li><strong>เปิดใช้:</strong> ใส่ beta header <code>context-management-2025-06-27</code> และส่ง object <code>context_management</code> ที่มี list <code>edits</code></li>
+  <li><strong>ทำที่ฝั่ง server</strong> ก่อน prompt ไปถึง Claude ฝั่ง client ยังถือ history เต็มไม่ถูกแก้ ไม่ต้อง sync อะไร</li>
+</ul>
+
+<h3>พฤติกรรมเมื่อ trigger ทำงาน</h3>
+<ol class="steps">
+  <li>พอ input เกินเกณฑ์ <code>trigger</code> ระบบเริ่มเคลียร์ tool results <strong>จากเก่าสุดไปใหม่</strong></li>
+  <li>result ที่ถูกเคลียร์จะถูกแทนด้วยข้อความ placeholder บอก Claude ว่าตรงนี้ถูกลบไปแล้ว</li>
+  <li>โดย default ลบแค่ <em>result</em> ส่วน tool call (ว่า Claude เรียก tool อะไร) ยังเห็นอยู่ ถ้าตั้ง <code>clear_tool_inputs: true</code> จะลบ parameter ของ call ด้วย</li>
+</ol>
+
+<pre><code># เปิด tool result clearing แบบปรับค่าเอง
+resp = client.beta.messages.create(
+    model="claude-sonnet-5-5",
+    max_tokens=4096,
+    betas=["context-management-2025-06-27"],
+    messages=history,                      # client ส่ง history เต็มเหมือนเดิม
+    tools=TOOLS,
+    context_management={
+        "edits": [{
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": 40000},   # เริ่มเคลียร์เมื่อ input เกิน 40k
+            "keep": {"type": "tool_uses", "value": 4},             # เก็บคู่ use/result ล่าสุด 4 คู่
+            "clear_at_least": {"type": "input_tokens", "value": 8000},  # ถ้าเคลียร์ได้ไม่ถึง 8k ก็ไม่ทำ
+            "exclude_tools": ["web_search"],                       # ผลของ tool นี้ห้ามลบ
+        }]
+    },
+)</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>Option ของ <code>clear_tool_uses_20250919</code></th><th>Default</th><th>คุมอะไร</th></tr>
+  <tr><td><code>trigger</code></td><td>100,000 input tokens</td><td>เริ่มเคลียร์เมื่อไหร่ (นับแบบ <code>input_tokens</code> หรือ <code>tool_uses</code>)</td></tr>
+  <tr><td><code>keep</code></td><td>3 tool uses</td><td>เก็บคู่ use/result ล่าสุดไว้กี่คู่</td></tr>
+  <tr><td><code>clear_at_least</code></td><td>ไม่มี</td><td>ต้องเคลียร์ได้อย่างน้อยกี่ token ไม่ถึงก็ข้ามไป</td></tr>
+  <tr><td><code>exclude_tools</code></td><td>ไม่มี</td><td>tool ที่ห้ามลบทั้ง use และ result</td></tr>
+  <tr><td><code>clear_tool_inputs</code></td><td>false</td><td>ลบ parameter ของ tool call ด้วยหรือไม่</td></tr>
+</table></div>
+
+<h3>ทำไมต้องมี <code>clear_at_least</code>: เรื่องของ cache</h3>
+<p>การลบเนื้อหากลาง history ทำให้ cached prefix <strong>invalid ตั้งแต่จุดที่ลบเป็นต้นไป</strong> request ถัดไปต้องจ่าย cache write ใหม่ ถ้าลบทีละนิด (ไม่กี่ร้อย token) ก็เท่ากับจ่าย cache write บ่อยๆ แลกกับพื้นที่นิดเดียว <code>clear_at_least</code> เลยเป็นตัวกันว่า "ถ้าได้ไม่คุ้ม ไม่ต้องลบ" ถ้าเคลียร์ไม่ถึงขั้นต่ำ edit นั้นจะไม่ถูกใช้</p>
+
+<h3>Thinking block clearing</h3>
+<ul>
+  <li>Strategy คู่กันคือ <code>clear_thinking_20251015</code> ใช้ <code>keep</code> เช่น <code>{"type": "thinking_turns", "value": 2}</code> หรือ <code>"all"</code></li>
+  <li>เก็บ thinking turns ไว้ = cache ยังอยู่ · ลบทิ้ง = ได้พื้นที่คืน แต่ cache invalid ตั้งแต่จุดนั้น</li>
+  <li>ใส่ทั้งสอง strategy ใน array <code>edits</code> เดียวกันได้</li>
+</ul>
+<pre><code>"context_management": {
+  "edits": [
+    {"type": "clear_thinking_20251015", "keep": {"type": "thinking_turns", "value": 2}},
+    {"type": "clear_tool_uses_20250919"}   // ใช้ค่า default ทั้งหมด
+  ]
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด context editing แล้ว client ต้องลบ result ที่ถูกเคลียร์ออกจาก history ของตัวเองด้วย"</strong> ไม่ต้อง การแก้เกิดฝั่ง server ทั้งหมด client ถือ history เต็มต่อไปได้เลย</p>
+  <p><strong>"Tool result clearing ไม่กระทบ cache เพราะแค่ลบ token ออก"</strong> ผิด การลบทำให้ cached prefix พังตั้งแต่จุดที่ลบ ทุกครั้งที่เคลียร์ต้องจ่าย cache write</p>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ตรงที่ tool result ถูกเคลียร์ไปแล้ว Claude จะเห็นอะไร?</p>
+  <details><summary>ดูเฉลย</summary><p>เห็นข้อความ placeholder ที่บอกว่า result ตรงนี้ถูกลบออกแล้ว ส่วน tool call เดิมยังเห็นอยู่ (ถ้าไม่ได้ตั้ง <code>clear_tool_inputs</code>)</p></details>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Context editing = server ลบ tool result เก่าสุดก่อน ใส่ placeholder แทน client ไม่ต้องทำอะไร แต่ทุกการลบคือ cache write ใหม่ เลยต้องตั้ง <code>clear_at_least</code> ให้คุ้ม</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>อยากเปิด tool result clearing แบบค่า default ทั้งหมด ใน <code>edits</code> ต้องใส่ <code>type</code> เป็นอะไร?</p>
+  <ol type="A">
+    <li><code>clear_thinking_20251015</code></li>
+    <li><code>clear_tool_uses_20250919</code></li>
+    <li><code>compact-2026-09-04</code></li>
+    <li><code>context-management-2025-06-27</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A ใช้เคลียร์ thinking, C เป็น beta header ของ compaction ไม่ใช่ strategy ของ context editing และ D เป็น beta header ที่ต้องใส่เพื่อเปิดฟีเจอร์ ไม่ใช่ชื่อ strategy</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>agent ตัวหนึ่งเปิด tool result clearing ไว้ แล้วพบว่าการเคลียร์เกิดแทบทุก turn แต่ละครั้งได้คืนแค่ 200–400 token และ cache hit rate ตกฮวบ ควรแก้ที่ไหน?</p>
+  <ol type="A">
+    <li>ลด <code>trigger</code> ให้เคลียร์เร็วขึ้นอีก</li>
+    <li>ตั้ง <code>clear_tool_inputs: true</code></li>
+    <li>ตั้ง <code>clear_at_least</code> ให้ข้ามการเคลียร์ถ้าได้พื้นที่คืนไม่คุ้มกับการทำ cache พัง</li>
+    <li>เปลี่ยนไปใช้ thinking clearing แทน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ปัญหาคือเคลียร์ถี่แต่ได้น้อย <code>clear_at_least</code> ถูกออกแบบมาแก้ตรงนี้ ข้ออื่นไม่ได้แตะต้นเหตุ (A ยิ่งทำให้ถี่ขึ้น)</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เลือกวิธีแก้ให้ตรงกับต้นเหตุที่ทำให้บวม</h3>
+<p>Context editing เป็นแค่ 1 ใน 4 เครื่องมือ แต่ละตัวทำงานคนละจุดใน pipeline ก่อนเลือก ให้ถามก่อนว่า <strong>ที่บวมมาจาก tool definitions หรือจาก tool results ที่สะสม</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>เครื่องมือ</th><th>ทำอะไร</th><th>แก้ปัญหาไหน</th></tr>
+  <tr><td><strong>Tool search</strong></td><td>ไม่โหลด tool definitions เข้ามาจนกว่า Claude จะขอ ใช้ tool <code>tool_search</code> ตัวเดียวแทน schema หลายสิบอัน แลกกับ turn เพิ่มหนึ่งรอบ</td><td>definitions เยอะเกินตั้งแต่ต้น</td></tr>
+  <tr><td><strong>Programmatic tool calling</strong></td><td>รัน chain ของ tool calls เป็น script เดียวใน code execution sandbox ของ Anthropic ผลระหว่างทางไม่เข้า history</td><td>tool_result ไปกลับหลายรอบจาก call ย่อยๆ ต่อกัน</td></tr>
+  <tr><td><strong>Prompt caching</strong></td><td>ไม่ลดจำนวน token เลย แค่ทำให้ prefix ที่คงที่ถูกลง</td><td>ต้นทุนของการส่ง toolset เดิมซ้ำๆ</td></tr>
+  <tr><td><strong>Context editing</strong></td><td>ลบ result เก่าหลังจากใช้เสร็จแล้ว</td><td>tool_result เก่าที่ไม่เกี่ยวแล้ว</td></tr>
+</table></div>
+
+<p>ใช้ร่วมกันได้ ลำดับที่แนะนำสำหรับ agent ที่ traffic สูง:</p>
+<ol class="steps">
+  <li>Cache tool definitions ตั้งแต่วันแรก</li>
+  <li>เพิ่ม tool search เมื่อ toolset เกินราว 20 ตัว</li>
+  <li>เพิ่ม context editing เมื่อ conversation ยาวจน result ช่วงแรกๆ ไม่มีความหมายแล้ว</li>
+  <li>พิจารณา programmatic tool calling เมื่อเห็น pattern เรียก tool เล็กๆ ต่อกันเป็นสายซ้ำๆ</li>
+</ol>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Tool search, programmatic tool calling และ context editing ลด token แบบเดียวกัน ใช้ตัวไหนก็ได้"</strong> ไม่ใช่ แต่ละตัวเล็งต้นเหตุคนละแบบ ส่วน caching ไม่ได้ลด token เลย</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Definitions บวม → tool search · chain call บวม → programmatic tool calling · result เก่าบวม → context editing · แพง → caching (ซึ่งไม่ลดขนาด)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (จับคู่)</span>
+  <p>จับคู่อาการกับเครื่องมือ:</p>
+  <ol>
+    <li>agent มี tool 45 ตัว schema ทั้งหมดถูกโหลดเข้ามาทุก request</li>
+    <li>agent ดึงราคาสินค้า 30 รายการทีละตัว แต่ละรอบมี tool_result กลับเข้า history</li>
+    <li>toolset คงที่ ส่งซ้ำทุก request ค่าใช้จ่ายสูง แต่ขนาด window ยังไม่มีปัญหา</li>
+    <li>log ที่อ่านตอนต้น session ยาวมากและไม่เกี่ยวกับงานตอนนี้แล้ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → tool search · 2 → programmatic tool calling · 3 → prompt caching · 4 → context editing</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีม compliance ต้องการเก็บ transcript ฉบับเต็ม (ก่อนถูกสรุป) ไว้ตรวจสอบทุกครั้งที่ session ยาวๆ กำลังจะถูก compact ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>SessionEnd hook</li>
+    <li>PreCompact hook</li>
+    <li>PostToolUse hook</li>
+    <li>อ่านจาก system message <code>compact_boundary</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> PreCompact hook รันก่อน compaction (รับ field trigger เป็น manual หรือ auto) จึงเซฟ transcript ได้ก่อนถูกแทนด้วย summary · SessionEnd สายเกินไปเพราะ compaction เกิดกลาง session · PostToolUse ทำงานหลัง tool call แต่ละครั้ง ไม่เกี่ยวกับ compaction · <code>compact_boundary</code> แค่บอกว่ามี compaction เกิดขึ้น ไม่ได้มี transcript เต็มมาด้วย</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Anthropic docs: Context windows</li>
+  <li>Anthropic docs: Context editing</li>
+  <li>Anthropic docs: Managing tool context</li>
+</ul>
+</section>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="th" data-course="{{SLUG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Noto+Serif+Thai:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  // ตั้ง theme ก่อน render เพื่อไม่ให้จอกระพริบ
+  try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  try { if (localStorage.getItem('hideCheckpoints') === '1') document.documentElement.classList.add('hide-checkpoints'); } catch (e) {}
+</script>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<header><div class="bar">
+  <button id="navBtn" type="button" aria-label="เปิดเมนูบทเรียน">☰ บทเรียน</button>
+  <a class="brand" href="../index.html" title="คอร์สทั้งหมด"><i>←</i> {{TITLE}} <i>·</i> {{SUBTITLE}}</a>
+  <span id="hdrProg"></span>
+  <button id="themeBtn" type="button" aria-label="เปลี่ยน theme"></button>
+  <button id="cpToggle" type="button" aria-pressed="false">ซ่อนแบบทดสอบ</button>
+</div></header>
+<div class="layout">
+<nav class="side" aria-label="สารบัญ">
+<div class="side-head">
+  <div class="t">สารบัญ</div>
+  <div class="p"><div class="meter"><i id="sideBar"></i></div><span id="sideProg"></span></div>
+  <input type="search" id="navFilter" placeholder="ค้นหาบทเรียน…" aria-label="ค้นหาบทเรียน">
+</div>
+<ul>
+{{NAV}}
+</ul></nav>
+<main><div class="content">
+<div class="intro">
+  <h1>{{TITLE}}</h1>
+  <p class="src">เรียบเรียงใหม่เป็นภาษาไทยจากหลักสูตร <a href="{{SOURCE_URL}}">{{SOURCE_NAME}}</a> และเอกสารของ Anthropic เนื้อหาและแบบทดสอบเขียนขึ้นใหม่ ไม่ใช่คำแปลตรงตัว</p>
+  <div class="progress">
+    <div class="meter"><i id="progBar"></i></div>
+    <span id="progText"></span>
+    <button id="resetAll" type="button">ล้าง</button>
+  </div>
+</div>
+{{BODY}}
+</div></main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

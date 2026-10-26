@@ -1,0 +1,179 @@
+<section class="lesson" id="l-1-2">
+<h2>1.2 Ways to build and host a Claude agent (Client SDK, Agent SDK, Managed Agents)</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-developer-foundations/learn/claude-agent-sdk-build-paths-and-the-query-agent-loop">CertSafari 1.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่าจะใช้ <strong>Client SDK</strong>, <strong>Agent SDK</strong> หรือ <strong>Claude Managed Agents</strong> โดยดูว่าแต่ละตัวรับภาระเรื่อง agent loop, tools และ hosting ไปให้เรามากแค่ไหน</li>
+    <li>อธิบาย building block 4 ตัวของ Managed Agents ได้: <strong>agent, environment, session, events</strong></li>
+    <li>แยก deployment model 3 แบบได้: Agent SDK ใน process ของเราเอง, Managed Agents บน cloud sandbox ของ Anthropic และ Managed Agents ที่ใช้ self-hosted sandbox</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ใครเป็นคนเขียนและรัน harness</span>
+  <p><strong>Agent harness</strong> คือโค้ดที่ห่อโมเดลไว้แล้ววน agent loop ให้ ส่ง prompt ไป รัน tool ที่โมเดลขอ เอาผลป้อนกลับ และตัดสินว่าเมื่อไหร่ควรหยุด ทางเลือกในการสร้าง agent ทั้งหมดต่างกันหลักๆ แค่ตรงนี้: harness เป็นของ <strong>เราเขียนเอง</strong>, เป็น <strong>library ที่รันใน process ของเรา</strong> หรือ <strong>Anthropic รันให้</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. สี่ทางในการสร้าง Claude agent</h3>
+<p>ไม่ว่าจะสร้างด้วยวิธีไหน agent ทุกตัววนรอบเดียวกันหมด: ส่ง prompt → โมเดลขอเรียก tool → รัน tool แล้วส่งผลกลับ → วนไปเรื่อยๆ จนโมเดลตอบโดยไม่ขอ tool แล้ว (รายละเอียดลูป tool use อยู่ในบท 8.1) สิ่งที่ต่างกันคือ <em>ใครเป็นคนหมุนลูปนี้</em></p>
+<ul>
+  <li><strong>Client SDK</strong> เรียก Messages API ตรงๆ เราเขียน tool loop เอง หรือจะใช้ <strong>tool runner (beta)</strong> ช่วยหมุนลูปก็ได้ แต่ tool ยังต้องนิยามและรันเองอยู่ดี เหมาะกับคนที่อยากคุมทุกอย่างละเอียดๆ</li>
+  <li><strong>Agent SDK</strong> เป็น library ภาษา Python/TypeScript ที่ไปรัน binary ของ Claude Code ใน process ที่เราดูแลเอง ได้ของแถมมาครบ: loop ของ Claude Code, built-in tools, permissions, sessions, hooks, subagents และรองรับ MCP</li>
+  <li><strong>Managed Agents</strong> Anthropic host harness ให้ทั้งหมด เราแค่ config ผ่าน Claude API</li>
+  <li><strong>Claude Code CLI</strong> ใช้ทำงานแบบ interactive หรืองาน one-off ใน terminal</li>
+</ul>
+<p>เปรียบง่ายๆ เหมือนเรื่องร้านอาหาร: Client SDK คือทำกับข้าวเองทุกขั้น, Agent SDK คือซื้อชุดครัวสำเร็จมาตั้งในร้านเรา, Managed Agents คือจ้าง cloud kitchen ทำให้เลย</p>
+
+<div class="table-wrap"><table>
+  <tr><th>อยากทำ</th><th>ใช้</th><th>ใครหมุน loop</th><th>Tools</th></tr>
+  <tr><td>เรียก Claude ตรงๆ จากโค้ดเรา</td><td>Client SDK</td><td>เราเอง หรือ beta tool runner</td><td>ที่เรานิยามและรันเอง</td></tr>
+  <tr><td>ฝัง agent ของ Claude Code ลงในแอปเรา</td><td>Agent SDK</td><td>SDK ใน process ที่เราดูแล</td><td>Built-in (Read, Edit, Bash, Grep ฯลฯ) + MCP</td></tr>
+  <tr><td>ให้ Anthropic host agent ให้</td><td>Managed Agents</td><td>Hosted harness ของ Anthropic</td><td>Built-in Bash, file ops, web search/fetch + MCP</td></tr>
+  <tr><td>ทำงานจาก terminal</td><td>Claude Code CLI</td><td>Claude Code</td><td>Built-in</td></tr>
+</table></div>
+
+<h3>เลือกยังไงในทางปฏิบัติ</h3>
+<ul>
+  <li><strong>Client SDK</strong> เมื่อตัว loop คือ product ของเราเอง เช่น อยากมี stopping rule แบบพิเศษ หรือตัด context ด้วยวิธีของเราเอง</li>
+  <li><strong>Agent SDK</strong> เมื่ออยากได้ agent สไตล์ coding ที่ทำงานได้เลยภายใน service ของเรา</li>
+  <li><strong>Managed Agents</strong> เมื่องานรันนานเป็นนาทีหรือเป็นชั่วโมง และไม่อยากดูแล sandbox, การรัน tool หรือที่เก็บ session เอง</li>
+</ul>
+
+<pre><code># Agent SDK แบบสั้นๆ: เราไม่ต้องเขียน tool loop เลย
+from claude_agent_sdk import query, ClaudeAgentOptions
+
+async def main():
+    opts = ClaudeAgentOptions(allowed_tools=["Read", "Grep", "Bash"])
+    async for msg in query(prompt="หาว่า test ไหนพังแล้วสรุปสาเหตุ", options=opts):
+        print(msg)   # SDK วน loop + รัน tool ให้เอง เราแค่อ่าน message ที่ yield ออกมา</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใช้ beta tool runner ของ Client SDK แล้วก็ได้ tool สำเร็จรูปแบบ Claude Code"</strong> ไม่ใช่ tool runner แค่ช่วยหมุนลูป ส่วน tool ยังเป็นของที่เรานิยามและรันเองทั้งหมด ถ้าอยากได้ Read/Edit/Bash, hooks, sessions มาพร้อมใช้ ต้องเป็น Agent SDK</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>loop เหมือนกันทุกแบบ ต่างกันที่ใครหมุนและใครถือ tool: Client SDK = เรา, Agent SDK = library ใน process เรา, Managed Agents = Anthropic</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีม backend มี service ภาษา TypeScript อยากให้ agent อ่านไฟล์ใน repo รันคำสั่ง shell ได้ มี hook ไว้ block คำสั่งอันตราย และ resume session เดิมได้ โดยไม่อยากเขียน tool loop เอง ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>Client SDK แล้วเขียน handler ของ Read/Bash เอง</li>
+    <li>Agent SDK</li>
+    <li>Client SDK + beta tool runner</li>
+    <li>เปิด Claude Code CLI แบบ interactive ทิ้งไว้บนเซิร์ฟเวอร์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> Agent SDK ให้ loop, built-in tools, hooks และ sessions ของ Claude Code มาใน process ของเราเลย ส่วน A กับ C ยังต้องนิยาม tool เอง และ D เป็นการใช้งานแบบคนนั่งพิมพ์ ไม่ใช่การฝังใน service</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Claude Managed Agents: agent, environment, session, events</h3>
+<p>Managed Agents เปลี่ยนจาก "เขียนโค้ด" เป็น "เขียน config" เป็นส่วนใหญ่ เรื่องจุกจิกอย่าง prompt caching กับ compaction ก็ harness ของ Anthropic จัดการให้ ตัวต่อหลักมี 4 ชิ้น:</p>
+<div class="table-wrap"><table>
+  <tr><th>Building block</th><th>คืออะไร</th></tr>
+  <tr><td><strong>Agent</strong></td><td>ชุด config: model, system prompt, tools, MCP servers, skills สร้างครั้งเดียว แล้วอ้างถึงด้วย ID ได้ในหลาย session</td></tr>
+  <tr><td><strong>Environment</strong></td><td>ที่ที่ session ไปรัน: cloud sandbox ที่ Anthropic ดูแล หรือ self-hosted sandbox</td></tr>
+  <tr><td><strong>Session</strong></td><td>agent หนึ่งตัวที่กำลังรันอยู่ใน environment หนึ่ง เพื่อทำงานชิ้นหนึ่ง</td></tr>
+  <tr><td><strong>Events</strong></td><td>ข้อความที่วิ่งระหว่างแอปเรากับ agent เช่น user turn, tool result, status update</td></tr>
+</table></div>
+<p>คิดแบบ OOP ก็ได้: <em>agent</em> คือ class, <em>session</em> คือ instance ที่ถูก new ขึ้นมาใน <em>environment</em> หนึ่ง และ <em>events</em> คือ message ที่โยนไปมากับ instance นั้น</p>
+
+<h3>Flow ตอนรันจริง</h3>
+<ol class="steps">
+  <li>สร้าง session โดยอ้าง agent ID กับ environment</li>
+  <li>ส่ง user event เข้าไป</li>
+  <li>รับผลแบบ streaming ผ่าน <strong>server-sent events (SSE)</strong></li>
+  <li>ประวัติ event ทั้งหมดเก็บไว้ฝั่ง server ดึงย้อนหลังได้ทีหลัง</li>
+  <li>ระหว่างทางส่ง event เพิ่มเพื่อ steer หรือ interrupt agent ได้</li>
+</ol>
+<pre><code>// pseudo-code แสดงลำดับความคิด (ไม่ใช่ signature จริงของ API)
+const session = await createSession({ agent: AGENT_ID, environment: ENV_ID });
+await sendEvent(session.id, { type: "user", text: "อัปเดต dependency แล้วรัน test" });
+for await (const ev of streamEvents(session.id)) {   // มาทาง SSE
+  console.log(ev.type);                               // tool result, status update ...
+}
+// อยากเปลี่ยนทิศ? ส่ง user event ใหม่เข้าไปได้เลย</code></pre>
+
+<p>เหมาะสุดกับ: งานที่รันนานๆ, session แบบ stateful ที่มี filesystem ค้างอยู่ได้ และงานที่ต้องรันซ้ำตามรอบด้วย scheduled deployment (cron)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Managed Agents ใช้กับ workload ที่ต้องการ Zero Data Retention (ZDR) ได้"</strong> ไม่ได้ session เก็บ history, สถานะ sandbox และ output ไว้ฝั่ง Anthropic ตอนนี้จึง <strong>ยังไม่เข้าเงื่อนไข ZDR และ HIPAA BAA</strong> แต่ยังสั่งลบ session และไฟล์ที่อัปโหลดผ่าน API ได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Agent = config ที่ reuse ด้วย ID, Environment = ที่รัน, Session = instance ที่ทำงานอยู่, Events = ข้อความไป-กลับ (stream ผ่าน SSE และเก็บ history ไว้ server)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่สิ่งที่เกิดในระบบรีวิว PR อัตโนมัติ กับ building block ของ Managed Agents:</p>
+  <ol>
+    <li>config "pr-reviewer" ที่กำหนด model, system prompt และ GitHub MCP server ไว้ ใช้ซ้ำทุก PR</li>
+    <li>การรันรีวิว PR #482 ที่กำลังทำงานอยู่ตอนนี้</li>
+    <li>sandbox ที่ Anthropic จัดให้สำหรับรันงาน</li>
+    <li>ข้อความ "เริ่มรัน lint แล้ว" ที่แอปเราได้รับระหว่างทาง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p>1 → Agent · 2 → Session · 3 → Environment · 4 → Events (status update)</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Process เรา, cloud ของ Anthropic หรือ sandbox ของเรา</h3>
+<p>คำถามเดียวที่ใช้แยก deployment model คือ <strong>ฝั่งไหนรัน loop และฝั่งไหนรัน tools</strong></p>
+<ul>
+  <li><strong>Agent SDK:</strong> ทั้ง loop และ tools อยู่ใน process ของเรา deploy เหมือน service ทั่วไป (container หรือ serverless) จะเก็บ session ไว้ใน backend ของเราเองก็ได้</li>
+  <li><strong>Managed Agents + cloud environment (default):</strong> tools รันใน sandbox ที่ Anthropic ดูแล Anthropic จัดการ egress control, การ mount ไฟล์และ GitHub repo และ lifecycle ของ sandbox ให้</li>
+  <li><strong>Managed Agents + self-hosted sandbox:</strong> orchestration ยังอยู่กับ Anthropic แต่ <strong>การรัน tool ย้ายมาอยู่บน infra ของเรา</strong> ไฟล์, process และ network access อยู่ในมือเรา แต่ input/output ของ tool ยังวิ่งไปที่ control plane ของ Anthropic อยู่ เนื้อหาของ skills และ memory store ถูก copy เข้ามาใน sandbox โดย memory files ไปอยู่ที่ <code>/mnt/memory/</code> แล้ว SDK worker sync การเปลี่ยนแปลงกลับไปที่ store</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>เรื่อง</th><th>Cloud environment</th><th>Self-hosted sandbox</th></tr>
+  <tr><td>Tools รันที่ไหน</td><td>Sandbox ที่ Anthropic ดูแล</td><td>Infra ของเรา</td></tr>
+  <tr><td>Network reach</td><td>ตาม egress control ของ Anthropic</td><td>ตาม network policy ของเรา</td></tr>
+  <tr><td>Mount ไฟล์และ GitHub repo</td><td>Anthropic จัดการ</td><td>เราจัดการ</td></tr>
+  <tr><td>Memory stores</td><td>Anthropic mount ไว้ที่ <code>/mnt/memory/</code></td><td>ดาวน์โหลดมาที่ <code>/mnt/memory/</code> แล้ว SDK worker sync กลับ</td></tr>
+  <tr><td>Lifecycle</td><td>Anthropic จัดการ</td><td>เราจัดการ</td></tr>
+</table></div>
+
+<h3>เมื่อไหร่ self-host ถึงคุ้ม</h3>
+<ul>
+  <li>ข้อมูลต้องอยู่ใน network boundary ของเราเท่านั้น</li>
+  <li>agent ต้องเข้าถึง internal service ที่ไม่มี public route</li>
+  <li>งานต้องผ่าน compliance หรือ audit control ของเราเอง</li>
+</ul>
+<p>ถ้าไม่เข้าข้อไหนเลย ใช้ cloud environment ไปเถอะ infra ที่ต้องดูแลน้อยกว่าเยอะ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Self-hosted sandbox = ทั้ง agent รวมถึงการเรียกโมเดลย้ายมาอยู่บน infra เรา"</strong> ไม่ใช่ ที่ย้ายมามีแค่ <strong>tool execution</strong> ส่วน reasoning ของ Claude และ orchestration ยังอยู่ฝั่ง Anthropic</p>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ย้าย Managed Agents session ไปใช้ self-hosted sandbox แล้ว การคิด (reasoning) ของ Claude เกิดที่ไหน?</p>
+  <ol type="A">
+    <li>บนเครื่องของเราทั้งหมด</li>
+    <li>ฝั่ง Anthropic ส่วน tool รันบนเครื่องเรา</li>
+    <li>แบ่งครึ่ง: model บางส่วนรันบนเครื่องเรา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> self-hosting ย้ายแค่การรัน tool ส่วนโมเดลกับ orchestration ยังอยู่กับ Anthropic</p></details>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Agent SDK = loop + tools อยู่บ้านเรา, Managed cloud = อยู่บ้าน Anthropic ทั้งคู่, Managed self-hosted = loop อยู่ Anthropic แต่ tools อยู่บ้านเรา</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>agent ต้องเรียก HR API ภายในบริษัทที่เข้าได้จาก VPN เท่านั้น และทีมอยากให้ Anthropic เป็นคนดูแล agent loop ให้ ควรเลือกแบบไหน?</p>
+  <ol type="A">
+    <li>Managed Agents + cloud sandbox แล้วเปิด egress ให้กว้างขึ้น</li>
+    <li>Managed Agents + self-hosted sandbox</li>
+    <li>Client SDK + beta tool runner โดยให้ Anthropic host ให้</li>
+    <li>แบบไหนก็ได้ เพราะ tool call รันบน network ของผู้เรียกเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> self-hosted sandbox รัน tool อยู่ใน network เรา เลยเข้าถึง internal service ได้ ขณะที่ Anthropic ยังคุม orchestration A เข้า service ที่ไม่มี public route ไม่ได้, C ไม่มีใครมา host tool runner ให้ และ D ผิดเพราะ cloud sandbox รัน tool ฝั่ง Anthropic</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li>Claude Agent SDK docs: overview และ agent loop</li>
+  <li>Claude Platform docs: Managed Agents overview</li>
+  <li>Claude Platform docs: self-hosted sandboxes</li>
+</ul>
+</section>
