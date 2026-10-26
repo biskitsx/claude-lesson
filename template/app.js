@@ -52,6 +52,34 @@ navFilter.addEventListener('input', () => {
 
 // ----- active lesson in sidebar -----
 const links = new Map([...document.querySelectorAll('nav.side details ul a')].map(a => [a.hash.slice(1), a]));
+
+// ----- mark lessons as read (checkbox in sidebar) -----
+const RKEY = 'read:' + root.dataset.course;
+let readSet = new Set();
+try { readSet = new Set(JSON.parse(localStorage.getItem(RKEY) || '[]')); } catch (e) {}
+function updateReadCounts(){
+  document.querySelectorAll('nav.side .dom').forEach(d => {
+    const as = [...d.querySelectorAll('details ul a')], n = as.filter(a => readSet.has(a.hash.slice(1))).length;
+    const sm = d.querySelector('.dname small');
+    sm.dataset.base ||= sm.textContent;
+    sm.textContent = sm.dataset.base + (n ? ` · อ่านแล้ว ${n}/${as.length}` : '');
+  });
+}
+links.forEach((a, id) => {
+  const c = document.createElement('span');
+  c.className = 'rd'; c.tabIndex = 0; c.setAttribute('role', 'checkbox'); c.title = 'ทำเครื่องหมายว่าอ่านแล้ว';
+  const sync = () => { const on = readSet.has(id); c.setAttribute('aria-checked', on); a.classList.toggle('read', on); };
+  const toggle = e => {
+    e.preventDefault(); e.stopPropagation();
+    readSet.has(id) ? readSet.delete(id) : readSet.add(id);
+    try { localStorage.setItem(RKEY, JSON.stringify([...readSet])); } catch (err) {}
+    sync(); updateReadCounts();
+  };
+  c.addEventListener('click', toggle);
+  c.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') toggle(e); });
+  a.prepend(c); sync();
+});
+updateReadCounts();
 const io = new IntersectionObserver(es => es.forEach(e => {
   if (!e.isIntersecting) return;
   links.forEach(a => a.classList.remove('active'));
