@@ -55,7 +55,9 @@ def build():
     (OUT / "assets").mkdir(parents=True)
     for f in ("style.css", "app.js"):
         shutil.copy(TPL / f, OUT / "assets" / f)
-    cards = [build_course(d) for d in sorted((ROOT / "courses").iterdir()) if (d / "course.json").exists()]
+    dirs = [d for d in (ROOT / "courses").iterdir() if (d / "course.json").exists()]
+    dirs.sort(key=lambda d: (json.loads((d / "course.json").read_text()).get("order", 99), d.name))
+    cards = [build_course(d) for d in dirs]
     (OUT / "index.html").write_text((TPL / "home.html").read_text().replace("{{CARDS}}", "\n".join(cards)))
     print(f"built {len(cards)} course(s) → {OUT}")
 

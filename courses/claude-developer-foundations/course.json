@@ -1,4 +1,5 @@
 {
+  "order": 1,
   "title": "Claude Developer Foundations",
   "subtitle": "ฉบับภาษาไทย",
   "description": "พื้นฐานการพัฒนาด้วย Claude: agent, Messages API, Claude Code, prompt engineering, security และ MCP",

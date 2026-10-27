@@ -31,6 +31,8 @@ python3 build.py && open site/index.html
 }
 ```
 
+   `order` (ตัวเลข น้อยขึ้นก่อน) ใช้กำหนดลำดับการ์ดบนหน้าแรก ถ้าไม่ใส่จะเรียงตาม slug ต่อท้าย
+
    `weight` (% ของข้อสอบ) จะใส่หรือไม่ใส่ก็ได้ บทที่ยังไม่มีไฟล์จะขึ้นว่า "ยังไม่มีเนื้อหา"
 
 2. เขียนแต่ละบทลง `courses/<slug>/lessons/1.1.html` โดยใช้ markup เดียวกับ `courses/claude-developer-foundations/lessons/1.1.html`:
