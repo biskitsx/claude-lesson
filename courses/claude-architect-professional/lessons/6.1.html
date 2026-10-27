@@ -1,0 +1,319 @@
+<section class="lesson" id="l-6-1">
+<h2>6.1 Structured discovery and requirement gathering for Claude solutions</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/writing-measurable-requirements-and-acceptance-tests-for-ai-solutions">CertSafari 6.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>รัน discovery session ที่ครอบคลุม users, needs, experience, constraints และได้ข้อเท็จจริงเรื่อง capability, speed, budget ที่การเลือกโมเดลต้องใช้</li>
+    <li>แปลงผล discovery เป็นโมเดลตั้งต้นที่มีเหตุผลรองรับ พร้อมแผนอัปเกรดหรือ optimize ภายหลัง</li>
+    <li>เขียน success criteria ที่ specific, measurable, achievable, relevant ครอบคลุม quality, latency, cost และ safety</li>
+    <li>เลือกเทคนิค (blind spot pass, prototype, interview, reference, ดู sample data) เพื่อขุด requirement ที่ยังไม่มีใครรู้ ก่อนลงมือสร้าง</li>
+    <li>เขียน acceptance test ก่อนเขียนโค้ด และไล่ย้อนหาจุดพังของผลิตภัณฑ์ผ่าน Description Chain ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: requirement ที่ testable</span>
+  <p>requirement ที่ดีต้องชัดพอที่ <strong>คนนอก</strong> เข้ามาดูระบบที่เสร็จแล้ว แล้วตัดสินได้ทันทีว่า <strong>ผ่านหรือไม่ผ่าน</strong> ถ้าไม่มีใครทำให้มัน "ตก" ได้ มันยังไม่ใช่ requirement</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Discovery brief: users, needs, experience, constraints</h3>
+<p>จุดเริ่มต้นของทุกโปรเจกต์มักเป็นประโยคกว้างๆ เช่น "คนไข้อยากเช็กเวลารอคิวก่อนออกจากบ้าน" ประโยคนี้เป็น <strong>จุดเริ่มบทสนทนา</strong> ยังไม่ใช่ requirement งานของ discovery คือเปลี่ยนมันให้เป็นภาพที่ชัดด้วยคำถามภาษาคน 4 ข้อ:</p>
+<div class="table-wrap"><table>
+  <tr><th>คำถาม</th><th>ต้องได้อะไร</th></tr>
+  <tr><td><strong>Users</strong> ใครใช้</td><td>เจาะจงให้ได้ รวมถึงพนักงานและทุกคนที่แตะระบบ ไม่ใช่แค่ผู้ใช้ปลายทาง</td></tr>
+  <tr><td><strong>Needs</strong> ต้องการอะไร</td><td>ผลลัพธ์ที่เขาอยากได้ ซึ่งไม่เหมือนกับฟีเจอร์ที่เขาขอ</td></tr>
+  <tr><td><strong>Experience</strong> ใช้แล้วรู้สึกยังไง</td><td>บรรยายประสบการณ์ที่ดี ไม่ใช่รายการฟีเจอร์</td></tr>
+  <tr><td><strong>Constraints</strong> ติดอะไร</td><td>งบประมาณ ทักษะเทคนิคของคนดูแลระบบ อุปกรณ์ที่ผู้ใช้มี ข้อกำหนดด้าน privacy</td></tr>
+</table></div>
+
+<h3>Process map: ตัดสินบทบาท AI ทีละขั้น</h3>
+<p>แทนที่จะถามว่า "ระบบนี้ควรใช้ AI ไหม" ทั้งก้อน ให้แตกความต้องการออกเป็นขั้นตอน ระบุ stakeholder ของแต่ละขั้น แล้วเลือกบทบาท AI <strong>รายขั้น</strong> จากสามแบบ:</p>
+<ul>
+  <li><strong>Automation</strong> AI ทำขั้นนั้นเอง แล้วคนตรวจทีหลัง</li>
+  <li><strong>Augmentation</strong> คนกับ AI ทำขั้นนั้นด้วยกัน</li>
+  <li><strong>Agency</strong> AI ลงมือได้อย่างมีอิสระ แต่อยู่ในขอบเขตที่ builder กำหนด</li>
+</ul>
+<p>ผลที่ได้คือตารางเล็กๆ หนึ่งแถวต่อหนึ่งขั้น แต่ละแถวมีการตัดสินบทบาท AI ของตัวเอง เช่น ระบบคิวคลินิก:</p>
+<div class="table-wrap"><table>
+  <tr><th>ขั้น</th><th>Stakeholder</th><th>บทบาท AI</th></tr>
+  <tr><td>รวบรวมจำนวนคนรอจากระบบลงทะเบียน</td><td>เจ้าหน้าที่เวชระเบียน</td><td>Automation</td></tr>
+  <tr><td>ประเมินเวลารอเมื่อมีเคสฉุกเฉินแทรก</td><td>พยาบาลคัดกรอง</td><td>Augmentation</td></tr>
+  <tr><td>ส่งข้อความแจ้งเตือนคนไข้เมื่อใกล้ถึงคิว</td><td>คนไข้</td><td>Agency (ภายในกฎที่ตั้งไว้)</td></tr>
+</table></div>
+
+<h3>สามคำถามบังคับใน session แรก</h3>
+<p>ก่อนจะแนะนำโมเดลใดๆ ต้องได้คำตอบ 3 ข้อนี้ ซึ่งทุกข้อมาจาก <strong>workload ของลูกค้า</strong>:</p>
+<ol class="steps">
+  <li><strong>Capabilities</strong> โมเดลต้องทำอะไรได้บ้าง</li>
+  <li><strong>Speed</strong> ต้องตอบเร็วแค่ไหนในแอป</li>
+  <li><strong>Cost</strong> งบสำหรับช่วงพัฒนาและช่วง production</li>
+</ol>
+<p>ข้อมูลอย่างจำนวนพนักงาน IT, แพลตฟอร์ม social ที่ใช้ทำการตลาด หรือเวอร์ชันของระบบ ticketing ไม่ได้ช่วยตัดสิน capability, speed หรือ cost เลย</p>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span><p>ถ้าถามว่าต้องรู้อะไรก่อนแนะนำโมเดล ให้เลือก capability, ความเร็วในการตอบ และงบ dev + production ข้อมูลองค์กรจุกจิกเป็นตัวหลอก แม้จะฟังดูรอบคอบ</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถาม 4 ข้อ (users, needs, experience, constraints) แตกงานเป็น process map แล้วเลือกบทบาท AI รายขั้น และอย่าออกจาก session แรกโดยไม่รู้ capability, speed, budget</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่ขั้นตอนในระบบตอบคำถามลูกค้าของร้านประกันกับบทบาท AI ที่บรรยายไว้ (A = Automation, B = Augmentation, C = Agency)</p>
+  <ol>
+    <li>AI ร่างสรุปกรมธรรม์ให้ลูกค้าทุกฉบับ แล้วเจ้าหน้าที่สุ่มตรวจตอนสิ้นวัน</li>
+    <li>เจ้าหน้าที่คุยกับลูกค้า ขณะที่ AI เสนอคำตอบและข้อกฎหมายที่เกี่ยวข้องข้างจอแบบ real-time</li>
+    <li>AI นัดหมายเวลาตรวจสุขภาพให้ลูกค้าเองได้ แต่ต้องอยู่ในช่วงเวลาและสาขาที่กำหนด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-A, 2-B, 3-C</strong> AI ทำแล้วคนตรวจทีหลัง = Automation, ทำงานไปด้วยกัน = Augmentation, AI ตัดสินใจเองในกรอบที่กำหนด = Agency</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>คุณนัด discovery ครั้งแรกกับบริษัทขนส่งที่อยากใช้ Claude จัดหมวดคำร้องเรียน ก่อนแนะนำโมเดล ต้องได้ข้อมูลข้อไหนบ้าง? (เลือก 3 ข้อ)</p>
+  <ol type="A">
+    <li>ต้องตอบเร็วแค่ไหนในหน้าจอเจ้าหน้าที่</li>
+    <li>จำนวนรถบรรทุกในกองยาน</li>
+    <li>งานนี้ต้องให้โมเดลทำอะไรได้บ้าง (เช่น อ่านภาษาไทยปนอังกฤษ แยกหมวดได้กี่หมวด)</li>
+    <li>ชื่อผู้ให้บริการ cloud email ที่ใช้ในบริษัท</li>
+    <li>งบช่วงพัฒนาและงบรายเดือนตอน production</li>
+    <li>จำนวนสาขาทั่วประเทศ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, C, E</strong> speed, capability และ budget คือสามข้อที่การเลือกโมเดลต้องใช้ ข้อมูลองค์กรอื่นๆ (B, D, F) ไม่ได้บอกอะไรเกี่ยวกับสามข้อนี้</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. จากผล discovery สู่โมเดลตั้งต้น</h3>
+<p>ลองนึกก่อน: ทีมซัพพอร์ตส่งคำขอคัดแยก ticket สั้นๆ วันละ 50,000 รายการ ต้องตอบไม่ถึงวินาที งบ pilot จำกัด ควรเริ่มจากตรงไหน? คำตอบคือเริ่มจากโมเดลที่ <strong>เร็วและคุ้มค่า</strong> ทดสอบกับ ticket จริง และอัปเกรดเฉพาะเมื่อไม่ถึงเกณฑ์ความแม่นยำ</p>
+
+<div class="table-wrap"><table>
+  <tr><th>เส้นทาง</th><th>สัญญาณจาก discovery</th><th>ดำเนินต่อยังไง</th></tr>
+  <tr><td><strong>A: เร็วและคุ้มค่าก่อน</strong><br>(ตัวอย่าง: Claude Haiku 4.5)</td><td>latency ตึง, งบจำกัด, งานง่ายปริมาณมาก, ช่วง prototype</td><td>เริ่มที่นี่ ทดสอบละเอียด เทียบกับ requirement อัปเกรดเฉพาะเมื่อเจอช่องว่างด้าน capability ที่ระบุได้</td></tr>
+  <tr><td><strong>B: capability ก่อน</strong><br>(ตัวอย่าง: Claude Opus 4.8)</td><td>reasoning ซับซ้อน, งานวิทยาศาสตร์, ต้องเข้าใจบริบทละเอียด, ความแม่นสำคัญกว่าค่าใช้จ่าย, coding ขั้นสูง, agentic งานที่มี autonomy สูง</td><td>เริ่มจากโมเดลที่แข็งที่สุด ปรับ prompt, eval แล้วค่อยหาความคุ้มค่าด้วยการลด effort หรือลดรุ่นทีหลัง</td></tr>
+</table></div>
+<p>ไม่ว่าเลือกทางไหน ต้อง <strong>ยืนยันด้วย prompt และข้อมูลจริงของลูกค้า</strong> เสมอ</p>
+
+<h3>Effort: ปุ่มปรับในโมเดลเดิม</h3>
+<p><strong>Effort</strong> เป็นค่าราย request (ใน API ชื่อ <code>output_config.effort</code>) ที่คุมว่าโมเดลคิดมากแค่ไหนก่อนตอบ effort สูง = ฉลาดขึ้นแต่ช้าและใช้ token มากขึ้น effort ต่ำ = เร็วและถูกแต่คิดน้อยลง หลายโมเดลของ Claude รองรับ และการปรับ effort บนโมเดลที่เลือกแล้ว มักเป็นคันโยกที่ดีกว่าการเปลี่ยนโมเดล <strong>แต่ต้องทำหลังจาก eval แล้ว</strong></p>
+<pre><code>{
+  "model": "claude-opus-4-8",
+  "max_tokens": 2048,
+  "output_config": {"effort": "medium"},
+  "messages": [{"role": "user", "content": "..."}]
+}</code></pre>
+
+<h3>ทำไม Haiku 4.5 เหมาะกับโจทย์คัดแยก ticket</h3>
+<p>Haiku 4.5 วางตำแหน่งไว้สำหรับแอปแบบ interactive และงานปริมาณสูง การเริ่มที่ reasoning สูงสุดทุก request หรือเลือกโมเดลจากขนาด context window คือการตอบคำถามที่ลูกค้าไม่ได้ถาม context window <strong>ไม่ได้อยู่ในสามเกณฑ์หลัก</strong> และ prompt คัดแยกสั้นๆ ก็ไม่ต้องใช้ window ใหญ่</p>
+<p>กลับกัน ถ้าทีมวิจัยต้องสังเคราะห์งานวิจัยหลายขั้น ความแม่นสำคัญกว่าเงิน และเป็น agent ที่รันยาวแบบอิสระ ข้อเสนอที่เป้าหลักคือ "ประหยัด" (โมเดลถูกกว่า, ลด effort, ทำ batch pipeline) พลาดลำดับความสำคัญที่ลูกค้าบอกไว้ การจูน effort ทำได้ แต่เป็นขั้นหลัง eval</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"discovery ควรจบที่โมเดลแรงสุดกับ reasoning สูงสุด คุณภาพจะได้ไม่เป็นคอขวด" ผิด ถ้า latency ตึง ปริมาณสูง งบจำกัด ต้องเริ่มที่โมเดลเร็วและถูก แล้วอัปเกรดเมื่อมีหลักฐาน</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>สัญญาณ latency/ปริมาณ/งบ → เริ่มเส้นทาง A สัญญาณความซับซ้อน/ความแม่น/agent อิสระ → เส้นทาง B ยืนยันด้วยข้อมูลจริงเสมอ effort เป็นการจูนหลัง eval</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ทีมวิเคราะห์สัญญาทางกฎหมายเลือกเส้นทาง capability-first เพราะความแม่นสำคัญกว่าค่าใช้จ่าย อะไรคือการยืนยันว่าเลือกถูก?</p>
+  <ol type="A">
+    <li>ดู benchmark สาธารณะว่าโมเดลนั้นอยู่อันดับต้น</li>
+    <li>ลด effort ลงทันทีเพื่อดูว่ายังแม่นอยู่ไหม</li>
+    <li>รัน eval ด้วยสัญญาและ prompt จริงของทีม เทียบกับ success criteria ที่ได้จาก discovery</li>
+    <li>ถามฝ่าย IT ว่าบริษัทมี license โมเดลไหนอยู่แล้ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> การยืนยันต้องมาจาก workload จริงเทียบเกณฑ์ที่ตกลงกันไว้ A ไม่สะท้อนงานของทีม B เป็นการ optimize ที่ข้ามขั้นมาก่อน eval D เป็นข้อมูลองค์กรที่ไม่เกี่ยวกับความเหมาะสมของโมเดล</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>แอปส่งอาหารต้องจัดหมวดข้อความแชตจากไรเดอร์วันละ 80,000 ข้อความ ต้องได้ผลภายในไม่ถึงวินาที งบ pilot น้อย ข้อไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>เริ่มด้วย Claude Haiku 4.5 ทดสอบกับข้อความจริงจาก production และอัปเกรดเฉพาะเมื่อความแม่นไม่ถึงเกณฑ์</li>
+    <li>ใช้ Opus 4.8 ที่ effort สูงสุดทุกข้อความ เพื่อไม่ให้พลาด</li>
+    <li>ใช้ Sonnet 5 พร้อม extended thinking ทุก request</li>
+    <li>เลือกโมเดลที่มี context window ใหญ่ที่สุดที่หาได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ตรงกับสัญญาณ latency ตึง ปริมาณสูง งบน้อย B และ C เพิ่มทั้ง latency และค่าใช้จ่าย ขัดกับเป้าไม่ถึงวินาที D optimize ปัจจัยที่ลูกค้าไม่ได้พูดถึงเลย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ศูนย์วิจัยวัสดุต้องการ agent ที่วางแผนและรันการทบทวนวรรณกรรมหลายขั้นเองเป็นเวลานาน ผู้อำนวยการย้ำว่า "ผิดไม่ได้ เงินไม่ใช่ปัญหา" ควรเริ่มที่ไหน?</p>
+  <ol type="A">
+    <li>Haiku 4.5 รันหลายรอบเพื่อประหยัด</li>
+    <li>Claude Opus 4.8 เพราะ reasoning ซับซ้อนและงาน agentic ขั้นสูงคือจุดแข็งของมัน</li>
+    <li>Sonnet 5 ที่ลด effort ลงเพื่อคุมงบ</li>
+    <li>ส่งผ่าน Batch API เพื่อให้ความแม่นยำสูงขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> สัญญาณทุกตัวชี้ไปเส้นทาง capability-first A และ C ไปเน้นประหยัดซึ่งขัดกับลำดับความสำคัญ D ใช้กลไกด้าน throughput/ต้นทุนผิดที่ Batch API ไม่ได้เพิ่มความแม่น</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เขียน success criteria ที่วัดได้</h3>
+<p>ลองนึกก่อน: เปลี่ยน "โมเดลต้องจัดหมวด sentiment ได้ดี" ให้เป็นประโยคที่ <em>สอบตกได้</em> ต้องตัดสิน 3 อย่าง: ใช้ metric อะไร, threshold เท่าไร, ทดสอบกับชุดข้อมูลไหน</p>
+<p>เกณฑ์ที่ดีมี 4 คุณสมบัติ:</p>
+<ul>
+  <li><strong>Specific</strong> ระบุเป้าชัด</li>
+  <li><strong>Measurable</strong> มี metric เชิงปริมาณ หรือ scale เชิงคุณภาพที่ใช้อย่างสม่ำเสมอ</li>
+  <li><strong>Achievable</strong> อิงจาก benchmark, การทดลองก่อนหน้า, งานวิจัย หรือความรู้ผู้เชี่ยวชาญ และไม่เกินความสามารถของ frontier model ปัจจุบัน</li>
+  <li><strong>Relevant</strong> ตรงกับจุดประสงค์ของแอป เช่น ความถูกต้องของการอ้างอิงสำคัญมากในแอปการแพทย์ แต่ไม่ค่อยสำคัญในแชตบอตคุยเล่น</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>มิติ</th><th>แบบคลุมเครือ</th><th>แบบวัดได้</th></tr>
+  <tr><td>Quality</td><td>จัดหมวด sentiment ได้ดี</td><td>F1 อย่างน้อย 0.85 บนชุด held-out 10,000 โพสต์ที่หลากหลาย (ดีกว่า baseline 5%)</td></tr>
+  <tr><td>Safety</td><td>output ปลอดภัย</td><td>99.5% ของ output ไม่ toxic หรือ น้อยกว่า 0.1% ของ output ใน 10,000 ครั้งถูก content filter ตีธง</td></tr>
+  <tr><td>ความรุนแรงของ error</td><td>ไม่ค่อยพลาดหนัก</td><td>90% ของ error เป็นแค่ความไม่สะดวก ไม่ใช่ความเสียหายร้ายแรง (นิยามทั้งสองคำไว้ชัด)</td></tr>
+  <tr><td>Latency</td><td>เร็ว</td><td>95% ของ response ต่ำกว่า 200 ms</td></tr>
+  <tr><td>Cost</td><td>ราคาไม่แพง</td><td>งบที่คำนวณจาก cost ต่อ call, ขนาดโมเดล และความถี่การใช้</td></tr>
+</table></div>
+<p>threshold ด้าน latency ต้องมาจาก discovery ด้วย widget แชตกับรายงานที่รันข้ามคืนยอมรับความช้าได้ต่างกันมาก และ <strong>metric เดียวแทบไม่เคยพอ</strong> โมเดลคัดแยกที่แม่นแต่ช้าหรือเกินงบ ก็ถือว่าล้มเหลวอยู่ดี</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"เป้าความแม่นยำตัวเดียวคือ success criterion ที่ครบแล้ว" ผิด use case ส่วนใหญ่ต้องมีหลายเกณฑ์ (quality, safety, latency, cost) แต่ละตัวมี threshold ของตัวเอง</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ทุกเกณฑ์ต้องสอบตกได้: มี metric, threshold และชุดทดสอบ ครอบคลุมหลายมิติ และ threshold ด้าน latency/cost มาจาก discovery</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ผู้ช่วยตอบคำถามในแอปธนาคารมีเกณฑ์ข้อเดียว คือ accuracy ≥ 90% ผลทดสอบได้ 93% แต่ p95 latency อยู่ที่ 4 วินาที และค่าใช้จ่ายต่อ call สูงกว่างบ pilot ปัญหาคืออะไร?</p>
+  <ol type="A">
+    <li>เกณฑ์ accuracy ไม่ achievable ตั้งแต่แรก</li>
+    <li>success criteria ไม่ครบ latency และ cost ควรมี threshold ที่วัดได้ของตัวเองตั้งแต่ discovery</li>
+    <li>ควรเลื่อนเรื่อง latency และ cost ไปคุยหลัง launch</li>
+    <li>ควรยกเกณฑ์ accuracy เป็น 95% เพื่อบังคับคุณภาพ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ปัญหาคือเกณฑ์มีมิติเดียว A ผิดเพราะเกณฑ์ผ่านแล้ว C มองข้ามว่า latency/cost ก็เป็น success criteria D ยกเกณฑ์ความแม่นไม่ช่วยจับปัญหาความเร็วและเงิน</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ขุด requirement ที่ยังไม่มีใครรู้ ก่อนเริ่ม implement</h3>
+<p>เทคนิคในหัวข้อนี้ใช้ Claude ในบท coding agent ก่อนเขียนโค้ดแม้แต่บรรทัดเดียว Claude ค้น codebase และเว็บได้เร็ว จึงช่วยดึงสิ่งที่ยังไม่รู้ขึ้นมาได้เร็วกว่าคนทำคนเดียว</p>
+<p>สิ่งที่ยังไม่รู้มีสองแบบ:</p>
+<ul>
+  <li><strong>Unknown unknowns</strong> คำถามที่เราไม่รู้ด้วยซ้ำว่าต้องถาม เช่น ไม่รู้ว่า "ดี" หน้าตาเป็นยังไง ไม่รู้ว่ามีใครลองอะไรไปแล้ว หรือมีหลุมพรางอะไรบ้าง</li>
+  <li><strong>Unknown knowns</strong> เกณฑ์ที่คนรู้ก็ต่อเมื่อเห็น เช่น layout หรือสไตล์ภาพ ("บอกไม่ได้ แต่เห็นแล้วจะรู้")</li>
+</ul>
+<p>ทำไมต้องทำแต่เนิ่นๆ: spec ที่เปลี่ยนนิดเดียวอาจได้โค้ดหน้าตาต่างกันมาก และพอ coding agent สร้างไปแล้ว การกลับลำทีหลังทำได้ยาก</p>
+
+<div class="table-wrap"><table>
+  <tr><th>เทคนิค</th><th>เปิดเผยอะไร</th><th>ตัวอย่างการขอ</th></tr>
+  <tr><td>Blind spot pass</td><td>unknown unknowns ในเรื่องที่ไม่คุ้น</td><td>"ก่อนเพิ่ม payment provider ใหม่ ช่วยหาและอธิบายสิ่งที่ฉันน่าจะไม่รู้ใน module billing"</td></tr>
+  <tr><td>Prototype / mock</td><td>unknown knowns ที่รู้เมื่อเห็น</td><td>ไฟล์ HTML ไฟล์เดียว mock แถบเครื่องมือด้วยข้อมูลปลอม ไม่ต่ออะไรเลย</td></tr>
+  <tr><td>หลายทิศทางพร้อมกัน</td><td>ความชอบที่คนพูดไม่ออก</td><td>ขอ dashboard 4 แบบที่ต่างกันมาก ให้ลูกค้าเลือก</td></tr>
+  <tr><td>Interview</td><td>ความกำกวมที่จะเปลี่ยน design</td><td>ถามทีละคำถาม โดยเน้นคำถามที่คำตอบจะเปลี่ยน architecture</td></tr>
+  <tr><td>Reference</td><td>พฤติกรรมที่อธิบายเป็นคำพูดยาก</td><td>ชี้ไปที่ source code ที่ทำสิ่งที่ต้องการอยู่แล้ว</td></tr>
+  <tr><td>Implementation plan review</td><td>การตัดสินใจที่มีโอกาสเปลี่ยนมากที่สุด</td><td>รีวิวแผนที่เน้น data model, type interface และ UX flow ก่อนเขียนโค้ด</td></tr>
+</table></div>
+<p>Prototype และ mock เป็น <strong>spike</strong> คืองานทิ้งได้ที่ตอบคำถามข้อเดียว ไม่ผูกตัวเองกับ backend route หรือ state ใหม่</p>
+
+<h3>Interview prompt</h3>
+<p>บอก Claude ว่าจะสร้างอะไร แล้วให้มันสัมภาษณ์เราด้วย AskUserQuestion tool ครอบคลุมเรื่อง implementation, UI/UX, edge case, ข้อกังวล และ tradeoff ให้ <strong>ข้ามคำถามที่ชัดอยู่แล้ว</strong> ถามจนครบ แล้วเขียน spec ลงไฟล์ <code>SPEC.md</code> การเล่าให้ Claude รู้ว่าตอนนี้เราอยู่ตรงไหนช่วยให้มันโฟกัสส่วนที่ยาก</p>
+<pre><code>ฉันจะสร้างระบบแจ้งเวลารอคิวคลินิก ช่วยสัมภาษณ์ฉันโดยใช้ AskUserQuestion
+ถามทีละข้อ เรื่อง implementation, UI/UX, edge case, ข้อกังวล และ tradeoff
+ข้ามเรื่องที่ชัดอยู่แล้ว เน้นจุดยากที่ฉันอาจยังไม่ได้คิด
+ถามจนครบ แล้วสรุปเป็น spec ลงไฟล์ SPEC.md</code></pre>
+
+<h3>ดู sample data จริงแต่เนิ่นๆ</h3>
+<p>input จริงเผยสิ่งที่ห้องประชุมมองไม่เห็น ขอตัวอย่างจาก production มาดูตั้งแต่ต้น แล้วมองหา:</p>
+<ul>
+  <li>ข้อมูลที่ไม่เกี่ยวข้อง หรือไม่มีอยู่จริง</li>
+  <li>input ยาวเกินไป</li>
+  <li>input คุณภาพแย่ หรือเป็นอันตราย</li>
+  <li>เคสกำกวมที่แม้แต่คนยังเห็นไม่ตรงกัน</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>unknown unknowns ใช้ blind spot pass / interview / reference ส่วน unknown knowns ใช้ prototype หรือหลายทิศทางให้เลือก ทำก่อนเขียนโค้ด และขอ sample data จริงตั้งแต่ต้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>คุณกำลังเขียน interview prompt ให้ Claude ขุดความกำกวมที่จะเปลี่ยน design ของระบบจองห้องประชุม ประโยคหนึ่งเขียนว่า "อย่าถามคำถามที่ ____ ให้ขุดลงไปในจุดยากที่ฉันอาจยังไม่ได้คิด" ช่องว่างควรเป็นคำไหน?</p>
+  <ol type="A">
+    <li>เชิงเทคนิค</li>
+    <li>ชัดเจนอยู่แล้ว (obvious)</li>
+    <li>ปลายเปิด</li>
+    <li>ถามต่อเนื่อง (follow-up)</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> เป้าคือข้ามเรื่องที่ชัดแล้วเพื่อไปหาจุดยาก คำถามเชิงเทคนิค ปลายเปิด และถามต่อเนื่อง เป็นสิ่งที่ interview <em>ควร</em> มี ไม่ใช่สิ่งที่ห้าม</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Acceptance test ที่กำหนดก่อนเขียนโค้ด</h3>
+<p>acceptance test คือนิยามของคำว่า "เสร็จ" ที่ตกลงร่วมกันระหว่างเรา ลูกค้า และ Claude ปกติ <strong>5 ถึง 7 ข้อ</strong> ก็พอ แต่ละข้อต้องชัดพอให้คนแปลกหน้าตัดสินได้</p>
+<ul>
+  <li>ตก: "ระบบใช้งานง่าย" (ใครจะสอบตกข้อนี้ได้?)</li>
+  <li>ผ่าน: "คนไข้ที่มีสมาร์ตโฟนรุ่นพื้นฐาน หาเวลารอคิวปัจจุบันเจอภายใน 30 วินาที โดยไม่ต้องสมัครบัญชี" ข้อนี้มีผู้ใช้ อุปกรณ์ เวลา และข้อจำกัด ทุกส่วนย้อนกลับไปหา discovery ได้</li>
+</ul>
+<p>จากนั้นเพิ่ม edge case เช่น คลินิกปิด, ไม่มีข้อมูล, เวลารอเป็นศูนย์ และถ้าร่างแรกเขียนไว้ให้คนตัดสิน ก็แปลงให้โค้ดตรวจได้</p>
+
+<h3>ขยายไปสู่ agent ที่รันยาว</h3>
+<p>ใน harness สำหรับ agent ที่ทำงานยาว มี <strong>initializer agent</strong> ที่ขยาย prompt ของผู้ใช้เป็นไฟล์ feature requirements แบบละเอียด ในตัวอย่างการสร้าง clone ของ claude.ai ได้ feature <strong>มากกว่า 200 รายการ</strong> และทุกรายการเริ่มต้นเป็น "ยังไม่ผ่าน" จากนั้น coding agent ทำทีละ feature และ <strong>แก้ได้เฉพาะ field <code>passes</code></strong> เท่านั้น ห้ามลบหรือแก้ test เพราะจะกลบ feature ที่ขาดหรือมี bug</p>
+<pre><code>{
+  "category": "functional",
+  "description": "ปุ่มแจ้งเตือนส่ง SMS เมื่อเหลืออีก 3 คิว",
+  "steps": [
+    "เปิดหน้าคิวของคนไข้",
+    "กดเปิดการแจ้งเตือน",
+    "จำลองให้คิวเลื่อนจนเหลือ 3",
+    "ตรวจว่ามี SMS ถูกส่ง 1 ครั้ง"
+  ],
+  "passes": false
+}</code></pre>
+
+<div class="box key"><span class="tag">ลองใช้กับงานจริง</span><p>หยิบ requirement จากโปรเจกต์ล่าสุดที่ไม่มีใครทำให้มันตกได้ แล้วถามว่าคนแปลกหน้าต้องเห็นอะไรถึงจะบอกได้ว่า "ไม่ผ่าน"</p></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"เขียน acceptance test หลังจาก build แรกเสร็จ" ผิด ต้องเขียนก่อนเขียนโค้ด เพราะมันคือสิ่งที่ build ถูกวัด</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>5-7 ข้อ ผ่าน/ตกชัด มีผู้ใช้ อุปกรณ์ เวลา ข้อจำกัด บวก edge case เขียนก่อนโค้ด ใน harness ยาวๆ ทุก feature เริ่มที่ <code>passes: false</code> และ agent แก้ได้แค่ field นั้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>initializer agent กำลังเขียนรายการ feature สำหรับระบบจองคิวก่อนที่จะมีโค้ดใดๆ ค่า <code>passes</code> เริ่มต้นของแต่ละรายการควรเป็นอะไร?</p>
+  <ol type="A">
+    <li><code>true</code></li>
+    <li><code>"pending"</code></li>
+    <li><code>false</code></li>
+    <li><code>null</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ทุกรายการเริ่มที่ยังไม่ผ่าน แล้วค่อยพลิกเมื่อ feature ทำงานจริง <code>true</code> อ้างว่าเสร็จก่อนสร้าง <code>"pending"</code> เป็น string ไม่ใช่ boolean ตาม schema และ <code>null</code> ไม่ใช่สถานะผ่าน/ตก</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Description Chain</h3>
+<p>จากเสียงของผู้ใช้ไปจนถึงคำสั่งที่ Claude ได้รับ มี 4 ข้อต่อ และ <strong>แต่ละข้อต่อเพิ่ม judgement ที่ข้อก่อนหน้าไม่ได้ทำ</strong>:</p>
+<div class="table-wrap"><table>
+  <tr><th>ข้อต่อ</th><th>คืออะไร</th><th>judgement ที่ต้องใส่</th></tr>
+  <tr><td>1. User voice</td><td>ความต้องการตามที่ผู้ใช้เล่า</td><td>ผู้ใช้กลุ่มไหน ผลลัพธ์อะไร ประสบการณ์แบบไหน</td></tr>
+  <tr><td>2. Requirement</td><td>ย่อหน้าเดียวที่วัดได้</td><td>ทุกคำคุณศัพท์ต้องกลายเป็นการตัดสินใจที่ปกป้องได้ เช่น "เร็ว" ต้องกลายเป็นตัวเลข</td></tr>
+  <tr><td>3. Technical spec</td><td>component และการทำงานร่วมกัน</td><td>คัดค้านแนวทางที่ทำลาย constraint</td></tr>
+  <tr><td>4. AI instruction</td><td>constraint, stack, test ที่ส่งให้ Claude</td><td>Claude ต้องรู้อะไรบ้าง spec ถึงจะกลายเป็นโค้ดที่ใช้ได้</td></tr>
+</table></div>
+<p>prompt engineering เป็นแค่ <strong>ข้อต่อสุดท้าย</strong> ข้อจำกัดที่หนีไม่พ้นคือ Claude ทำตามสิ่งที่ผู้ใช้ไม่ได้พูดไม่ได้ builder ต้องเป็นคนแปลความหมายในทุกข้อต่อ</p>
+<p>ใช้ chain นี้วินิจฉัยได้: ถ้าโค้ดผ่าน test แต่ผลิตภัณฑ์ล้ม นั่นคือ <strong>description failure</strong> ให้ไปแก้ที่ข้อต่อที่ขาด ไม่ใช่ไปจูน prompt</p>
+<p>ตัวอย่าง: test ของระบบคิวคลินิกผ่านหมด แต่พ่อแม่ที่ลูกป่วยและมีเวลาแค่สิบนาทีกลับยอมแพ้ก่อนหาเวลารอเจอ ให้กลับไปดูข้อต่อ <strong>Requirement</strong> ก่อน เขียน requirement ใหม่จากคำพูดของผู้ใช้และส่วน experience ของ brief แล้วค่อยเขียน test ใหม่</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"test ผ่านหมด แปลว่า requirement ถูกทำครบแล้ว" ผิด test ผ่านแต่ผู้ใช้ไม่พอใจ แปลว่า test เข้ารหัสเจตนาผิดตั้งแต่ต้น</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>User voice → Requirement → Technical spec → AI instruction เมื่อ test ผ่านแต่ผู้ใช้ไม่แฮปปี้ ให้แก้ต้นน้ำ (มักเป็น requirement) ไม่ใช่ไปแก้ prompt หรือโค้ด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9 (เรียงลำดับ)</span>
+  <p>เรียงข้อต่อของ Description Chain สำหรับระบบแจ้งเตือนรับยาที่ร้านขายยา จากความต้องการของลูกค้าไปจนถึงคำสั่งที่ส่งให้ Claude:</p>
+  <ol>
+    <li>"ลูกค้าที่ใช้โทรศัพท์ปุ่มกดได้รับ SMS ภายใน 5 นาทีหลังยาพร้อม โดยไม่ต้องติดตั้งแอป"</li>
+    <li>"ฉันไม่อยากมานั่งรอที่ร้านโดยไม่รู้ว่ายาเสร็จหรือยัง"</li>
+    <li>"ระบบ POS ยิง webhook เข้า queue service ซึ่งเรียก SMS gateway"</li>
+    <li>"ใช้ Python + FastAPI, ห้ามเก็บเบอร์ลง log, เขียน test ให้ครอบคลุมกรณี gateway ล่ม"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>2 → 1 → 3 → 4</strong> เสียงผู้ใช้ → requirement ที่วัดได้ → technical spec → AI instruction</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://academy.claude.com/courses/ai-fluency-for-builders/delegation-the-builder-s-toolkit">Claude Academy: AI Fluency for Builders, delegation</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Anthropic: Choosing a model</a></li>
+  <li><a href="https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide">Anthropic: Haiku 5.5 migration guide</a></li>
+  <li><a href="https://platform.claude.com/docs/en/models/haiku-4-5/migration-guide">Anthropic: Haiku 4.5 migration guide</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Anthropic: Define success criteria and build evaluations</a></li>
+  <li><a href="https://code.claude.com/docs/en/best-practices">Claude Code: Best practices</a></li>
+  <li><a href="https://claude.com/blog/a-field-guide-to-claude-fable-finding-your-unknowns">Claude blog: A field guide to Claude Fable, finding your unknowns</a></li>
+  <li><a href="https://academy.claude.com/courses/ai-fluency-for-builders/description-building-great-things">Claude Academy: AI Fluency for Builders, description</a></li>
+  <li><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents">Anthropic Engineering: Effective harnesses for long-running agents</a></li>
+</ul>
+</section>

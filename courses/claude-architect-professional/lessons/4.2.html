@@ -1,0 +1,295 @@
+<section class="lesson" id="l-4-2">
+<h2>4.2 Eval datasets and graders: ออกแบบชุดทดสอบแบบผสมหลายวิธี</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/evaluation-datasets-test-cases-edge-cases-and-volume">CertSafari 4.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เปลี่ยนเป้าหมายลอยๆ อย่าง "ตอบดีๆ" ให้เป็น success criteria ที่วัดผลได้จริง</li>
+    <li>สร้าง dataset ที่หน้าตาเหมือน traffic จริงใน production แล้วเติม edge case เข้าไปอย่างตั้งใจ</li>
+    <li>อธิบายได้ว่าทำไม <strong>เคสเยอะ + ตรวจอัตโนมัติ + รันหลายรอบ</strong> ถึงชนะเคสน้อยที่คนตรวจเอง</li>
+    <li>เลือก grader ให้เหมาะกับงาน (code / LLM / human) และรวม grader หลายตัวเข้าเป็น framework เดียวได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: test case หนึ่งอันมี 4 ชิ้น</span>
+  <p>eval หนึ่งเคสประกอบด้วย <strong>input</strong> ที่ป้อนเข้าไป, <strong>output</strong> ที่โมเดลตอบออกมา, <strong>golden answer</strong> (คำตอบอ้างอิงที่ถือว่าถูก) และ <strong>คะแนน</strong> จาก grader ที่เอา output ไปเทียบกับ golden answer ถ้าขาดชิ้นไหนไป เราก็ไม่มีทางบอกได้ว่าระบบดีขึ้นหรือแย่ลง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ตั้ง success criteria ให้ได้ก่อน แล้วค่อยเขียน test case</h3>
+<p>ก่อนจะลงมือเขียนเคสสักเคส ต้องตอบให้ได้ก่อนว่า "ผ่าน" หน้าตาเป็นยังไง ถ้าเกณฑ์ยังลอยๆ อยู่ ต่อให้มีเคสเป็นพันก็ไม่รู้จะให้คะแนนยังไง เกณฑ์ที่ใช้ทดสอบได้ควรมีคุณสมบัติ 4 อย่าง (คล้ายหลัก SMART ที่คุ้นกัน):</p>
+<ul>
+  <li><strong>Specific</strong> เจาะจง บอกชัดว่าวัดอะไร กับข้อมูลชุดไหน</li>
+  <li><strong>Measurable</strong> วัดได้ จะเป็นตัวเลขตรงๆ หรือเป็น scale เชิงคุณภาพก็ได้</li>
+  <li><strong>Achievable</strong> ทำได้จริง ไม่ใช่ตั้งเป้า 100% สมบูรณ์แบบ</li>
+  <li><strong>Relevant</strong> เกี่ยวข้องกับสิ่งที่ผู้ใช้หรือธุรกิจสนใจจริงๆ</li>
+</ul>
+<p>จุดที่คนมักพลาดคือคิดว่า "วัดได้" ต้องเป็นตัวเลขแข็งๆ อย่างเดียว ความจริงคือ scale เชิงคุณภาพ เช่น rubric ให้คะแนน 1–5 ก็นับว่าวัดได้ ตราบใดที่ใช้อย่างสม่ำเสมอควบคู่กับตัวเลขอื่น</p>
+<p>ตัวอย่างการเขียนใหม่: เป้าเดิม "ระบบวิเคราะห์ sentiment ควรแม่นๆ" กลายเป็น "ได้ F1 อย่างน้อย X บน held-out test set (ชุดข้อมูลที่กันไว้ไม่ใช้ตอนจูน) และดีกว่า baseline ปัจจุบัน" แบบนี้ทุกคนในทีมตัดสินได้ตรงกันว่าผ่านหรือไม่ผ่าน</p>
+<p>ส่วนเกณฑ์ที่ <strong>ไม่ใช่</strong> เกณฑ์ที่ดีมักมี 3 หน้าตา:</p>
+<ul>
+  <li>ไม่มีการวัดเลย เช่น "ให้ดูเป็นมิตรขึ้น"</li>
+  <li>ตั้งความสมบูรณ์แบบที่ทำไม่ได้ เช่น "ทุกคนต้องให้คะแนนเต็ม"</li>
+  <li>เอากระบวนการมาแทนเกณฑ์ เช่น "หัวหน้าทีมเซ็นอนุมัติก่อนปล่อย" ซึ่งเป็นขั้นตอนการทำงาน ไม่ใช่เป้าที่วัดได้</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เกณฑ์ที่ดีบอกได้ว่าวัดอะไร บนข้อมูลชุดไหน ด้วยเกณฑ์ตัดเท่าไหร่ rubric 1–5 ใช้ได้ถ้าใช้สม่ำเสมอ ส่วน "ดีขึ้น", "สมบูรณ์แบบ" หรือ "รอหัวหน้าอนุมัติ" ไม่ใช่ success criteria</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมทำ bot ช่วยร่างอีเมลตอบผู้สมัครงาน เป้าเดิมเขียนว่า "อีเมลต้องสุภาพและให้ข้อมูลครบ" ข้อไหนเป็น success criterion ที่ทดสอบได้ดีที่สุด?</p>
+  <ol type="A">
+    <li>อีเมลต้องฟังดูสุภาพกว่าเวอร์ชันเก่าอย่างเห็นได้ชัด</li>
+    <li>ฝ่าย HR ทุกคนต้องให้คะแนนเต็มกับทุกอีเมล</li>
+    <li>ค่าเฉลี่ยอย่างน้อย 4/5 บน rubric ความครบถ้วนของข้อมูล วัดจากอีเมลตัวอย่าง 250 ฉบับที่กันไว้</li>
+    <li>ผู้จัดการฝ่ายสรรหาอ่านและอนุมัติก่อนปล่อยทุกเวอร์ชัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> เป็นข้อเดียวที่เจาะจง วัดได้ และทำได้จริง A ไม่มีการวัด B ตั้งเป้าสมบูรณ์แบบที่ทำไม่ได้ D เป็นกระบวนการอนุมัติ ไม่ใช่เกณฑ์</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ระบบแปลงบันทึกแพทย์เป็นสรุปสำหรับคนไข้ มีเป้าว่า "อ่านง่าย" ทีมอยากเขียนให้เป็นเกณฑ์ที่ใช้ทดสอบได้ ข้อไหนเหมาะสุด?</p>
+  <ol type="A">
+    <li>สรุปทุกฉบับต้องไม่มีศัพท์แพทย์แม้แต่คำเดียว และคนไข้ทุกคนต้องเข้าใจ 100%</li>
+    <li>ค่าเฉลี่ยอย่างน้อย 4/5 บน rubric ความเข้าใจง่าย จากตัวอย่าง 400 บันทึกที่ไม่ได้ใช้ตอนเขียน prompt</li>
+    <li>ให้สรุปฟังดูเป็นกันเองมากขึ้น</li>
+    <li>ส่งให้แพทย์หัวหน้าแผนกอ่านทุกครั้งก่อนปล่อย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> rubric ที่ใช้สม่ำเสมอบนชุดข้อมูลที่กันไว้ถือว่าวัดได้และทำได้จริง A เป็นความสมบูรณ์แบบ C ไม่มีการวัด D เป็นการเซ็นอนุมัติ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. test case ต้องหน้าตาเหมือน traffic จริงก่อน แล้วค่อยเติม edge case</h3>
+<p>dataset ที่ดีคือกระจกของ production ขั้นแรกให้จำลองสิ่งที่ผู้ใช้ส่งเข้ามาจริงๆ ให้ได้ก่อน ทั้ง <strong>ประเภทเอกสาร ความยาว สำนวนการพิมพ์ noise</strong> (คำผิด ฟอร์แมตเพี้ยน) และ <strong>สัดส่วนคร่าวๆ</strong> ของแต่ละแบบ ถ้าของจริงมี PDF สแกน 30% แต่ dataset มีแต่ PDF สะอาด คะแนนที่ได้ก็จะดูดีเกินจริง</p>
+<p>จากนั้นค่อยเติม edge case อย่างตั้งใจ หมวดมาตรฐานที่ควรมีแทบทุกงาน:</p>
+<ul>
+  <li>input ไม่เกี่ยวข้องหรือไม่มีข้อมูลเลย</li>
+  <li>input ยาวมากๆ</li>
+  <li>ในงานแชต: ผู้ใช้พิมพ์อะไรที่อันตรายหรือนอกเรื่อง</li>
+  <li>เคสกำกวมที่แม้แต่คนก็ยังตัดสินไม่ตรงกัน</li>
+</ul>
+<p>นอกจากนี้ยังมี edge case เฉพาะงาน เช่น</p>
+<div class="table-wrap"><table>
+  <tr><th>งาน</th><th>edge case ที่ควรใส่</th></tr>
+  <tr><td>สรุปบทความ</td><td>บทความที่พูดหลายเรื่องปนกัน, พาดหัวที่ชวนเข้าใจผิดไม่ตรงกับเนื้อหา</td></tr>
+  <tr><td>FAQ bot</td><td>คำถามสะกดผิด, คำถามยืดยาววกวน</td></tr>
+  <tr><td>ความเป็นส่วนตัวด้านสุขภาพ</td><td>ข้อมูลสุขภาพที่พูดตรงๆ, ที่เป็นสมมติฐาน ("ถ้าผมเป็นเบาหวาน…"), และที่แฝงมาโดยนัย</td></tr>
+</table></div>
+<p>ทุกเคสต้องมี <strong>golden answer</strong> ซึ่งอาจเป็นคำตอบที่ต้องตรงเป๊ะ (exact match) หรือเป็นตัวอย่างคำตอบที่สมบูรณ์แบบให้ grader ใช้เทียบก็ได้</p>
+<p>ตัวอย่าง dataset ขนาดจิ๋ว สังเกตว่ามีเคสปกติปนกับ edge case ที่ตั้งใจใส่:</p>
+<pre><code>reviews = [
+    {"text": "ส่งไว ของตรงปก", "label": "positive"},
+    {"text": "กล่องบุบ แต่ของข้างในโอเค", "label": "mixed"},           # edge: ความรู้สึกปน
+    {"text": "เยี่ยมมาก รอแค่ 3 สัปดาห์เอง 🙃", "label": "negative"},   # edge: ประชด
+    # ... เติมให้ครบตามสัดส่วนจริงของ production
+]</code></pre>
+<p>สุดท้าย dataset ไม่ใช่ของทำครั้งเดียวจบ ทุกครั้งที่เจอ <strong>failure จริงใน production</strong> ให้แปลงเป็น test case ใหม่ dataset จะได้ตามทันสิ่งที่เกิดขึ้นจริงไปเรื่อยๆ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"อยากให้ eval ทำนายผล production ได้แม่นขึ้น ก็เพิ่มตัวอย่างหมวดที่ง่ายเข้าไปเยอะๆ"</strong> ไม่ใช่ การเพิ่มเคสง่ายแค่ทำให้มั่นใจในเรื่องที่รู้อยู่แล้ว พลังทำนาย (predictiveness) มาจากการทำให้สัดส่วน input ตรงกับของจริง และใส่ edge case ที่ครอบคลุม</p>
+  <p><strong>"golden label ของ edge case ให้ตามคำที่เห็นบนผิว"</strong> ไม่ใช่ ประโยคประชดที่ใช้คำบวกต้องติด label ตามความหมายจริง (ลบ) ถ้าใส่ label ตามผิว เคสนั้นจะให้รางวัลกับความผิดพลาดที่มันถูกสร้างมาเพื่อจับ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เลียนแบบ traffic จริงก่อน (ประเภท ความยาว noise สัดส่วน) → เติม edge case ทั้งหมวดมาตรฐานและเฉพาะงาน → ทุกเคสมี golden answer → แปลง failure จาก production เป็นเคสใหม่เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>dataset จัดประเภทรีวิวร้านอาหารมีเคส "อาหารอร่อยสุดๆ ถ้าคุณชอบรอโต๊ะสองชั่วโมง" ทีมตั้งใจใส่ไว้เป็น edge case golden label ควรเป็นอะไร?</p>
+  <ol type="A">
+    <li>positive เพราะมีคำว่า "อร่อยสุดๆ"</li>
+    <li>negative เพราะความหมายจริงคือบ่นเรื่องการรอ</li>
+    <li>mixed เพราะมีทั้งคำบวกและเรื่องลบ</li>
+    <li>ไม่ต้องใส่ label เพราะเป็นเคสกำกวม</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> นี่คือเคสประชด จุดประสงค์คือดูว่าโมเดลอ่านความหมายจริงหรือแค่อ่านคำบนผิว ถ้าตั้งเป็น positive เท่ากับให้คะแนนความผิดพลาด ส่วน mixed เป็น edge case อีกประเภทหนึ่ง (ความรู้สึกปนกันจริงๆ) และทุกเคสต้องมี golden answer</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>eval ดึงข้อมูลจากใบเสร็จได้ 96% แต่ทุกเคสเป็นรูปถ่ายใบเสร็จที่ชัดและตรง ขณะที่ของจริงมีรูปเอียง ใบเสร็จยาวหลายท่อน และใบที่ซีดจาง อยากให้ eval ทำนายผล production ได้ดีขึ้น ควรทำอะไร?</p>
+  <ol type="A">
+    <li>เพิ่มรูปใบเสร็จชัดๆ อีก 500 ใบ</li>
+    <li>ให้คนสองคนติด label ชุดเดิมซ้ำเพื่อความแม่น</li>
+    <li>เพิ่มรูปเอียง ใบยาว และใบซีด ตามสัดส่วนที่เจอจริง พร้อม edge case ที่ตั้งใจใส่</li>
+    <li>แปลใบเสร็จชุดเดิมเป็นหลายภาษา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ช่องว่างอยู่ที่ประเภท input ที่ dataset ไม่มี A เพิ่มความมั่นใจในหมวดที่ครอบคลุมแล้ว B ตรวจ label แต่ไม่เพิ่ม coverage D ทดสอบความสามารถที่งานนี้ไม่ได้ต้องการ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบดึงวันหมดอายุจากสัญญาประกันภัย ชุดทดสอบมีแต่กรมธรรม์ template มาตรฐานของบริษัทเอง แต่ลูกค้าเริ่มอัปโหลดกรมธรรม์จากบริษัทอื่น เอกสารสแกน และไฟล์ที่ฟอร์แมตเสีย ควรเพิ่มอะไร?</p>
+  <ol type="A">
+    <li>กรมธรรม์ template มาตรฐานเพิ่มอีกหลายร้อยฉบับ</li>
+    <li>ชุดตัวอย่างแบบ stratified ของเอกสารฟอร์แมตเสีย สแกน และ template ที่ไม่ใช่มาตรฐาน วางคู่กับเอกสารมาตรฐานเดิม</li>
+    <li>ทดสอบว่าโมเดลตอบเป็นภาษาอังกฤษได้คล่องไหม</li>
+    <li>ตรวจ label ของเอกสารชุดเดิมซ้ำอีกรอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> stratified คือเก็บตัวอย่างให้ครบทุกกลุ่มย่อย จะได้ครอบคลุมประเภท input ที่ขาดไป ข้ออื่นเพิ่มความมั่นใจในหมวดเดิม ทดสอบความสามารถที่ไม่เกี่ยว หรือไม่ได้เพิ่ม coverage</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ปริมาณ, การตรวจอัตโนมัติ และการรันหลายรอบ</h3>
+<p>ลองคิดเรื่องต้นทุน: <strong>เขียน test case จ่ายครั้งเดียว</strong> แต่ <strong>การให้คะแนนต้องจ่ายทุกครั้งที่รัน eval</strong> ถ้าทีมแก้ prompt วันละหลายรอบ แล้วทุกรอบต้องรอคนมานั่งตรวจ ต้นทุนจะพอกขึ้นเร็วมาก การตรวจอัตโนมัติจึงสเกลได้ดีกว่ามาก</p>
+<p>ดังนั้นให้ออกแบบคำถามตั้งแต่แรกให้ตรวจแบบกลไกได้ เช่น multiple choice, string match, ตรวจด้วยโค้ด หรือให้ LLM ตรวจ เทคนิคง่ายๆ คือ <strong>บังคับ format ของ output</strong> เช่น สั่งว่า "ตอบเป็นตัวเลขอย่างเดียว" แค่นี้ก็ตรวจด้วย exact match ได้แล้ว</p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ทีม A มี 1,000 เคสที่ตรวจอัตโนมัติ ทีม B มี 200 เคสที่ผู้เชี่ยวชาญตรวจเอง แต่รันได้แค่ครั้งเดียวต่อ release ทีมไหนรู้ปัญหาได้ดีกว่า? คำตอบคือ <strong>ทีม A</strong> เพราะรันได้ทุกครั้งที่มีการเปลี่ยนแปลง ไม่ต้องรอรอบ release ปริมาณที่รันบ่อยชนะคุณภาพการตรวจที่รันนานๆ ครั้ง</p>
+</div>
+
+<h3>Trial: ผลรันครั้งเดียวเชื่อไม่ได้</h3>
+<p><strong>Trial</strong> คือการลองทำ task หนึ่งครั้ง เนื่องจาก output ของโมเดลแปรผันระหว่างแต่ละรอบ (non-deterministic) คะแนนที่ขยับ 2–3% จากการรันครั้งเดียวอาจเป็นแค่ noise ไม่ใช่การปรับปรุงจริง วิธีแก้คือรันหลาย trial ต่อ task ทั้งเวอร์ชันเก่าและใหม่ แล้วเทียบผลที่รวมแล้ว (aggregated)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เคสจำนวนน้อยที่คนตรวจอย่างพิถีพิถัน ดีกว่าเคสจำนวนมากที่ตรวจอัตโนมัติ"</strong> ไม่ใช่ เพราะต้นทุนการตรวจเกิดซ้ำทุกรอบ การตรวจอัตโนมัติเลยเป็นทางเดียวที่รันบ่อยๆ ได้จริง ปริมาณชนะ</p>
+  <p><strong>"คะแนนแกว่งเพราะ grader ไม่ดี เปลี่ยน grader ก็หาย"</strong> ไม่ใช่ ความแปรปรวนส่วนใหญ่มาจาก output ของโมเดลเอง ต้องแก้ด้วยการรันหลาย trial</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เขียนเคสจ่ายครั้งเดียว ตรวจจ่ายทุกรอบ → ออกแบบให้ตรวจอัตโนมัติได้ (บังคับ format) → เคสเยอะชนะเคสน้อย → รันหลาย trial ก่อนเชื่อว่าคะแนนเปลี่ยนจริง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมแก้ prompt จัดหมวดคำร้องเรียน รันชุดทดสอบ 600 เคสครั้งเดียว คะแนนขึ้นจาก 73% เป็น 76% ก่อนจะสรุปว่า prompt ใหม่ดีกว่า ควรทำอะไร?</p>
+  <ol type="A">
+    <li>เปลี่ยนจาก exact match เป็น LLM grader เพื่อความยุติธรรม</li>
+    <li>รันหลาย trial ต่อ task ทั้งสองเวอร์ชัน แล้วเทียบผลรวม</li>
+    <li>ประกาศใช้เลย เพราะ 3% บน 600 เคสถือว่าเยอะแล้ว</li>
+    <li>ตัดเคสที่ตอบผิดบ่อยออกจากชุดทดสอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ผลต่างจากการรันครั้งเดียวอาจเป็น noise จาก output ที่แปรผัน การเปลี่ยน grader ไม่ได้แก้ความแปรปรวนของโมเดล และการตัดเคสยากทิ้งทำให้ eval ทำนายได้แย่ลง</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Grader 3 แบบ: code, LLM และ human</h3>
+<p>หลักเลือกคือ <strong>ใช้ grader ที่ถูกที่สุดที่ยังตัดสินเกณฑ์นั้นได้อย่างเชื่อถือได้</strong> ถ้าออกแบบ eval ให้ตรวจด้วยโค้ดได้ นั่นดีที่สุด และพยายามหลีกเลี่ยงการออกแบบ eval ที่ต้องพึ่งคนตรวจ</p>
+<div class="table-wrap"><table>
+  <tr><th>Grader</th><th>วิธีที่ใช้บ่อย</th><th>จุดแข็ง</th><th>จุดอ่อน</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Code-based</strong></td><td>string match (exact, regex, fuzzy), binary test, static analysis, ตรวจผลลัพธ์จริง (outcome verification)</td><td>เร็ว ถูก เป็นกลาง ได้ผลซ้ำเดิม debug ง่าย</td><td>เปราะกับคำตอบที่ถูกแต่เขียนต่างไป จับความละเอียดอ่อนได้น้อย</td><td>คำตอบเชิงหมวดหมู่ หรือคำตอบสั้นที่นิยามชัด</td></tr>
+  <tr><td><strong>Model-based (LLM)</strong></td><td>ให้คะแนนตาม rubric, natural-language assertion, เทียบเป็นคู่ (pairwise), ให้หลาย judge ลงความเห็นร่วม</td><td>ยืดหยุ่น สเกลได้ จับความละเอียดอ่อนได้ รับคำตอบแบบอิสระได้</td><td>non-deterministic แพงกว่า code ต้องให้คน calibrate</td><td>น้ำเสียง คำตอบปลายเปิด การตรวจ policy ที่ซับซ้อน</td></tr>
+  <tr><td><strong>Human</strong></td><td>ผู้เชี่ยวชาญ (SME) รีวิว, สุ่มตรวจ, วัดความเห็นตรงกันระหว่างผู้ตรวจ (inter-annotator agreement)</td><td>คุณภาพระดับมาตรฐานทองคำ ตรงกับวิจารณญาณผู้เชี่ยวชาญ</td><td>แพง ช้า สเกลยาก</td><td>calibrate LLM grader, output ที่เป็นเรื่องอัตวิสัย</td></tr>
+</table></div>
+
+<h3>Code grader ที่ควรรู้จัก</h3>
+<ul>
+  <li><strong>Exact match</strong> normalize ช่องว่างและตัวพิมพ์เล็กใหญ่ก่อน แล้วเทียบกับ golden answer</li>
+  <li><strong>Cosine similarity</strong> เทียบ sentence embedding (เวกเตอร์ตัวแทนความหมายของประโยค) ใช้วัดว่าถามคำถามเดียวกันด้วยถ้อยคำต่างกัน (paraphrase) แล้วได้คำตอบที่ <em>สอดคล้องกัน</em> ไหม ไม่ได้วัดว่าคำตอบ <em>ถูก</em></li>
+  <li><strong>ROUGE-L</strong> วัดความทับซ้อนแบบ longest common subsequence ระหว่างสรุปที่โมเดลเขียนกับสรุปอ้างอิง</li>
+</ul>
+<pre><code>def exact_match(output: str, golden: str) -&gt; bool:
+    norm = lambda s: " ".join(s.split()).lower()
+    return norm(output) == norm(golden)</code></pre>
+
+<h3>LLM grader ที่ควรรู้จัก</h3>
+<ul>
+  <li><strong>Likert scale</strong> ให้คะแนน 1–5 กับคุณภาพบางด้าน เช่น ความเห็นอกเห็นใจ (empathy) หรือความเป็นมืออาชีพ</li>
+  <li><strong>Binary</strong> ตอบ yes/no กับคำถามเดียว เช่น "คำตอบนี้มีข้อมูลสุขภาพส่วนบุคคลไหม" ข้อดีคือจับกรณีที่แฝงโดยนัยซึ่ง rule แบบ regex พลาดได้</li>
+  <li>ควร <strong>บังคับ format ของคำตัดสิน</strong> (เช่น ตอบแค่ <code>yes</code>/<code>no</code> หรือตัวเลข) จะได้ parse ต่อได้ และถ้าทำได้ ให้ใช้ <strong>โมเดลคนละตัว</strong> กับตัวที่สร้าง output มาเป็นคนตรวจ</li>
+</ul>
+<pre><code>GRADER_PROMPT = """อ่านคำตอบด้านล่าง แล้วตัดสินว่ามีข้อมูลสุขภาพของบุคคลที่ระบุตัวได้หรือไม่
+รวมถึงกรณีที่บอกเป็นนัย ตอบเพียงคำเดียว: yes หรือ no
+
+&lt;response&gt;{response}&lt;/response&gt;"""</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"cosine similarity สูงแปลว่าคำตอบถูก"</strong> ไม่ใช่ มันวัดความสอดคล้อง ถ้าโมเดลตอบผิดเหมือนกันทุกครั้ง คะแนนก็ยังสูง</p>
+</div>
+
+<div class="box key"><span class="tag">แนวข้อสอบ</span>
+  <p>bot ตอบคำถามนโยบายบริษัทที่คำตอบเป็นข้อเท็จจริงสั้นๆ (เช่น "ลาพักร้อนได้กี่วัน") และนโยบายเปลี่ยนเป็นระยะ grader ที่ถูกคือ <strong>exact match หรือ normalized string match เทียบกับ answer key ที่มีคนคอยอัปเดต</strong> ตัวเลือกหลอกที่เจอบ่อย: cosine similarity (วัดความสอดคล้อง ไม่ใช่ความถูก), ให้ LLM ให้คะแนนความเป็นมืออาชีพ (วัดน้ำเสียง ไม่ใช่ข้อเท็จจริง), ให้คนรีวิวรายสัปดาห์ (สเกลไม่ได้)</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>คำตอบสั้นนิยามชัด → code grader · น้ำเสียง/ปลายเปิด → LLM grader (Likert หรือ binary, บังคับ format, ใช้คนละโมเดล) · คน → ใช้ calibrate และตัดสินเรื่องอัตวิสัย ถูกที่สุดที่ยังเชื่อถือได้คือคำตอบ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>bot ภายในตอบคำถามเรื่องรหัสสาขาและเวลาเปิดปิดของแต่ละสาขา (คำตอบสั้น เป็นข้อเท็จจริง ข้อมูลเปลี่ยนเมื่อมีการย้ายสาขา) ควรใช้ grader แบบไหน?</p>
+  <ol type="A">
+    <li>cosine similarity ระหว่างคำตอบของ bot เมื่อถามซ้ำหลายแบบ</li>
+    <li>LLM ให้คะแนนความสุภาพ 1–5</li>
+    <li>normalized string match เทียบกับ answer key ที่ทีมคอยอัปเดตตามข้อมูลสาขา</li>
+    <li>ให้พนักงานสุ่มอ่านคำตอบเดือนละครั้ง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> คำตอบสั้นและนิยามชัด code grader จึงถูกและแม่นที่สุด A ผ่านได้แม้ตอบผิดเหมือนกันทุกครั้ง B วัดน้ำเสียงไม่ใช่ความถูก D ช้าและสเกลไม่ได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่งานตรวจกับ grader ที่เหมาะที่สุด:</p>
+  <ol>
+    <li>ตรวจว่าโมเดลตอบหมวดสินค้าตรงกับ label ที่กำหนดไว้</li>
+    <li>ตรวจว่าถามเรื่องเดียวกันด้วยถ้อยคำต่างกัน แล้วได้คำตอบที่ความหมายใกล้กัน</li>
+    <li>ให้คะแนนความสุภาพของคำตอบ 1–5</li>
+    <li>เทียบคะแนนของ LLM grader กับวิจารณญาณผู้เชี่ยวชาญเป็นระยะ</li>
+  </ol>
+  <p>ตัวเลือก: A) Likert LLM grader · B) Human SME review · C) Exact match · D) Cosine similarity</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-A, 4-B</strong> exact match เหมาะกับ label หมวดหมู่, cosine วัดความสอดคล้องระหว่าง paraphrase, Likert ให้คะแนนคุณภาพเชิงน้ำเสียง, ผู้เชี่ยวชาญใช้ calibrate LLM grader</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. รวม grader หลายตัวเป็น framework เดียว</h3>
+<p>แอปส่วนใหญ่ต้องประเมินหลายมิติพร้อมกัน เช่น ถูกต้องไหม ฟอร์แมตตรงไหม น้ำเสียงดีไหม ปลอดภัยไหม ดังนั้น task เดียวมักมี grader หลายตัว แต่ละตัวดูแลมิติเดียว แล้วค่อยเอาคำตัดสินมารวมกันด้วยหนึ่งใน 3 วิธี:</p>
+<div class="table-wrap"><table>
+  <tr><th>วิธีรวม</th><th>กติกา</th><th>เหมาะเมื่อ</th></tr>
+  <tr><td><strong>Weighted</strong></td><td>ถ่วงน้ำหนักคะแนนแล้วรวมกัน ต้องถึง threshold คะแนนดีด้านหนึ่งชดเชยด้านที่อ่อนได้</td><td>ทุกมิติสำคัญพอๆ กัน และยอมให้แลกกันได้</td></tr>
+  <tr><td><strong>Binary</strong></td><td>grader ทุกตัวต้องผ่าน ตกตัวเดียวคือตกทั้งเคส</td><td>ทุกมิติเป็นเงื่อนไขบังคับ</td></tr>
+  <tr><td><strong>Hybrid</strong></td><td>บางตัวเป็นด่านบังคับ (hard gate) ที่เหลือถ่วงน้ำหนักรวมกัน</td><td>มีบางเรื่องห้ามพลาดเด็ดขาด เช่น privacy แต่เรื่องอื่นแลกกันได้</td></tr>
+</table></div>
+<p>อีกเรื่องที่สำคัญคือ grader แต่ละตัว <strong>ดูหลักฐานคนละชิ้นได้</strong> ตัวอย่าง: transcript ของ agent บอกว่า "จองห้องประชุมให้แล้ว" แต่ grader แบบ outcome verification ไปเช็กใน database ว่ามี record การจองจริงไหม คำพูดของ agent ไม่ใช่หลักฐานว่างานเสร็จ</p>
+<p>บทบาทของคนยังไม่หายไป: คนใช้ calibrate LLM grader และตัดสิน output ที่เป็นเรื่องอัตวิสัย ตัวอย่างจริงคือ <strong>Descript</strong> ที่ทำ agent ตัดต่อวิดีโอ เปลี่ยนจากให้คนตรวจทั้งหมดมาเป็น LLM grader ที่ใช้เกณฑ์ซึ่งทีม product กำหนด แล้วให้คนช่วย calibrate เป็นระยะ</p>
+
+<h3>ตัวอย่างออกแบบ: chatbot การแพทย์</h3>
+<ol class="steps">
+  <li><strong>Code check</strong> ตรวจฟอร์แมตตายตัว (เช่น มีหัวข้อครบ ความยาวไม่เกินกำหนด)</li>
+  <li><strong>Binary LLM grader</strong> ตรวจว่ามีข้อมูลสุขภาพหลุดออกมาไหม ตั้งเป็น <strong>hard gate</strong></li>
+  <li><strong>Likert LLM grader</strong> ให้คะแนนน้ำเสียง/ความเห็นอกเห็นใจ</li>
+  <li><strong>คนสุ่มตรวจเป็นระยะ</strong> เพื่อ calibrate LLM grader ทั้งสองตัว</li>
+</ol>
+<pre><code>def score_case(c):
+    if not format_ok(c.output):               # code grader
+        return 0
+    if llm_yes_no(PHI_PROMPT, c.output) == "yes":   # hard gate: privacy
+        return 0
+    tone = llm_likert(TONE_PROMPT, c.output)        # 1-5
+    completeness = llm_likert(COMPLETE_PROMPT, c.output)
+    return 0.4 * tone + 0.6 * completeness          # weighted ส่วนที่เหลือ = hybrid</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"มี LLM grader แล้ว ไม่ต้องมีคนรีวิวอีก"</strong> ไม่ใช่ LLM grader เป็น non-deterministic และอาจเพี้ยนไปจากที่คนต้องการ ต้อง calibrate กับผู้ตรวจที่เป็นคนอย่างต่อเนื่อง</p>
+  <p><strong>"agent รายงานว่าทำเสร็จแล้ว ก็ถือว่าผ่าน"</strong> ไม่ใช่ ควรมี grader ที่ตรวจผลลัพธ์จริง (outcome) แยกจาก transcript</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>หนึ่ง task หลาย grader หนึ่งมิติต่อตัว รวมด้วย weighted (ชดเชยกันได้), binary (ต้องผ่านหมด) หรือ hybrid (มี hard gate + ถ่วงน้ำหนัก) ตรวจผลลัพธ์จริงไม่ใช่แค่คำพูด และให้คน calibrate LLM grader เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>bot ให้คำแนะนำด้านการเงินส่วนบุคคล ทีมต้องการว่า "ถ้ามีเลขบัญชีหรือข้อมูลส่วนตัวหลุดออกมา ต้องตกทันที" ส่วนความชัดเจนกับความครบถ้วนให้ชดเชยกันได้ ควรรวม grader แบบไหน?</p>
+  <ol type="A">
+    <li>Weighted: ถ่วงน้ำหนักทั้งสามมิติรวมกัน</li>
+    <li>Binary: ทุกมิติต้องผ่านหมด</li>
+    <li>Hybrid: privacy เป็น hard gate ส่วนความชัดเจนกับความครบถ้วนถ่วงน้ำหนักรวมกัน</li>
+    <li>ใช้ LLM grader ตัวเดียวให้คะแนนรวม 1–5</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ต้องการทั้งด่านบังคับและส่วนที่แลกกันได้ A ปล่อยให้คะแนนดีด้านอื่นกลบ privacy ที่รั่วได้ B เข้มเกินสำหรับมิติที่ทีมยอมให้ชดเชย D รวมทุกมิติจนแยกไม่ออกว่าตกเพราะอะไร</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 10</span>
+  <p>agent จัดการนัดหมายคลินิก transcript บอกว่า "ยกเลิกนัดให้เรียบร้อยแล้วค่ะ" ทีมอยากให้ eval จับกรณีที่ agent พูดว่าทำแล้วแต่จริงๆ ไม่ได้ทำ ควรเพิ่ม grader แบบไหน?</p>
+  <ol type="A">
+    <li>LLM grader ให้คะแนนความมั่นใจของประโยคใน transcript</li>
+    <li>code grader ที่ไปเช็ก record นัดหมายในระบบว่าสถานะเปลี่ยนเป็นยกเลิกจริง</li>
+    <li>cosine similarity ระหว่าง transcript กับประโยคตัวอย่าง "ยกเลิกเรียบร้อย"</li>
+    <li>ROUGE-L เทียบ transcript กับ transcript อ้างอิง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> นี่คือ outcome verification ตรวจหลักฐานจริงในระบบแทนการเชื่อคำพูด ตัวเลือกอื่นยังวัดแค่ข้อความใน transcript</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Claude Docs: Develop tests</a></li>
+  <li><a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">Anthropic Engineering: Demystifying evals for AI agents</a></li>
+  <li><a href="https://platform.claude.com/cookbook/misc-building-evals">Claude Cookbook: Building evals</a></li>
+</ul>
+</section>

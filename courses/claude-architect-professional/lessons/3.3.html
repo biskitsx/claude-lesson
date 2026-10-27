@@ -1,0 +1,285 @@
+<section class="lesson" id="l-3-3">
+<h2>3.3 Accuracy-latency trade-offs: effort, fast mode, streaming และการเลือก config ที่อธิบายได้</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/effort-and-model-choice-trading-accuracy-for-latency-and-cost">CertSafari 3.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกได้ว่าคันโยกแต่ละตัว (รุ่นโมเดล, effort, <code>max_tokens</code>, streaming, fast mode) ขยับ "นาฬิกา" latency ตัวไหน และต้องแลกกับอะไร</li>
+    <li>เลือกจุดเริ่มต้นระหว่างแนวทาง cost-first กับ capability-first ได้ตามโจทย์</li>
+    <li>ตั้งค่า effort ผ่าน <code>output_config.effort</code> ให้เหมาะกับงาน และรู้ว่า effort ไม่ได้คุมความยาวคำตอบ</li>
+    <li>ใช้ fast mode และ <code>display: "omitted"</code> ได้ถูกที่ โดยไม่ลดความแม่นยำ</li>
+    <li>ให้เหตุผลกับ config ด้วยการ sweep บน eval ของตัวเอง และเทียบด้วย <strong>ต้นทุนต่องานที่สำเร็จ</strong> ไม่ใช่ต้นทุนต่อ token</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: "ช้า" มีหลายความหมาย</span>
+  <p>Latency ไม่ได้มีตัวเลขเดียว มีอย่างน้อย 3 นาฬิกา: <strong>เวลาจนเห็น token แรก (TTFT)</strong>, <strong>เวลาจนคำตอบเสร็จ</strong> และ <strong>เวลารวมทั้งหมดของ agent ที่วิ่งหลาย turn</strong> คันโยกแต่ละตัวขยับนาฬิกาไม่เหมือนกัน และบางตัวแลกด้วยความแม่นยำ บางตัวแลกด้วยเงิน บางตัวไม่ต้องแลกอะไรเลย</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. คันโยกแต่ละตัวขยับนาฬิกาไหน</h3>
+<div class="table-wrap"><table>
+  <tr><th>คันโยก</th><th>นาฬิกาที่ขยับ</th><th>สิ่งที่ต้องแลก</th></tr>
+  <tr><td>ใช้รุ่นเล็กลง (เช่น Haiku 5.5)</td><td>เวลารวม และค่าใช้จ่าย</td><td>ความสามารถในงานยาก</td></tr>
+  <tr><td>ลด effort</td><td>เวลารวม (token ของ thinking, tool call และข้อความลดลง)</td><td>ความสามารถบางส่วน</td></tr>
+  <tr><td>prompt/output สั้นลง และตั้ง <code>max_tokens</code></td><td>เวลารวม</td><td>ถ้าตั้ง cap แน่นเกินไป output จะถูกตัดกลางทาง</td></tr>
+  <tr><td>Streaming</td><td>เวลาจนเห็น output แรกเท่านั้น</td><td>ไม่เสียอะไร แต่เวลารวมก็ไม่เปลี่ยน</td></tr>
+  <tr><td>Fast mode (<code>speed: "fast"</code>)</td><td>จำนวน output token ต่อวินาที (ไม่ใช่ TTFT)</td><td>ราคาแพงขึ้น แต่ความฉลาดเท่าเดิม</td></tr>
+</table></div>
+
+<p>จัดกลุ่มได้ 3 แบบ:</p>
+<ul>
+  <li><strong>ไม่กระทบคุณภาพ:</strong> streaming, ตัด token ที่ไม่จำเป็นใน prompt/output</li>
+  <li><strong>แลกการคิดกับความเร็ว:</strong> รุ่นเล็กลง, effort ต่ำลง, cap ที่แน่น</li>
+  <li><strong>แลกเงินกับความเร็ว:</strong> fast mode ความแม่นยำเท่าเดิม แต่จ่ายแพงขึ้น</li>
+</ul>
+<p>เปรียบเหมือนส่งของ: streaming คือส่งชิ้นแรกให้ลูกค้าเห็นก่อน (ของทั้งหมดถึงเวลาเดิม), ลด effort คือให้พนักงานเช็กของน้อยลง, ส่วน fast mode คือจ้างรถด่วนที่ขับเร็วกว่า คนขับเดิม ของเดิม แต่ค่าส่งแพงกว่า</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด streaming แล้วงานจะเสร็จเร็วขึ้น"</strong> ไม่ใช่ streaming ทำให้<em>รู้สึก</em>เร็ว เพราะเห็นข้อความแรกเร็วขึ้น แต่เวลาสร้างคำตอบทั้งหมดเท่าเดิม</p>
+  <p><strong>"Fast mode คือโมเดลตัวเล็กที่ฉลาดน้อยกว่า"</strong> ไม่ใช่ fast mode รันโมเดลเดิม weights เดิม แค่ส่ง output เร็วขึ้นในราคาที่สูงขึ้น</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ก่อนเลือกคันโยก ถามว่า "ช้า" ที่ผู้ใช้บ่นคือนาฬิกาไหน แล้วถามต่อว่ายอมแลกอะไรได้: ความแม่นยำ เงิน หรือไม่ยอมแลกอะไรเลย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่คันโยกกับผลที่มันทำ:</p>
+  <ol>
+    <li>Streaming</li>
+    <li>Fast mode</li>
+    <li>ลด effort</li>
+    <li>เปลี่ยนเป็นรุ่นเล็ก</li>
+  </ol>
+  <ol type="A">
+    <li>ความแม่นยำเท่าเดิม จ่ายแพงขึ้นเพื่อให้ output ไหลเร็วขึ้น</li>
+    <li>ผู้ใช้เห็นข้อความแรกเร็วขึ้น แต่เวลารวมไม่เปลี่ยน</li>
+    <li>ใช้ thinking/tool/text token น้อยลงในโมเดลตัวเดิม แลกกับความสามารถบางส่วน</li>
+    <li>ถูกลงและเร็วขึ้น แต่สู้งานยากได้น้อยลง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-A, 3-C, 4-D</strong> streaming ขยับแค่นาฬิกาแรก, fast mode แลกเงิน, effort กับรุ่นเล็กแลกความสามารถ (effort ยังอยู่บนโมเดลเดิม)</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เริ่มจากรุ่นที่เร็วที่สุดที่ยังแม่นพอ</h3>
+<p>มีแนวทางเลือกโมเดล 2 ทาง:</p>
+<div class="table-wrap"><table>
+  <tr><th>แนวทาง</th><th>เริ่มที่</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Cost-first</strong></td><td>รุ่นที่เร็วและถูกที่สุด (Claude Haiku 5.5) แล้วอัปเกรดเฉพาะจุดที่ความสามารถไม่พอ</td><td>latency ตึง, งบตึง, งานง่ายปริมาณมาก</td></tr>
+  <tr><td><strong>Capability-first</strong></td><td>Claude Opus แล้วค่อยลดลงมา</td><td>งาน reasoning ซับซ้อนที่ความแม่นยำสำคัญกว่าค่าใช้จ่าย</td></tr>
+</table></div>
+<p>อีกข้อที่ต้องจำ: <strong>ปรับ effort มักดีกว่าย้ายรุ่น</strong> เพราะเราได้ใช้โมเดลตัวเดิมที่ prompt ถูกจูนมาแล้ว การย้ายรุ่นหมายถึงต้องเทสต์ prompt ใหม่ทั้งชุด</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>งานง่าย ปริมาณมาก งบน้อย → เริ่มที่ Haiku แล้วอัปเกรดเฉพาะช่องว่างที่เจอจริง งานยากที่พลาดไม่ได้ → เริ่มที่ Opus แล้วไล่ลง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมต้องติดแท็กหมวดหมู่ให้ข้อความแชทลูกค้าวันละหลายล้านข้อความแบบ real-time งบจำกัดมาก หมวดมีแค่ 12 หมวดที่ชัดเจน ควรเริ่มยังไง?</p>
+  <ol type="A">
+    <li>เริ่มที่ Opus effort <code>max</code> เพื่อความชัวร์ แล้วค่อยลดถ้างบเกิน</li>
+    <li>ใช้ Opus กับ fast mode เพื่อให้ทัน real-time</li>
+    <li>เริ่มที่ Haiku 5.5 วัดผลบน eval แล้วอัปเกรดเฉพาะหมวดที่พลาดจริง</li>
+    <li>ใช้ Sonnet effort <code>xhigh</code> เพราะเป็นตัวกลาง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> เป็นโจทย์ cost-first ชัดเจน: ง่าย ปริมาณมาก latency และงบตึง Haiku คือรุ่นที่เร็วและประหยัดที่สุด ตัวเลือกอื่นจ่ายแพงเกินโดยไม่จำเป็น</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Effort: ปุ่มหมุนภายในโมเดลตัวเดียว</h3>
+<p>Effort ตั้งที่ <code>output_config.effort</code> และมีผลกับ <strong>output token ทุกประเภท</strong>: thinking, การเรียก tool และ argument ของ tool, และข้อความที่ตอบ ใช้ได้ทั้งตอนเปิดและไม่เปิด thinking</p>
+<pre><code>client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=4096,
+    output_config={"effort": "low"},   # subagent ที่แค่ค้นข้อมูลง่ายๆ
+    messages=[{"role": "user", "content": "หา SKU ของสินค้า A-102"}],
+)</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>ระดับ</th><th>พฤติกรรม</th><th>ใช้เมื่อ</th></tr>
+  <tr><td><code>max</code></td><td>คิดง่ายที่สุด ลึกที่สุด ไม่จำกัดความยาวการคิด</td><td>ไม่ค่อยคุ้ม มักจ่ายแพงเพื่อผลที่ดีขึ้นนิดเดียว และไม่ได้รับประกันว่าผลจะดีขึ้น</td></tr>
+  <tr><td><code>xhigh</code></td><td>ลึกกว่า high</td><td>งาน agentic และงานเขียนโค้ดที่วิ่งยาว</td></tr>
+  <tr><td><code>high</code></td><td>คิดในเกือบทุก request ที่ได้ประโยชน์จากการคิด</td><td>ค่า default ของโมเดลส่วนใหญ่</td></tr>
+  <tr><td><code>medium</code></td><td>คิดปานกลาง อาจข้ามการคิดในคำถามง่าย</td><td>ค่า default ของ <strong>Opus 5.5 และ Haiku 5.5</strong></td></tr>
+  <tr><td><code>low</code></td><td>คิดน้อยที่สุด ข้ามการคิดในงานง่าย</td><td>subagent ที่ทำ lookup ง่ายๆ</td></tr>
+</table></div>
+
+<h3>ข้อควรรู้เรื่อง effort</h3>
+<ul>
+  <li><strong>Effort คุมปริมาณการคิด ไม่ได้คุมความยาวคำตอบที่มองเห็น</strong> ถ้าบน Opus 5 คำตอบยาวเกินไป ให้เขียนใน prompt ว่าต้องการความยาวแค่ไหน</li>
+  <li><strong>Effort กับ prompt cache:</strong> ค่า effort ที่ใช้จริงถูกเขียนลงไปใน prompt ดังนั้นถ้าเปลี่ยน effort ระหว่าง request ใน conversation เดียว cache breakpoint จะใช้ไม่ได้ ให้ใช้ระดับเดียวตลอด conversation หรือใช้ per-message effort (beta) บนโมเดลที่รองรับ ซึ่งไม่ทำให้ cache หลุด</li>
+  <li>Effort เป็นคำแนะนำแบบ soft ไม่ใช่การรับประกัน</li>
+  <li>ถ้าโจทย์ยากแล้วโมเดลคิดตื้นไป ให้<strong>เพิ่ม effort</strong> อย่าพยายามเขียน prompt เพื่ออ้อมข้อจำกัดของ effort ที่ตั้งไว้ต่ำ</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง <code>max</code> แล้วจะได้การคิดที่ลึกที่สุด ไม่มีทางได้ผลไม่ครบ"</strong> ไม่ใช่ effort เป็นแนวทางแบบ soft, <code>max</code> เพิ่มค่าใช้จ่ายมากเพื่อผลที่ดีขึ้นนิดเดียว และงาน subagent ง่ายๆ เหมาะกับ <code>low</code> มากกว่า</p>
+  <p><strong>"ลด effort แล้วคำตอบจะสั้นลง"</strong> ไม่ใช่ effort คุมปริมาณการคิด อยากให้สั้นต้องบอกใน prompt</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Effort ครอบคลุม thinking + tool + text มี 5 ระดับ ค่า default ของ Opus 5.5/Haiku 5.5 คือ medium ใช้ระดับเดียวต่อ conversation เพื่อรักษา cache และอย่าใช้มันคุมความยาวคำตอบ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>Orchestrator ปล่อย subagent 10 ตัวพร้อมกันเพื่อดึงราคาสินค้าจาก API ภายใน (งาน lookup ตรงไปตรงมา) ต้องการลดทั้ง latency และค่าใช้จ่าย ควรตั้ง effort ของ subagent เป็นเท่าไหร่?</p>
+  <ol type="A">
+    <li><code>max</code></li>
+    <li><code>xhigh</code></li>
+    <li><code>high</code></li>
+    <li><code>low</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>low</code> ออกแบบมาสำหรับ subagent ที่ทำงานง่าย ระดับสูงกว่านั้นเพิ่ม token และเวลาโดยไม่ได้อะไรเพิ่มในงาน lookup</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>แชตบอตบน Opus 5 ตอบยาวเกินไป วิศวกรคนหนึ่งเสนอให้สลับ effort ไปมาระหว่าง <code>low</code> กับ <code>high</code> ในแต่ละข้อความของบทสนทนาเพื่อให้คำตอบสั้นลง ข้อไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>ดีแล้ว เพราะ <code>low</code> ทำให้คำตอบสั้นลงโดยตรง</li>
+    <li>ควรย้ายไปใช้ fast mode</li>
+    <li>ควรตั้ง <code>max_tokens</code> ให้ต่ำมากๆ แทน</li>
+    <li>ควรกำหนดความยาวใน prompt และใช้ effort ระดับเดียวตลอด conversation เพราะ effort ไม่ได้คุมความยาว และการสลับไปมาทำให้ cache หลุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> effort คุมการคิด ไม่ใช่ความยาว และค่าที่เปลี่ยนจะ invalidate cache breakpoint C เสี่ยงคำตอบถูกตัดกลางประโยค B แค่ส่ง token เร็วขึ้น</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Streaming, fast mode และการซ่อน thinking</h3>
+<h3>Streaming</h3>
+<p>ช่วยเรื่อง perceived latency (ความเร็วที่ผู้ใช้รู้สึก) ไม่ใช่เวลาสร้างทั้งหมด เหมาะกับคำบ่นว่า "หน้าจอค้าง ไม่มีอะไรขึ้นเลย" แต่ไม่ช่วยงาน batch ที่ไม่มีใครนั่งดู</p>
+
+<h3>Fast mode</h3>
+<ul>
+  <li>รันโมเดลเดิม weights เดิม แต่ได้ output token ต่อวินาทีสูงถึง <strong>2.5 เท่า</strong></li>
+  <li>คิดราคาเป็นตัวคูณจากราคามาตรฐาน (ราคา premium) บทเรียนไม่ได้ระบุตัวเลขตัวคูณ</li>
+  <li>รองรับบน <strong>Claude Opus 5.5, Opus 5 และ Opus 4.8</strong></li>
+  <li>เปิดด้วย <code>speed="fast"</code> คู่กับ beta header <code>fast-mode-2026-02-01</code></li>
+  <li><strong>ไม่ได้ลด TTFT</strong> สิ่งที่เร็วขึ้นคือความเร็วการไหลของ output</li>
+</ul>
+<pre><code>client.beta.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=16000,
+    speed="fast",
+    betas=["fast-mode-2026-02-01"],
+    messages=[...],
+)</code></pre>
+
+<h3>ซ่อน thinking ด้วย <code>display: "omitted"</code></h3>
+<ul>
+  <li>โมเดลยัง<strong>คิดเต็มเหมือนเดิม</strong> แต่ thinking block ที่ส่งกลับมามี field thinking ว่างเปล่า</li>
+  <li>field <code>signature</code> ยังเก็บ thinking ที่เข้ารหัสไว้ เพื่อให้ multi-turn ต่อเนื่องได้</li>
+  <li>ประโยชน์หลักคือเวลาเห็น <strong>text token แรก</strong> เร็วขึ้นตอน streaming (ไม่ต้องรอ stream thinking ออกมาก่อน)</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"อยากให้เร็ว ก็ปิด thinking หรือตั้ง <code>budget_tokens</code> ให้น้อยๆ คงที่ทุก request"</strong> วิธีนี้ทำให้ความแม่นยำในโจทย์ยากแย่ลง และกลับกัน การเพิ่ม budget ก็ไม่ได้ทำให้ latency ลดลงเช่นกัน ถ้าต้องรักษาความแม่นยำ ให้คงการคิดไว้แล้วใช้ <code>display: "omitted"</code> หรือ fast mode</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ผู้ใช้รอดูหน้าจอ → streaming, output ยาวแต่ต้องแม่นเท่าเดิม → fast mode, อยากเห็นคำตอบเร็วแต่ยังให้คิดเต็ม → <code>display: "omitted"</code> อย่าตัด thinking เพื่อแลกความเร็วในงานยาก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>งาน batch ตอนกลางคืนให้ Opus 5.5 เขียนรายงานยาวหลายพัน token ต่อชิ้น ช้าจนไม่ทันเช้า ความแม่นยำห้ามลด งบเพิ่มได้ ควรทำอะไร?</p>
+  <ol type="A">
+    <li>เปิด fast mode (<code>speed="fast"</code>) บนโมเดลเดิม</li>
+    <li>เปิด streaming</li>
+    <li>เปลี่ยนเป็น Haiku 5.5</li>
+    <li>ลด effort เป็น <code>low</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> output ยาวได้ประโยชน์จาก token/วินาทีที่สูงขึ้น และความฉลาดเท่าเดิม streaming ไม่ช่วยเพราะไม่มีใครดูหน้าจอและเวลารวมไม่เปลี่ยน C และ D ลดความแม่นยำ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>เครื่องมือวิเคราะห์สัญญาเงินกู้ใช้ extended thinking ผู้ใช้บ่นว่ากว่าจะเห็นคำตอบแรกนานมาก แต่ทีมกฎหมายยืนยันว่าความแม่นยำลดไม่ได้ ควรทำอะไร?</p>
+  <ol type="A">
+    <li>ตั้ง <code>budget_tokens</code> ให้ต่ำคงที่ทุก request</li>
+    <li>ปิด thinking</li>
+    <li>คง thinking budget เดิม แล้วตั้ง <code>display</code> เป็น <code>"omitted"</code></li>
+    <li>เพิ่ม <code>budget_tokens</code> ให้สูงขึ้นเพื่อให้คิดเสร็จเร็วขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> thinking ยังทำงานเต็ม ความแม่นยำคงเดิม แต่ไม่ต้อง stream thinking ออกมาก่อน text แรกจึงขึ้นเร็วขึ้น A และ B ทำร้ายความแม่นยำ D ไม่ลด latency</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ให้เหตุผลกับ config ด้วยการ sweep บน "ต้นทุนต่องานที่สำเร็จ"</h3>
+<p>อย่าเอาค่า effort ที่เคยใช้กับโมเดลรุ่นเก่ามาใช้ต่อเลย ให้ <strong>sweep ใหม่บน eval ของตัวเอง</strong> และเปรียบเทียบด้วยต้นทุนต่องานที่สำเร็จ (cost per completed task) ไม่ใช่ราคาต่อ token</p>
+
+<p>ตัวอย่าง sweep บนงาน repository 370 งาน:</p>
+<div class="table-wrap"><table>
+  <tr><th>Config</th><th>Pass rate</th><th>ต้นทุนต่อครั้ง</th><th>ต้นทุนต่องานที่ผ่าน (โดยประมาณ)</th></tr>
+  <tr><td>Opus 5.5, low</td><td>74.8%</td><td>$0.35</td><td>≈ $0.47</td></tr>
+  <tr><td>Opus 5.5, medium (default)</td><td>86.6%</td><td>$0.84</td><td>≈ $0.97</td></tr>
+  <tr><td>Opus 5.5, high</td><td>88.4%</td><td>$1.38</td><td>≈ $1.56</td></tr>
+  <tr><td>Opus 5.5, xhigh</td><td>91.1%</td><td>$4.11</td><td>≈ $4.51</td></tr>
+  <tr><td>Sonnet 5.5, high (default)</td><td>77.8%</td><td>$0.33</td><td>≈ $0.42</td></tr>
+  <tr><td>Sonnet 5.5, medium</td><td>62.7%</td><td>$0.16</td><td>≈ $0.26</td></tr>
+</table></div>
+<p>วิธีคิด: ต้นทุนต่องานที่ผ่าน = ต้นทุนต่อครั้ง ÷ pass rate (ตัวเลขคอลัมน์สุดท้ายที่ไม่ใช่ medium/xhigh คำนวณเองจากสูตรนี้) จากตาราง Opus 5.5 ที่ medium ใช้ราว $0.97 ต่องานที่สำเร็จ ส่วน xhigh ราว $4.51 ได้ pass rate เพิ่มอีก 4.5 จุด จะคุ้มหรือไม่ขึ้นกับว่า<strong>งานที่ไม่สำเร็จหนึ่งงานทำให้ธุรกิจเสียเท่าไหร่</strong> ไม่มีคำตอบสากล</p>
+
+<h3>เทคนิคลดต้นทุนที่ยังรักษา pass rate</h3>
+<ul>
+  <li><strong>Low ก่อน แล้ว high เฉพาะที่พลาด:</strong> ถ้าตรวจผลอัตโนมัติได้ (มี test หรือ verifier) ให้รันทุกงานที่ <code>low</code> แล้วรันซ้ำที่ <code>high</code> เฉพาะงานที่ไม่ผ่าน การทดสอบภายในของ Anthropic รายงานว่าต้นทุนต่ำกว่ารันทุกงานที่ high ราว <strong>40%</strong> ที่ pass rate เท่ากัน และ latency ดีขึ้นเพราะงานส่วนใหญ่จบในรอบแรก ตัวเลขนี้เป็นแค่ทิศทาง ต้องวัดกับงานของตัวเอง</li>
+  <li><strong>บอกเวลาที่ผ่านไปให้โมเดลรู้:</strong> บอกว่าเวลาสำคัญและแสดงเวลาที่ใช้ไปแล้ว ลด run time ได้ <strong>7% ถึง 47%</strong> ในการทดสอบของ Anthropic แลกกับคะแนนที่ลดลงไม่กี่จุด agent ที่วิ่งยาวควรมีขอบเขตเวลาด้วย เช่น output cap และ session budget</li>
+  <li><strong>ระวัง multi-model setup:</strong> การเพิ่มการเรียกโมเดล frontier อีก 1–2 ครั้งต่องานจะอยู่บน critical path และเพิ่ม latency</li>
+</ul>
+
+<pre><code>def solve(task):
+    out = run(task, effort="low")
+    if verify(out):            # มี test/verifier ตรวจได้
+        return out
+    return run(task, effort="high")   # จ่ายแพงเฉพาะงานที่ยาก</code></pre>
+
+<div class="box key"><span class="tag">ตอนทำข้อสอบ</span>
+  <p>ถ้าโจทย์ถามว่า "อัปเกรดโมเดลแล้วจะตั้ง effort ยังไง" คำตอบที่ถูกเกือบทุกครั้งคือ sweep ใหม่บน eval ของตัวเองแล้วเทียบ cost per completed task ไม่ใช่ลอกค่าเดิมมาใช้ หรือดูแค่ราคาต่อ token</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Config ที่ดีต้องอธิบายได้ด้วยตัวเลขจาก eval ของเรา หารต้นทุนด้วย pass rate แล้วชั่งกับมูลค่าของงานที่พลาด และพิจารณา low-then-high ถ้าตรวจผลได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีมย้ายจาก Opus 5 ไป Opus 5.5 และอยากรู้ว่าจะตั้ง effort เท่าไหร่ ข้อไหนเป็นแนวทางที่ถูกต้อง?</p>
+  <ol type="A">
+    <li>ใช้ค่า effort เดิมที่จูนไว้กับ Opus 5 เพราะเป็นตระกูลเดียวกัน</li>
+    <li>เลือกระดับที่ราคาต่อ token ต่ำที่สุด</li>
+    <li>รัน effort sweep ใหม่บน eval ของตัวเอง แล้วเทียบด้วยต้นทุนต่องานที่สำเร็จ</li>
+    <li>ใช้ <code>max</code> ไว้ก่อนเพราะรุ่นใหม่คุ้มกว่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> พฤติกรรม effort เปลี่ยนตามรุ่น (เช่น default ของ Opus 5.5 คือ medium) ต้องวัดใหม่ และวัดด้วยต้นทุนต่องานที่สำเร็จ ไม่ใช่ราคาต่อ token</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>จากตาราง sweep ข้างบน ถ้าต้นทุนของ config หนึ่งคือ $0.84 ต่อครั้ง pass rate 86.6% ต้นทุนต่องานที่สำเร็จประมาณเท่าไหร่?</p>
+  <ol type="A">
+    <li>$0.73</li>
+    <li>$0.84</li>
+    <li>$0.97</li>
+    <li>$1.38</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> 0.84 ÷ 0.866 ≈ 0.97 ทุกครั้งที่พลาดยังต้องจ่าย ต้นทุนต่องานที่สำเร็จจึงสูงกว่าต้นทุนต่อครั้งเสมอ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>pipeline แก้บั๊กอัตโนมัติมี unit test ตรวจผลทุกงาน ตอนนี้รันทุกงานที่ <code>high</code> อยากลดต้นทุนโดยไม่ลด pass rate วิธีไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>รันทุกงานที่ <code>low</code> แล้วรันซ้ำที่ <code>high</code> เฉพาะงานที่ test ไม่ผ่าน</li>
+    <li>ลดทุกงานเป็น <code>low</code> ถาวร</li>
+    <li>เปิด streaming</li>
+    <li>เปิด fast mode</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> เมื่อมี verifier งานส่วนใหญ่จะจบที่รอบถูก และจ่ายแพงเฉพาะงานยาก B ลด pass rate, C ไม่ลดต้นทุน, D เพิ่มต้นทุน</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency">Claude Docs: Reduce latency</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Claude Docs: Optimizing for cost and intelligence</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude Docs: Choosing a model</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/effort">Claude Docs: Effort</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost">Claude Docs: Thinking steering and cost</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/fast-mode">Claude Docs: Fast mode</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/thinking">Claude Docs: Extended thinking</a></li>
+</ul>
+</section>

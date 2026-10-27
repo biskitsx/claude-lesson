@@ -1,0 +1,364 @@
+<section class="lesson" id="l-1-5">
+<h2>1.5 Task decomposition patterns: chaining, routing, parallelization และ orchestrator-workers</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/task-decomposition-with-workflow-patterns-chaining-routing-parallelization">CertSafari 1.5</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่าจะใช้ chaining, routing, parallelization หรือ orchestrator-workers โดยดูว่า <strong>รู้ subtask ล่วงหน้าได้หรือไม่</strong></li>
+    <li>จับคู่โมเดลกับแต่ละ subtask ตามความยากและความถี่ของงาน</li>
+    <li>แตกงานที่ต้องดูหลายมิติออกเป็น subagent ใน Agent SDK ที่มี tool และ description ของตัวเอง</li>
+    <li>รู้ว่าเมื่อไหร่ควรย้ายลูปเรียก tool ถี่ๆ ไปไว้ในโค้ดด้วย programmatic tool calling</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ใครเป็นคนกำหนด subtask</span>
+  <p><strong>Task decomposition</strong> คือการหั่นงานยากหนึ่งชิ้นเป็นงานย่อย (subtask) ให้แต่ละชิ้นมี model call, prompt, ชุด tool หรือแม้แต่โมเดลของตัวเอง คำถามที่แยก pattern ทั้งหมดออกจากกันมีข้อเดียว: <strong>subtask ถูกกำหนดโดยคนออกแบบตอนสร้างระบบ หรือโดยโมเดลตอนรันจริง</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ทำไมแตกงานแล้วผลดีขึ้น</h3>
+<p>ถ้าสั่ง LLM ครั้งเดียวให้ทำหลายเรื่องพร้อมกัน ความสนใจของโมเดลก็ถูกแบ่งไปทุกเรื่อง แต่ละเรื่องเลยได้น้อยลง พอแยกให้ call หนึ่งรับผิดชอบเรื่องเดียว เช่น call หนึ่งตอบลูกค้า อีก call ตรวจว่าคำถามมีเนื้อหาไม่เหมาะสมไหม ทั้งสองงานมักออกมาดีกว่าการยัดรวมกันใน prompt เดียว วิธีนี้เหมาะกับงานที่มีงานย่อยหลายอันแต่รับใช้เป้าหมายเดียวกัน</p>
+<p>เปรียบเหมือนครัวร้านอาหาร ถ้าให้เชฟคนเดียวทั้งหั่นผัก ทอด จัดจาน และล้างจาน งานทุกอย่างจะออกมาพอใช้ แต่ถ้าแบ่งสถานี แต่ละคนโฟกัสงานของตัวเอง คุณภาพจะดีขึ้น แลกกับการที่ต้องส่งของระหว่างสถานี</p>
+<p>ราคาที่ต้องจ่ายมี 3 อย่าง:</p>
+<ul>
+  <li><strong>Latency เพิ่ม</strong> เพราะมีหลาย call</li>
+  <li><strong>Token เพิ่ม</strong> เพราะแต่ละ call ต้องมี prompt และ context ของตัวเอง</li>
+  <li><strong>Context อาจหล่นหาย</strong> ทุกครั้งที่ส่งงานต่อจาก call หนึ่งไปอีก call</li>
+</ul>
+<p>กฎง่ายๆ: <strong>ถ้าเขียนรายการ subtask ได้ตั้งแต่ตอนออกแบบ ให้เขียนลงในโค้ด</strong> (chaining, routing, parallelization) <strong>ถ้า subtask ขึ้นอยู่กับ input แต่ละครั้ง ให้โมเดลเป็นคนวางแผน</strong> (orchestrator-workers)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>แตกงานเพื่อให้แต่ละ call โฟกัสเรื่องเดียว แต่ต้องยอมจ่ายเวลา token และความเสี่ยงที่ context หล่นระหว่างทาง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมทำแชตบอตตอบคำถามเรื่องประกันสุขภาพ เดิมใช้ prompt เดียวให้ทั้ง "ตรวจว่าคำถามขอคำวินิจฉัยทางการแพทย์หรือเปล่า" และ "ตอบคำถาม" ตอนนี้แยกเป็น 2 call ข้อได้เปรียบหลักของการแยกคืออะไร?</p>
+  <ol type="A">
+    <li>แต่ละ call โฟกัสงานเดียวเต็มที่ ทั้งการคัดกรองและการตอบจึงแม่นขึ้น</li>
+    <li>ใช้ token รวมน้อยลง เพราะ prompt แต่ละตัวสั้นลง</li>
+    <li>ระบบรวมตอบเร็วขึ้น เพราะ call แต่ละตัวสั้นลง</li>
+    <li>โมเดลจะเลือกเองตอนรันว่าต้องตรวจเรื่องอะไรบ้าง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> การแยกซื้อความแม่นยำด้วยความสนใจเต็มที่ต่องาน ส่วน C กับ B กลับด้าน เพราะ call ที่เพิ่มขึ้นทำให้ช้าลงและใช้ token มากขึ้น ข้อ D เป็นลักษณะของ orchestrator-workers ไม่ใช่การแยก call แบบกำหนดไว้ล่วงหน้า</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Prompt chaining: ต่อกันเป็นสายพาน</h3>
+<p><strong>Prompt chaining</strong> คือแบ่งงานเป็นขั้นตอนตายตัวเรียงกัน output ของ call ก่อนหน้ากลายเป็น input ของ call ถัดไป ระหว่างขั้นใส่ <strong>gate</strong> ได้ คือด่านตรวจที่เป็นโค้ดธรรมดา เช็คว่างานยังอยู่ในเส้นทาง ถ้าไม่ผ่านก็หยุดหรือแก้ก่อนที่ความผิดพลาดจะไหลต่อไปขั้นถัดไป</p>
+<p>ตัวอย่างการใช้งาน: เขียนข้อความโฆษณาแล้วค่อยแปล หรือเขียน outline → ตรวจ outline ตามเกณฑ์ → ค่อยเขียนเอกสารเต็มจาก outline</p>
+<p>เป้าหมายของ chaining คือ <strong>ยอมแลก latency เพื่อความแม่นยำ</strong> เพราะแต่ละ call มีงานง่ายลง เหมาะเมื่องานแบ่งเป็นขั้นตายตัวได้สะอาด</p>
+
+<h3>ตัวอย่าง: แปลงรายงานยอดขายเป็นตาราง</h3>
+<p>สมมติต้องเอารายงานไตรมาสที่เป็นข้อความยาวมาทำเป็นตาราง markdown แบ่งได้ 4 call:</p>
+<ol class="steps">
+  <li>ดึงชื่อ metric และค่าออกมา</li>
+  <li>แปลงค่าทั้งหมดให้อยู่ในรูปแบบเดียวกัน (เช่น หน่วยเดียวกัน)</li>
+  <li>เรียงจากมากไปน้อย</li>
+  <li>จัดเป็นตาราง markdown</li>
+</ol>
+<p>หลังขั้นที่ 1 ใส่โค้ดเช็คว่าได้ metric ครบหรือยัง ถ้าขาด ก็หยุดตรงนั้น ไม่ปล่อยให้ข้อมูลไม่ครบไปถึงตาราง</p>
+
+<h3>Claude Code workflow ใช้ pattern เดียวกัน</h3>
+<p>ใน dynamic workflow ของ Claude Code เราเรียก <code>agent()</code> ครั้งแรกให้คืนรายการไฟล์ตามรูปแบบที่ประกาศไว้ผ่าน option <code>schema</code> แล้วเอารายการนั้นไปขับขั้นต่อไปที่ทำงานทีละไฟล์ ตัวอย่างนี้หา endpoint ที่ลืมเช็คสิทธิ์:</p>
+<pre><code>const found = await agent("หาไฟล์ .ts ทั้งหมดใต้ src/api/", {
+  schema: {
+    type: "object",
+    properties: { files: { type: "array", items: { type: "string" } } },
+    required: ["files"]
+  }
+});
+
+const reports = await pipeline(found.files, f =&gt;
+  agent(`ตรวจ ${f} ว่ามี route ไหนไม่เช็ค permission`, { label: f })
+);
+return reports.filter(Boolean);</code></pre>
+<ul>
+  <li><code>schema</code> บังคับให้ output ของ call แรกเป็น object ที่มี <code>files</code> เป็น array ของ string ขั้นถัดไปจึงวนได้แน่นอน</li>
+  <li><code>label</code> แค่ตั้งชื่อ agent แต่ละตัวให้อ่านง่าย ไม่ได้คุมรูปแบบ output</li>
+  <li><code>filter(Boolean)</code> ตัดผลที่ว่างทิ้ง</li>
+</ul>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ถ้าเปลี่ยน prompt สกัดข้อมูลตัวเดียวเป็น chain 4 ขั้น จะเกิดอะไร? คำตอบคือ <strong>ช้าลงแต่แม่นขึ้น</strong> เพราะ chain รันทีละ call ต่อกัน ไม่มีการทำงานซ้อนกัน แต่ละ call ทำงานที่ง่ายลง</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แบ่งเป็น chain แล้วเร็วขึ้น เพราะแต่ละ call เล็กลง"</strong> ไม่ใช่ chain รันตามลำดับ เวลารวมคือผลบวกของทุกขั้น จึงช้ากว่า call เดียว</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Chaining = ขั้นตอนตายตัวต่อกัน มี gate ตรวจด้วยโค้ดคั่น แลกเวลาเพื่อความแม่นยำ ใน Claude Code ใช้ <code>schema</code> ทำให้ output ของขั้นแรกมีรูปแบบแน่นอน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ใน workflow ของ Claude Code คุณอยากให้ call แรกคืน <code>{ "tickets": [...] }</code> ในรูปแบบที่ประกาศไว้ เพื่อให้ขั้นถัดไปวนลูปได้โดยไม่ต้อง parse ข้อความเอง ต้องใส่ option ไหน?</p>
+  <ol type="A">
+    <li><code>label</code></li>
+    <li><code>tools</code></li>
+    <li><code>context</code></li>
+    <li><code>schema</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>schema</code> กำหนดโครงสร้าง output ส่วน <code>label</code> แค่ตั้งชื่อ agent และ <code>tools</code> กำหนดเครื่องมือที่ใช้ได้ ไม่เกี่ยวกับรูปแบบ output</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Routing: คัดแยกก่อน แล้วส่งให้ผู้เชี่ยวชาญ</h3>
+<p><strong>Routing</strong> คือจัดประเภท input ก่อน แล้วส่งต่อไปยังขั้นเฉพาะทางที่มี prompt, tool หรือโมเดลของตัวเอง เหมือนพนักงานต้อนรับโรงพยาบาลที่ดูอาการแล้วส่งไปแผนกที่ถูก</p>
+<p>เหตุผลที่ต้องแยกคือปัญหา <strong>interference</strong>: ถ้าใช้ prompt เดียวรับทุกประเภท พอจูนให้เก่งเรื่องหนึ่ง เรื่องอื่นมักแย่ลง ตัวอย่างคลาสสิกคือ customer service ที่แยกเป็น 3 ทาง: คำถามทั่วไป, ขอคืนเงิน และปัญหาเทคนิค</p>
+<p>Routing ใช้ได้ดีเมื่อ <strong>หมวดหมู่แยกกันชัด</strong> และ <strong>จัดประเภทได้แม่น</strong> (ใช้ LLM หรือ classifier แบบดั้งเดิมก็ได้) ถ้าจัดผิดบ่อย ผู้เชี่ยวชาญแต่ละทางจะได้งานที่ไม่ได้ถูกออกแบบมาให้รับ</p>
+
+<h3>Routing คือจุดที่เลือกโมเดลให้แต่ละงาน</h3>
+<p>งานง่ายและเกิดบ่อยใช้โมเดลเล็กราคาถูก งานยากหรือแปลกใหม่ใช้โมเดลที่เก่งกว่า ตัวอย่าง pipeline ซัพพอร์ต: ขั้นจัดประเภท ticket (ปริมาณมาก) ใช้ Haiku ส่วนขั้นร่างแผนแก้ปัญหา (หลายขั้นตอน เป็นปัญหาใหม่) ใช้ Opus</p>
+<ul>
+  <li>ใช้โมเดลใหญ่ทุกขั้น = จ่ายแพงกับงานจัดประเภทธรรมดาทุกวัน</li>
+  <li>ใช้ Haiku ทุกขั้น = ผลักงานยากให้โมเดลที่ทำไม่ไหวอย่างน่าเชื่อถือ</li>
+  <li>สุ่มโมเดล <strong>ไม่ใช่ routing</strong> เพราะไม่มีอะไรใน input เป็นตัวตัดสินว่าจะไปทางไหน</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>Model class</th><th>เหมาะกับ</th></tr>
+  <tr><td>Haiku</td><td>งานความถี่สูงที่ latency และต้นทุนสำคัญ เช่น classification, extraction ง่ายๆ</td></tr>
+  <tr><td>Sonnet</td><td>งานทั่วไปในชีวิตประจำวัน รวมถึงเป็น subagent ปริมาณมากในระบบ multi-agent</td></tr>
+  <tr><td>Class ที่เก่งกว่า เช่น Opus</td><td>งานช้า หลายขั้นตอน หรือปัญหาที่ยังไม่เคยแก้มาก่อน</td></tr>
+</table></div>
+<p>ใน Agent SDK นิยามของ subagent แต่ละตัวมี field <code>model</code> (ไม่บังคับใส่) ทำให้ classifier ราคาถูกกับตัวร่างงานราคาแพงอยู่ในระบบเดียวกันได้ และเมื่อเป็นระบบ agent การ routing ก็คือการส่งงานไปหา <strong>specialist agent</strong> แทนที่จะเป็น specialist prompt</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Routing ได้ผลก็ต่อเมื่อ classifier แม่น ถ้าส่งผิดทางบ่อย ให้แก้ที่ขั้นจัดประเภทก่อน และใช้ routing เป็นจุดจับคู่โมเดลกับความยากของงาน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบ HR แยกคำถามพนักงานเป็น "เรื่องวันลา" กับ "เรื่องเงินเดือน" แล้วส่งให้ prompt เฉพาะทาง แต่ log พบว่าคำถามเรื่องหักเงินเพราะลาเกินมักไปตกที่ฝั่งวันลา ซึ่งตอบเรื่องเงินไม่ได้ ควรแก้อะไรเป็นอย่างแรก?</p>
+  <ol type="A">
+    <li>ปรับขั้นจัดประเภทให้แยกเคสแบบนี้ได้แม่นขึ้น</li>
+    <li>เปลี่ยน prompt ฝั่งวันลาให้ใช้โมเดลที่ใหญ่ขึ้น</li>
+    <li>รวมทั้งสองฝั่งกลับเป็น prompt เดียว</li>
+    <li>เพิ่มหมวดใหม่อีก 3 หมวด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ต้นเหตุคือการจัดประเภทผิด โมเดลใหญ่ขึ้นที่ปลายทางไม่ทำให้งานถูกส่งมาถูกที่ การรวมกลับเป็น prompt เดียวทำให้ปัญหา interference กลับมา และเพิ่มหมวดก็ไม่ได้แก้ที่ classifier</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ระบบตรวจรีวิวสินค้ามี 2 ขั้น: (1) ติดป้ายรีวิวหลายแสนรายการต่อวันว่าเป็นบวก/ลบ/ร้องเรียน และ (2) สำหรับรีวิวร้องเรียนที่ซับซ้อน ร่างแผนแก้ปัญหาข้ามหลายแผนก ควรจัดโมเดลอย่างไร?</p>
+  <ol type="A">
+    <li>Opus ทั้งสองขั้น แต่ตั้ง effort ต่ำในขั้นแรก</li>
+    <li>Haiku ทั้งสองขั้น แล้วเขียน prompt ขั้นที่ 2 ให้ยาวและละเอียดมาก</li>
+    <li>สุ่มโมเดลแต่ละ request เพื่อเฉลี่ยต้นทุน</li>
+    <li>Haiku สำหรับขั้นติดป้าย และ Opus สำหรับขั้นร่างแผน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> จับคู่โมเดลกับความยากและความถี่ของแต่ละงาน ข้อ A ยังใช้โมเดลแพงกับงานง่ายปริมาณมาก ข้อ B prompt ยาวชดเชยความสามารถที่ไม่พอไม่ได้ ข้อ C ไม่ใช่ routing เพราะไม่ได้ดูจาก input เลย</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Parallelization: sectioning กับ voting</h3>
+<p><strong>Parallelization</strong> คือรันหลาย model call พร้อมกัน แล้วใช้โค้ดรวมผล มี 2 แบบ:</p>
+<ul>
+  <li><strong>Sectioning</strong> แบ่งเป็นงานย่อยที่ไม่พึ่งกันแล้วรันคู่กัน เช่น call หนึ่งตอบผู้ใช้ อีก call คัดกรองเนื้อหาไม่เหมาะสม ซึ่งมักดีกว่าให้ call เดียวทำทั้งสองอย่าง หรือ eval อัตโนมัติที่ให้แต่ละ call ให้คะแนนคนละด้านของคำตอบ</li>
+  <li><strong>Voting</strong> รันงานเดียวกันหลายครั้งแล้วรวมคำตอบเพื่อให้มั่นใจขึ้น เช่น ใช้หลาย prompt ตรวจช่องโหว่ในโค้ดชุดเดียวกัน ถ้าตัวไหนเจอปัญหาก็ flag หรืองาน moderation ที่ปรับ threshold ของจำนวนเสียงโหวตเพื่อถ่วงดุลระหว่าง false positive กับ false negative</li>
+</ul>
+<p>จำง่ายๆ: sectioning = <em>คนละงาน</em> ทำพร้อมกัน, voting = <em>งานเดียวกัน</em> ทำหลายรอบ</p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ถ้าระบบกระจายคำถามไปให้ subagent 5 ตัวทำพร้อมกัน สิ่งที่ได้หลักๆ คืออะไร? คำตอบคือ <strong>ความครอบคลุมที่ละเอียดขึ้น</strong> โดยมักใช้ token มากขึ้น และเวลารวมอาจนานขึ้นด้วย</p>
+</div>
+
+<h3>แยกเรื่องความเร็วกับต้นทุนออกจากกัน</h3>
+<ul>
+  <li>งานย่อยที่รันพร้อมกันจะเสร็จตามเวลาของ <strong>ตัวที่ช้าที่สุด</strong> ไม่ใช่ผลรวมของทุกตัว</li>
+  <li>แต่ทั้งระบบ multi-agent มักใช้ token <strong>มากกว่า agent ตัวเดียวประมาณ 3–10 เท่า</strong> และเวลารวมมักนานกว่าด้วย</li>
+  <li>ดังนั้นเลือก parallelization เพื่อ <strong>ความครอบคลุมหรือความมั่นใจ</strong> และต้องยอมรับค่าใช้จ่ายที่สูงขึ้น</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"รัน agent แบบขนานเพื่อให้งานเสร็จเร็วและถูกลง"</strong> ไม่ใช่ การรันขนานไม่ได้ลดต้นทุน และไม่รับประกันว่าจะเร็วขึ้น สิ่งที่ซื้อได้คือความครอบคลุม</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Sectioning แบ่งงานต่างกันไปทำพร้อมกัน, voting ทำงานเดียวกันซ้ำเพื่อความมั่นใจ ทั้งสองแบบได้ความละเอียด ไม่ใช่ความถูก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบตรวจสัญญาเช่าส่งสัญญาฉบับเดียวกันให้ prompt เดียวกัน 4 ครั้งพร้อมกัน ถามว่า "มีเงื่อนไขที่ไม่เป็นธรรมต่อผู้เช่าไหม" ถ้ามีตั้งแต่ 2 ครั้งขึ้นไปที่ตอบว่ามี ระบบจะส่งให้ทนายดู นี่คือ pattern ไหน?</p>
+  <ol type="A">
+    <li>Voting</li>
+    <li>Sectioning</li>
+    <li>Prompt chaining</li>
+    <li>Orchestrator-workers</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งานเดียวกันรันหลายรอบแล้วรวมผลด้วย threshold คือ voting ถ้าเป็น sectioning แต่ละ call ต้องตรวจคนละเรื่อง chaining รันต่อกันเป็นลำดับ และ orchestrator-workers ต้องมีโมเดลคิด subtask ตอนรัน</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Orchestrator-workers: ให้โมเดลวางแผนงานย่อยเอง</h3>
+<p>ใน <strong>orchestrator-workers</strong> มีโมเดลตัวกลาง (orchestrator) อ่านงาน ตัดสินว่าต้องทำ subtask อะไรบ้าง ส่งให้ worker ทำ แล้วรวมผล หน้าตาคล้าย sectioning แต่ต่างตรงที่ <strong>subtask ไม่ได้ถูกกำหนดไว้ล่วงหน้า</strong> orchestrator คิดให้ใหม่ตาม input ทุกครั้ง ตัวอย่างคลาสสิกคืองานแก้โค้ดที่ไม่รู้ล่วงหน้าว่าจะต้องแตะกี่ไฟล์หรือแก้อะไร</p>
+<pre><code>async def investigate(incident):
+    angles = await lead.plan(incident)          # lead แตกปัญหาเป็นมุมที่ต้องสืบ
+    jobs = [worker(a) for a in angles]          # worker หนึ่งตัวต่อหนึ่งมุม
+    findings = await asyncio.gather(*jobs)      # รันพร้อมกัน
+    return await lead.summarize(findings)       # lead รวมผล</code></pre>
+<p>จำนวน worker ในโค้ดนี้ขึ้นกับรายการ <code>angles</code> ที่ lead สร้างขึ้นตอนรัน ไม่ได้เขียนตายตัว</p>
+
+<h3>ข้อจำกัดและวิธีลดต้นทุน</h3>
+<ul>
+  <li>ใช้ <strong>N+1 call</strong> ต่อการรันหนึ่งครั้ง (orchestrator 1 + worker N)</li>
+  <li>คุณภาพทั้งหมดขึ้นกับแผนของ orchestrator จึงต้องลงแรงกับ prompt ของ orchestrator มากที่สุด</li>
+  <li>ลดต้นทุนด้วยการแบ่งโมเดล: ใช้โมเดลเก่งอย่าง Opus วางแผน และโมเดลถูกอย่าง Haiku เป็น worker</li>
+</ul>
+<p><strong>ไม่ควรใช้เมื่อ</strong>: งานง่ายที่ได้ output ชิ้นเดียว, เส้นทางที่ latency สำคัญมาก, หรือ subtask เหมือนเดิมทุกครั้ง (กรณีหลังใช้ parallelization ที่กำหนดไว้ล่วงหน้าจะง่ายกว่า)</p>
+
+<h3>Managed Agents: dynamic workflows</h3>
+<p>Managed Agents มีความสามารถนี้ในชื่อ <strong>dynamic workflows</strong>: agent เขียน "workflow" ขึ้นมาเป็นโปรแกรมที่รัน agent จำนวนมากเป็นเฟสๆ แล้วรวมผล ตัว server รันให้ใน background งานที่ใช้บ่อยคือ audit, migration, deep research และการตรวจไขว้ (cross-checking) เนื่องจาก agent ทุกตัวในการรันกิน token จึงควรตั้ง <strong>session budget</strong> เพื่อคุมค่าใช้จ่ายรวม</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Pattern</th><th>ใครกำหนด subtask</th><th>ใช้เมื่อ</th></tr>
+  <tr><td>Prompt chaining</td><td>คนออกแบบ เป็นลำดับตายตัว</td><td>งานแบ่งเป็นขั้นตายตัวได้ และความแม่นสำคัญกว่าความเร็ว</td></tr>
+  <tr><td>Routing</td><td>คนออกแบบ เป็นชุดหมวดหมู่</td><td>input แบ่งเป็นหมวดชัดเจนและจัดประเภทได้แม่น</td></tr>
+  <tr><td>Parallelization: sectioning</td><td>คนออกแบบ เป็นชิ้นที่ไม่พึ่งกัน</td><td>แต่ละด้านควรได้ call ที่โฟกัสของตัวเอง</td></tr>
+  <tr><td>Parallelization: voting</td><td>คนออกแบบ เป็นการทำซ้ำ</td><td>ต้องการความมั่นใจจากหลายรอบหรือหลายมุมมอง</td></tr>
+  <tr><td>Orchestrator-workers</td><td>โมเดล orchestrator ตอนรัน ต่อ input</td><td>เดา subtask ล่วงหน้าไม่ได้</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"งานไหนมีหลาย subtask ให้ใช้ orchestrator-workers เป็นค่าเริ่มต้น"</strong> ไม่ใช่ คุณค่าของมันคือการเลือก subtask ตอนรัน ถ้า subtask คาดเดาได้อยู่แล้ว parallelization แบบกำหนดล่วงหน้าง่ายและถูกกว่า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Orchestrator-workers = โมเดลคิดงานย่อยตาม input จ่าย N+1 call, ลงแรงที่ prompt ของ orchestrator, ใช้โมเดลเก่งวางแผนและโมเดลถูกทำงาน และตั้ง session budget เมื่อใช้ dynamic workflows</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ในโค้ด <code>investigate()</code> ด้านบน ถ้าอยากให้จำนวน worker เปลี่ยนตามแผนที่ lead คิดขึ้นในแต่ละเหตุการณ์ บรรทัด <code>jobs = [worker(a) for a in ___]</code> ต้องเติมอะไร?</p>
+  <ol type="A">
+    <li><code>incident</code></li>
+    <li><code>findings</code></li>
+    <li><code>jobs</code></li>
+    <li><code>angles</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>angles</code> คือรายการที่ lead สร้างตอนรัน <code>incident</code> เป็น input ดิบ <code>findings</code> มีหลัง worker ทำเสร็จแล้ว และ <code>jobs</code> คือ list ที่กำลังสร้างอยู่</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. แตกงานเป็น subagent ใน Agent SDK</h3>
+<p>ใน Agent SDK การแตกงานทำผ่าน <strong>subagent</strong> นิยามได้ 2 ทาง: ผ่าน option <code>agents</code> ในโค้ด หรือเป็นไฟล์ markdown ในโฟลเดอร์ <code>.claude/agents/</code> แล้ว agent หลักเรียกใช้ผ่าน <strong>Agent tool</strong></p>
+<p>subagent แต่ละตัวมีบทสนทนาของตัวเอง tool call ระหว่างทางอยู่ในนั้น <strong>มีแค่ข้อความสุดท้ายที่ส่งกลับไปให้ตัวแม่</strong> บางครั้งเหตุผลที่แยกก็แค่ไม่อยากให้ output ยาวเหยียดของ tool ไหลเข้า context ของ agent หลัก แม้จะไม่ได้รันขนานเลยก็ตาม</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Field ของ <code>AgentDefinition</code></th><th>บังคับ?</th><th>หน้าที่</th></tr>
+  <tr><td><code>description</code></td><td>บังคับ</td><td>บอกว่าควรใช้ agent นี้เมื่อไหร่ orchestrator อ่านอันนี้เพื่อตัดสินว่าจะส่งงานไหนให้ใคร</td></tr>
+  <tr><td><code>prompt</code></td><td>บังคับ</td><td>system prompt ของผู้เชี่ยวชาญตัวนั้น</td></tr>
+  <tr><td><code>tools</code></td><td>ไม่บังคับ</td><td>รายชื่อ tool ที่อนุญาต <strong>ถ้าไม่ใส่ จะได้ทุก tool ที่ subagent ใช้ได้</strong> อยากจำกัดต้องใส่เอง</td></tr>
+  <tr><td><code>disallowedTools</code></td><td>ไม่บังคับ</td><td>รายชื่อ tool ที่ห้าม</td></tr>
+  <tr><td><code>model</code></td><td>ไม่บังคับ</td><td>ใช้โมเดลอื่นแทนค่าเริ่มต้นสำหรับ agent ตัวนี้</td></tr>
+</table></div>
+
+<h3>ตัวอย่าง: ตรวจ codebase 3 มิติ</h3>
+<p>สมมติต้อง audit codebase ใหญ่ใน 3 ด้าน: ช่องโหว่ความปลอดภัย, คุณภาพโค้ด และ test coverage แต่ละด้านใช้ tool และโฟกัสต่างกัน ทางที่ดีคือ orchestrator หนึ่งตัวกับ subagent 3 ตัว แต่ละตัวมี description และชุด tool ตรงกับด้านของตัวเอง scanner, style checker และ coverage checker ก็รันพร้อมกันได้</p>
+<pre><code>agents = {
+    "security": AgentDefinition(
+        description="ใช้เมื่อต้องหาช่องโหว่ความปลอดภัย",
+        prompt="คุณคือผู้เชี่ยวชาญ AppSec ...",
+        tools=["Read", "Grep", "Bash"],
+    ),
+    "coverage": AgentDefinition(
+        description="ใช้เมื่อต้องวัด test coverage",
+        prompt="คุณดูแลคุณภาพ test ...",
+        tools=["Read", "Bash"],
+        model="haiku",
+    ),
+    # "quality": ...
+}</code></pre>
+<p>ทางเลือกที่ดูดีแต่ไม่แก้ปัญหา:</p>
+<ul>
+  <li><strong>Prompt เดียวให้ agent หลักทำทั้ง 3 ด้านตามลำดับ</strong>: output ทุกด้านกองอยู่ใน context เดียว คุณภาพตกลงเมื่อ context โตขึ้น</li>
+  <li><strong>MCP server ตัวเดียวเปิดทุกการตรวจเป็น tool</strong>: ไม่ได้แยกอะไรเลย agent เดียวยังต้องถือ tool หลายโดเมน และเมื่อมี tool ราว 20 ตัวขึ้นไปจะเริ่มเลือกผิด</li>
+  <li><strong>ใช้ context window ใหญ่ขึ้น + extended thinking</strong>: แค่เพิ่มที่ให้ขยะกองมากขึ้น คุณภาพยังตกเมื่อ context ยาว</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Subagent = context แยก, ส่งกลับแค่ข้อความสุดท้าย, มี <code>description</code> ให้ orchestrator ใช้ตัดสินใจ และต้องใส่ <code>tools</code> เองถ้าอยากจำกัด tool</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>Agent ตรวจความพร้อมก่อน release ต้องดู 3 เรื่อง: license ของ dependency, performance benchmark และ accessibility ของ UI ตอนนี้ agent ตัวเดียวทำทุกอย่าง แล้ว output ของ benchmark กับ scanner ท่วม context จนรายงานเรื่องสุดท้ายแย่ลง ควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>รวมการตรวจทั้งหมดเป็น MCP server ตัวเดียวให้ agent เรียก</li>
+    <li>เปลี่ยนไปใช้โมเดลที่ context ใหญ่ขึ้นและเปิด extended thinking</li>
+    <li>เขียน prompt ให้ agent ตัวเดิมทำทีละเรื่องตามลำดับให้ชัดขึ้น</li>
+    <li>ให้ orchestrator เรียก subagent 3 ตัวผ่าน Agent tool แต่ละตัวมี description, prompt และ tool ของตัวเอง ส่งกลับแค่รายงานสรุป</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> subagent แยก context ทำให้ output ดิบไม่เข้ามาใน agent หลัก A เพิ่ม tool แต่ไม่ได้แยกอะไร B ให้ที่กอง clutter มากขึ้น C ทุกอย่างยังอยู่ใน context เดียวกัน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>คุณนิยาม subagent "docs-reviewer" ด้วย <code>description</code> และ <code>prompt</code> เท่านั้น ไม่ได้ใส่ <code>tools</code> ผลคืออะไร?</p>
+  <ol type="A">
+    <li>subagent ได้ทุก tool ที่ subagent ใช้ได้ ไม่มีการจำกัด</li>
+    <li>subagent ใช้ tool ไม่ได้เลย</li>
+    <li>subagent ได้เฉพาะ tool อ่านไฟล์โดยอัตโนมัติ</li>
+    <li>SDK แจ้ง error เพราะ <code>tools</code> เป็น field บังคับ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> <code>tools</code> เป็น field ไม่บังคับ ถ้าไม่ใส่ subagent จะสืบทอดทุก tool ที่ subagent ใช้ได้ ถ้าต้องการจำกัดสิทธิ์ต้องใส่ <code>tools</code> เอง</p></details>
+</div>
+
+<!-- ============ 7 ============ -->
+<h3>7. ย้ายลูปเรียก tool ถี่ๆ ไปไว้ในโค้ด: programmatic tool calling</h3>
+<p>บางครั้งปัญหาไม่ได้อยู่ที่ subtask แต่อยู่ที่ <strong>tool call เล็กๆ จำนวนมากในขั้นเดียว</strong> การเรียก tool แบบปกติทุกครั้งต้องวิ่งกลับผ่านโมเดล (round trip) และผลของแต่ละครั้งก็ถูกเพิ่มเข้า context</p>
+<p><strong>Programmatic tool calling</strong> ให้ Claude เขียนโค้ดที่เรียก tool ของเราภายใน code execution container ลูปจึงไปรันใน container แทนที่จะวนผ่านโมเดลทุก call และโค้ดกรองผลก่อน ทำให้ข้อมูลก้อนใหญ่ไม่เข้า context เลย ประหยัดทั้ง latency และ token ต้องใช้ code execution tool เวอร์ชัน <code>code_execution_20260120</code> ขึ้นไป</p>
+<p>ตัวอย่าง: ตรวจว่าร้านสาขาไหนสต็อกต่ำกว่าเกณฑ์ใน 30 สาขา แบบปกติคือ 30 round trip และดึงรายการสินค้าหลายพันบรรทัดเข้า context แบบ programmatic คือ script เดียวเรียก lookup 30 ครั้ง กรองแล้วคืนแค่สาขาที่ต่ำกว่าเกณฑ์ Claude ได้คิดบนข้อมูลไม่กี่บรรทัด</p>
+
+<h3>ทางเลือกที่ดูคล้ายแต่ไม่ช่วย</h3>
+<ul>
+  <li><strong>Message Batches API</strong> ทำงานแบบ async และแต่ละ request อิสระจากกัน เหมาะกับงานปริมาณมากที่ไม่มีใครรอ (ส่วนใหญ่เสร็จภายในชั่วโมง) แต่ <strong>เอาผลของ request หนึ่งไปป้อนขั้นถัดไปของลูปที่กำลังรันสดไม่ได้</strong></li>
+  <li><strong>Subagent หนึ่งตัวต่อหนึ่ง tool call</strong> ช่วยให้ context ของ orchestrator สะอาดก็จริง แต่เพิ่ม agent ทั้งตัวต่อการเรียกหนึ่งครั้ง และ multi-agent ใช้ token ราว 3–10 เท่า overhead จึงยิ่งแย่</li>
+</ul>
+
+<div class="box key"><span class="tag">ในข้อสอบ: จับคู่ปัญหากับวิธีแก้</span>
+  <ul>
+    <li>overhead มาจาก tool call เล็กๆ จำนวนมากในขั้นเดียว → <strong>programmatic tool calling</strong></li>
+    <li>งานที่ไม่เกี่ยวกันกองรวมใน context เดียว → <strong>subagents</strong></li>
+    <li>งานปริมาณมากที่ไม่มีใครรอคำตอบ → <strong>batches</strong></li>
+  </ul>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เอาลูป tool call เล็กๆ ไปใส่ใน Message Batches จะลด overhead"</strong> ไม่ใช่ batch เป็น async และแต่ละ request อิสระ ผลของ call หนึ่งไปขับ call ถัดไปไม่ได้ ส่วน programmatic tool calling รันลูปในโค้ดและตัด round trip ผ่านโมเดลออก</p>
+  <p><strong>"เพิ่ม effort แล้วลูปจะเร็วขึ้น"</strong> ไม่ใช่ effort เพิ่มความลึกในการคิดต่อ turn แต่ไม่ลดจำนวน turn</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ลูป tool ถี่ๆ ให้ Claude เขียนโค้ดรันใน container แล้วกรองผลก่อนเข้า context ไม่ใช่ batch และไม่ใช่ subagent ต่อ call</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>Agent จัดตารางเวรต้องเช็คตารางว่างของพนักงาน 50 คนในขั้นเดียว ทีมเสนอ 4 วิธี ข้อไหน <em>ทำให้ overhead แย่ลง</em>?</p>
+  <ol type="A">
+    <li>ให้ Claude เขียนโค้ดเรียก lookup ทั้ง 50 ครั้งใน code execution container</li>
+    <li>ย้ายลูปออกจาก model turn ให้ script เรียก tool แล้วส่งกลับแค่สรุป</li>
+    <li>กรองผลในโค้ดให้เหลือเฉพาะช่วงเวลาที่ว่างตรงกัน ก่อนส่งให้โมเดล</li>
+    <li>สร้าง subagent หนึ่งตัวต่อพนักงานหนึ่งคน เพื่อแยก context</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> subagent 50 ตัวคือ agent เต็มตัว 50 ตัว แต่ละตัวมีค่าใช้จ่ายของตัวเอง และ multi-agent ใช้ token ราว 3–10 เท่า ส่วน A, C, B คือหลักการของ programmatic tool calling ที่ช่วยลด overhead</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 10</span>
+  <p>Workflow ตรวจราคาคู่แข่งต้องเรียก tool ดึงราคาหลายร้อยครั้งในลูปเดียว ทุก tool-use turn ทำให้ latency และ token พุ่ง วิธีไหนแก้ตรงจุดที่สุด?</p>
+  <ol type="A">
+    <li>ส่งแต่ละการดึงราคาเป็น request ใน Message Batches API</li>
+    <li>เพิ่ม effort ให้โมเดลวางแผนลูปให้ดีขึ้น</li>
+    <li>สร้าง subagent แยกต่อการดึงราคาแต่ละครั้ง</li>
+    <li>ใช้ programmatic tool calling ให้ Claude เรียก tool จากโค้ดใน code execution container</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ตัด round trip ผ่านโมเดลและกรองข้อมูลก่อนเข้า context A ไม่เหมาะกับลูปสดเพราะ batch เป็น async C เพิ่มภาระการประสานงาน B ไม่ลดจำนวน turn</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration">Managed Agents: multi-agent orchestration</a></li>
+  <li><a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Claude blog: Building multi-agent systems</a></li>
+  <li><a href="https://platform.claude.com/cookbook/patterns-agents-basic-workflows">Cookbook: basic workflows</a></li>
+  <li><a href="https://code.claude.com/docs/en/workflows">Claude Code: workflows</a></li>
+  <li><a href="https://claude.com/blog/claude-models-explained-choosing-the-best-model-for-your-use-case">Claude blog: Claude models explained</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/python">Agent SDK: Python reference</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/subagents">Agent SDK: subagents</a></li>
+  <li><a href="https://platform.claude.com/cookbook/patterns-agents-orchestrator-workers">Cookbook: orchestrator-workers</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling">Programmatic tool calling</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/batch-processing">Batch processing</a></li>
+</ul>
+</section>

@@ -1,0 +1,301 @@
+<section class="lesson" id="l-5-4">
+<h2>5.4 HIPAA, BAAs and zero data retention for Claude</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/hipaa-compliance-on-claude-baa-hipaa-readiness-and-zdr">CertSafari 5.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกได้ว่าบน Claude แต่ละช่องทาง ใครเป็นคน process prompt กับ output และ control ไหนตามมาจากข้อนั้น</li>
+    <li>อธิบายได้ว่า zero data retention (ZDR) ครอบคลุมอะไร ไม่ครอบคลุมอะไร และทำไม API ยังรับ feature ที่ไม่ eligible อยู่</li>
+    <li>เปิด HIPAA readiness ได้ ทำนายได้ว่า request แบบไหนจะโดน API ปฏิเสธ และรู้ว่า PHI ต้องอยู่ในขอบเขตไหน</li>
+    <li>ตัดสินได้ว่า workflow ที่มี PHI รันที่ไหนได้ และเปิด Covered Model ใน workspace เดียวของ org ที่เป็น ZDR โดยไม่กระทบที่เหลือ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ใคร process ข้อมูล คนนั้นคุมกติกา</span>
+  <p>คนที่ "จับ" prompt และ output ของเราจริงๆ ขึ้นกับว่า deploy ผ่านช่องทางไหน บน <strong>Claude API, Claude Platform on AWS และ Microsoft Foundry</strong> ผู้ process คือ <strong>Anthropic</strong> ส่วนบน <strong>Amazon Bedrock และ Google Cloud's Agent Platform</strong> ผู้ process คือ <strong>cloud provider</strong> ข้อตกลงเรื่อง retention และ BAA ของ Anthropic มีผลเฉพาะกับข้อมูลที่ Anthropic เป็นคน process เท่านั้น</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ใคร process ข้อมูล เป็นตัวตัดสินว่า control ไหนใช้ได้</h3>
+<p>ก่อนจะคุยเรื่อง HIPAA หรือ ZDR ต้องตอบคำถามแรกให้ได้ก่อนว่า "ข้อมูลวิ่งไปที่ระบบของใคร" เพราะ Anthropic มีข้อตกลงด้านข้อมูลอยู่ 2 แบบคือ <strong>zero data retention (ZDR)</strong> กับ <strong>HIPAA readiness</strong> และทั้งสองแบบใช้ได้เฉพาะช่องทางที่ Anthropic เป็นผู้ process เองเท่านั้น ถ้าเป็นช่องทางที่ cloud provider เป็นคนรัน inference เราต้องไปดูเอกสารของ provider นั้นแทน</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ช่องทาง</th><th>ใคร process ข้อมูล</th><th>ข้อตกลงที่ต้องดู</th></tr>
+  <tr><td>Claude API (api.anthropic.com)</td><td>Anthropic</td><td>ZDR / HIPAA readiness ของ Anthropic</td></tr>
+  <tr><td>Claude Platform on AWS</td><td>Anthropic (แม้จะจ่ายเงินผ่าน AWS)</td><td>retention policy แบบเดียวกับ first-party API</td></tr>
+  <tr><td>Claude in Microsoft Foundry</td><td>Anthropic</td><td>ข้อตกลงของ Anthropic</td></tr>
+  <tr><td>Amazon Bedrock</td><td>AWS</td><td>เอกสารของ AWS</td></tr>
+  <tr><td>Google Cloud's Agent Platform</td><td>Google Cloud</td><td>เอกสารของ Google Cloud</td></tr>
+</table></div>
+
+<p>จุดที่คนสับสนบ่อยที่สุดคือ <strong>Claude Platform on AWS</strong> ตัวนี้ซื้อผ่าน AWS Marketplace จ่ายบิลรวมกับ AWS และเปิดจาก AWS Console ก็จริง แต่คนที่ <em>operate</em> service คือ Anthropic เลยใช้ retention policy เดียวกับ API ของ Anthropic เอง ต่างจาก Bedrock ที่ AWS เป็นคนรัน inference เปรียบเหมือนซื้อตั๋วเครื่องบินผ่านเว็บเอเจนซี่ คนที่บินจริงคือสายการบิน เงื่อนไขสัมภาระก็เป็นของสายการบิน ไม่ใช่ของเว็บ ช่องทางการจ่ายเงินไม่ได้บอกว่าใครเป็น processor</p>
+
+<h3>ค่าตั้งต้นเมื่อยังไม่มีข้อตกลงใดเลย</h3>
+<ul>
+  <li>ข้อมูลที่ถูกเก็บไว้ <strong>ไม่ถูกนำไป train</strong> ถ้าลูกค้าไม่ได้อนุญาตไว้อย่างชัดแจ้ง</li>
+  <li>โดย default เนื้อหาบทสนทนา <strong>ไม่ถูกเก็บ</strong></li>
+  <li>ข้อยกเว้นคือ <strong>Covered Models</strong> ซึ่งบังคับให้มี retention 30 วัน (ดูหัวข้อ 5)</li>
+  <li>feature ที่จำเป็นต้องเก็บข้อมูล (เช่นไฟล์ หรือ job) จะประกาศระยะเวลา retention ของตัวเองไว้</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถามก่อนเสมอว่าใครรัน inference ถ้าเป็น Anthropic (API, Platform on AWS, Foundry) ใช้ข้อตกลงของ Anthropic ถ้าเป็น Bedrock หรือ Google Cloud ไปดูของ provider ช่องทางบิลไม่ใช่ตัวตัดสิน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมการเงินของโรงพยาบาลเอกชนแห่งหนึ่งอยากให้ทุกอย่างจ่ายผ่านบัญชี AWS เดิม ทีม dev เลยสมัคร Claude Platform on AWS ผ่าน Marketplace แล้วเข้าใช้จาก AWS Console ทีม compliance ถามว่าต้องไปอ่าน retention policy ของใคร?</p>
+  <ol type="A">
+    <li>ของ AWS ทั้งหมด เพราะจ่ายเงินและเข้าใช้ผ่าน AWS</li>
+    <li>ของ Anthropic เพราะ Anthropic เป็นคน operate service นี้ จึงใช้ policy เดียวกับ first-party API และขอ ZDR ได้</li>
+    <li>แบ่งกัน: AWS ดูแล prompt ส่วน Anthropic ดูแล output</li>
+    <li>เหมือน Bedrock ทุกประการ เพราะอยู่บน AWS เหมือนกัน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> Platform on AWS ต่างจาก Bedrock ตรงที่ Anthropic เป็นคนรัน service เอง การจ่ายผ่าน Marketplace หรือเปิดจาก AWS Console ไม่ได้เปลี่ยนว่าใครเป็น processor และไม่มีการแบ่งครึ่งข้อมูลแบบตัวเลือก C</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Zero data retention: ครอบคลุมอะไร และไม่ได้กันอะไร</h3>
+<p>ZDR หมายความว่าหลังจากส่ง response กลับไปแล้ว Anthropic <strong>ไม่เก็บ prompt และ response ไว้ at rest</strong> (ไม่เขียนลง storage) คุณสมบัติสำคัญ:</p>
+<ul>
+  <li>ต้อง <strong>ขอผ่านทีม sales</strong> ของ Anthropic ไม่ใช่ปุ่มเปิดเองใน Console</li>
+  <li>เปิดเป็นราย <strong>organization</strong> ถ้าสร้าง org ใหม่ใต้ account เดิม org ใหม่ <strong>ไม่ได้รับ ZDR ตาม</strong> ต้องขอเปิดแยก</li>
+  <li>ZDR org <strong>ไม่รองรับ CORS</strong> แอปที่เรียก API จาก browser ตรงๆ ต้องมี backend proxy คั่นกลาง</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>ครอบคลุมโดย ZDR</th><th>ไม่ครอบคลุม</th></tr>
+  <tr><td>Messages API และ Token Counting API เฉพาะ feature ที่ตาราง eligibility ระบุว่า eligible</td><td>Claude Console รวมถึง playground</td></tr>
+  <tr><td>Claude Code ที่ใช้ API key ของ Commercial organization (ยกเว้นสถิติการใช้งานจาก metrics logging ซึ่งถ้าเปิดไว้อาจถูกเก็บ)</td><td>Claude Managed Agents (transcript ของ session อยู่จนกว่าจะลบ)</td></tr>
+  <tr><td>Claude Platform on AWS เมื่อขอผ่าน account representative</td><td>แผน consumer: Free, Pro, Max</td></tr>
+  <tr><td></td><td>หน้าจอ Claude Teams และ Enterprise</td></tr>
+  <tr><td></td><td>Claude for Excel และ third-party integrations</td></tr>
+</table></div>
+<p>หมายเหตุ: Claude Code ที่ใช้ผ่าน Claude Enterprise มี ZDR offering แยกต่างหาก ไม่ได้มาจาก ZDR ของ API org</p>
+
+<h3>ZDR คือ "สัญญาเรื่องการเก็บ" ไม่ใช่ "ตัวกรอง request"</h3>
+<p>ลองนึกก่อนตอบ: org ที่เปิด ZDR แล้ว ส่ง request ที่ใช้ code execution ซึ่งในตาราง eligibility เขียนว่า "No" สำหรับ ZDR จะเกิดอะไรขึ้น?</p>
+<p>คำตอบคือ <strong>API รับ request ตามปกติ</strong> และข้อมูลของ feature นั้นจะตกอยู่ใต้ retention policy ของ feature นั้นเอง ไม่ใช่ ZDR feature ที่ไม่ eligible ส่วนใหญ่เป็นแบบ stateful (มี job, file, หรือ container state ที่ต้องอยู่ต่อ) ZDR จึงไม่ได้ช่วยกันอะไรให้ ทีมต้องมี review process ของตัวเองเพื่อคุมว่าไม่มีใครเผลอใช้ feature พวกนี้</p>
+<p>เปรียบเหมือนร้านที่สัญญาว่า "ไม่จดเบอร์โทรลูกค้า" แต่ถ้าลูกค้าเลือกบริการส่งของถึงบ้านเอง ร้านก็ต้องจดที่อยู่ไว้ตามเงื่อนไขของบริการส่งของ ร้านไม่ได้ห้ามลูกค้าสั่งส่ง</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"ถ้าเปิด ZDR แล้ว API จะปฏิเสธ request ที่ใช้ feature ที่ไม่ eligible" ผิด ZDR ไม่บล็อกอะไรเลย ตัวที่ปฏิเสธ request คือ <strong>HIPAA readiness</strong> เท่านั้น</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ZDR = ไม่เก็บ prompt/response at rest ขอผ่าน sales เปิดราย org ไม่ inherit ไปยัง org ใหม่ ไม่ครอบคลุม Console, Managed Agents, แผน consumer, Teams/Enterprise UI และไม่บล็อก feature ที่ไม่ eligible</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>บริษัทประกันได้ ZDR บน org หลักแล้ว มีงาน 4 อย่าง งานไหนอยู่ภายใต้ ZDR จริง?</p>
+  <ol type="A">
+    <li>ทีม data science สร้าง org ใหม่ชื่อ "analytics" ใต้ account เดิม แล้วเรียก Messages API จากที่นั่น</li>
+    <li>ทีม ops ใช้ Claude Managed Agents รันงานกลางคืนจาก org หลัก</li>
+    <li>developer ใช้ Claude Code ด้วย API key ของ org หลัก (Commercial) และปิด metrics logging ไว้</li>
+    <li>PM ลองวาง prompt ใน Console playground ของ org หลัก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Claude Code ที่ใช้ key ของ Commercial org ที่มี ZDR อยู่ในขอบเขต (และปิด metrics logging แล้ว) ส่วน A เป็น org ใหม่ที่ไม่ได้ inherit ZDR, B Managed Agents เก็บ transcript ไว้, D Console/playground อยู่นอกขอบเขต</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. HIPAA readiness: BAA บวกกับการบังคับ feature ที่ระดับ API</h3>
+<p>HIPAA readiness ออกแบบมาสำหรับ org ที่ต้องจัดการ <strong>PHI</strong> (Protected Health Information ข้อมูลสุขภาพที่ระบุตัวบุคคลได้) ต้องมี 2 อย่าง:</p>
+<ul>
+  <li><strong>BAA (Business Associate Agreement)</strong> ที่เซ็นแล้ว คือสัญญาตามกฎหมาย HIPAA ระหว่างผู้ให้บริการกับลูกค้า</li>
+  <li><strong>organization ที่เปิด HIPAA</strong></li>
+</ul>
+<p>วิธีปกป้องข้อมูลของ HIPAA readiness ต่างจาก ZDR: มันไม่ได้ลบทันที แต่ใช้ safeguard ที่กว้างกว่า คือ <strong>encryption, access control และ audit logging</strong> ดังนั้น org ที่มี PHI ใช้ HIPAA readiness อย่างเดียวพอ <strong>ไม่จำเป็นต้องมี ZDR ซ้อน</strong></p>
+
+<h3>ขั้นตอนเปิดแบบ self-serve</h3>
+<ol class="steps">
+  <li>เข้า Console หน้า <strong>Data retention</strong> (<code>platform.claude.com/settings/privacy</code>)</li>
+  <li>admin ที่มีสิทธิ์ <strong>HIPAA management</strong> จะเห็นการ์ด HIPAA compliance</li>
+  <li>ดาวน์โหลด BAA และ <strong>HIPAA Implementation Guide</strong></li>
+  <li>กด accept ในฐานะ <strong>ผู้แทนทางกฎหมายที่มีอำนาจ</strong> ของบริษัท</li>
+</ol>
+<p>รายละเอียดที่ต้องจำ:</p>
+<ul>
+  <li>การเปิดผูกกับ <strong>เวอร์ชันของ BAA ที่ดาวน์โหลด</strong> ไป</li>
+  <li>control มีผล <strong>ทันทีที่ accept</strong></li>
+  <li>การตั้งค่านี้ <strong>ถาวร</strong> admin ปิดเองไม่ได้</li>
+  <li>ถ้าต้องการ BAA แบบเจรจาเงื่อนไขเอง (negotiated BAA) ต้องไปทาง sales</li>
+</ul>
+
+<h3>API บังคับ feature eligibility ให้จริงๆ</h3>
+<p>นี่คือความต่างใหญ่จาก ZDR ถ้า org ที่เปิด HIPAA ส่ง request ที่ใช้ feature ที่ไม่ eligible API จะตอบ <strong>400 <code>invalid_request_error</code></strong> พร้อมบอกชื่อ feature วิธีแก้คือเอา feature นั้นออกแล้วส่งใหม่</p>
+<pre><code>HTTP 400
+{"type": "error",
+ "error": {"type": "invalid_request_error",
+           "message": "code_execution is not available ... without Zero Data Retention ..."}}</code></pre>
+<p>(ตัวอย่างข้างบนแต่งขึ้นเพื่อให้เห็นภาพ) สังเกตว่าข้อความ error อาจมีคำว่า "without Zero Data Retention" อยู่ นั่นเป็นแค่สำนวนของ API <strong>การไปเปิด ZDR ไม่ได้ทำให้ request ผ่าน</strong> ทางแก้มีทางเดียวคือถอด feature ออก</p>
+<p>ข้อยกเว้น: client-side tool บางตัวที่ในตาราง eligibility เขียนว่า "not blocked" API จะยอมรับ แต่ข้อมูลที่ผ่าน tool นั้น <strong>ยังอยู่นอก</strong> HIPAA readiness</p>
+
+<h3>PHI ได้รับการคุ้มครองตรงไหนบ้าง</h3>
+<div class="table-wrap"><table>
+  <tr><th>ได้รับการคุ้มครองแบบ PHI</th><th>ไม่ได้คาดว่าจะมี PHI (ห้ามใส่)</th></tr>
+  <tr><td>เนื้อหาใน message</td><td>ชื่อ workspace</td></tr>
+  <tr><td>รูปภาพและ PDF ที่แนบ</td><td>ข้อมูล user</td></tr>
+  <tr><td>ชื่อไฟล์และ metadata ที่ผูกกับ message</td><td>ข้อมูล billing, support ticket</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย: JSON schema</span><p>structured outputs และ tool ที่ตั้ง <code>strict: true</code> จะ compile schema เป็น grammar ที่ถูก <strong>cache แยกไว้โดยไม่มีการคุ้มครองแบบ PHI</strong> ดังนั้นห้ามใส่ข้อมูลผู้ป่วยลงใน <strong>ชื่อ property, ค่า enum, ค่า const หรือ regex pattern</strong> เช่น อย่าทำ enum เป็นรายชื่อผู้ป่วย หรือ pattern ที่ฝังเลข HN ไว้</p></div>
+
+<pre><code>// ไม่ดี: ชื่อผู้ป่วยไปอยู่ใน schema
+{"properties": {"patient": {"enum": ["สมชาย ใจดี", "สมหญิง รักดี"]}}}
+
+// ดี: schema เป็นโครงทั่วไป ข้อมูลจริงอยู่ใน message
+{"properties": {"patient_name": {"type": "string"}}}</code></pre>
+
+<h3>เทียบ ZDR กับ HIPAA readiness (บน Claude API organization)</h3>
+<div class="table-wrap"><table>
+  <tr><th>คำถาม</th><th>Zero data retention</th><th>HIPAA readiness</th></tr>
+  <tr><td>prompt/output ถูกจัดการยังไง</td><td>ไม่เก็บ at rest หลังส่ง response</td><td>คุ้มครองด้วย encryption, access control, audit logging (ไม่ได้ลบทันที)</td></tr>
+  <tr><td>เปิดยังไง</td><td>ขอ sales, ราย org</td><td>self-serve ใน Console (BAA มาตรฐาน) หรือผ่าน sales (negotiated BAA)</td></tr>
+  <tr><td>request ที่ใช้ feature ไม่ eligible</td><td>รับ แต่ข้อมูลตาม retention ของ feature นั้น</td><td>ปฏิเสธด้วย 400 <code>invalid_request_error</code></td></tr>
+  <tr><td>Claude Platform on AWS และ Microsoft Foundry</td><td>Platform on AWS ขอได้</td><td>ไม่มีให้</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"org ที่ HIPAA-ready ต้องเปิด ZDR ด้วย" ผิด HIPAA readiness มี safeguard ของตัวเอง ไม่ต้องพึ่ง ZDR</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>HIPAA readiness = BAA + org ที่เปิด HIPAA เปิดเองได้ใน Console หน้า Data retention มีผลทันทีและถาวร API ปฏิเสธ feature ที่ไม่ eligible ด้วย 400 แก้ด้วยการถอด feature ออก ห้ามใส่ PHI ใน JSON schema</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>สตาร์ทอัปเทเลเมดิซีนเพิ่ง accept BAA มาตรฐานใน Console request ถัดมาที่แนบ tool <code>code_execution</code> ไปด้วย ได้ 400 ที่บอกว่า feature นี้ใช้ไม่ได้ "without Zero Data Retention" ทีมควรทำอะไร?</p>
+  <ol type="A">
+    <li>ขอ ZDR จาก sales แล้วส่ง request เดิมอีกครั้ง</li>
+    <li>ปิด HIPAA readiness ชั่วคราว ส่ง request แล้วค่อยเปิดกลับ</li>
+    <li>ถอด <code>code_execution</code> ออกจาก request แล้วส่งใหม่</li>
+    <li>retry request เดิมแบบ exponential backoff เพราะน่าจะเป็น error ชั่วคราว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> HIPAA readiness บังคับ eligibility ที่ API ทางแก้คือถอด feature ออก คำว่า ZDR ใน error เป็นแค่สำนวน (A ไม่ช่วย) HIPAA ปิดไม่ได้เพราะถาวร (B) และส่งซ้ำแบบเดิมก็โดนปฏิเสธซ้ำ (D)</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. BAA ครอบคลุม PHI ที่ไหน และไม่ครอบคลุมที่ไหน</h3>
+<p>BAA ครอบคลุมเฉพาะ <strong>org ที่เป็นคน accept</strong> และเฉพาะ <strong>feature ที่ eligible</strong> ใน org นั้น มีที่ที่คนมักเข้าใจผิดว่าครอบคลุมแต่จริงๆ ไม่ใช่:</p>
+<ul>
+  <li><strong>Claude Console รวม Workbench</strong> แม้จะเป็นที่ที่เรากดเปิด HIPAA ก็ตาม แต่การเอา PHI ไปพิมพ์ใน Console ไม่อยู่ใต้ BAA</li>
+  <li><strong>แผน consumer (Free, Pro, Max)</strong> เช่น หมอหลายคนแชร์ account Pro กันไว้ค้นข้อมูลชาร์ต อยู่นอกสัญญาทั้งหมด</li>
+  <li><strong>Claude Enterprise ที่ยังไม่ activate</strong> Primary Owner ต้องไปเปิด HIPAA compliance ในเมนู <strong>Data and privacy</strong> และ accept BAA ก่อน</li>
+  <li><strong>Beta feature และ third-party integration</strong> โดยทั่วไปถูกยกเว้น ถ้า admin เปิด Enterprise Skills หรือ connector ที่ส่งข้อมูลไป third party admin ต้องรับผิดชอบเอง</li>
+</ul>
+<p>pattern ที่ถูกต้องสำหรับงานอย่างการสรุปเวชระเบียน: <strong>org แยกเฉพาะที่เปิด HIPAA</strong> เรียก Claude API ด้วย <strong>feature ที่ eligible เท่านั้น</strong> แล้วปล่อยให้ 400 error ของ API เป็นด่านกันพลาดอีกชั้น</p>
+
+<h3>Claude Code กับ HIPAA</h3>
+<p>Claude Code <strong>ไม่ได้รับความคุ้มครองจาก HIPAA readiness ของ API org</strong> ถ้าจะให้ Claude Code อยู่ใต้ BAA ต้องเป็นแผน <strong>Enterprise ที่ HIPAA-ready</strong> และครบเงื่อนไข:</p>
+<ol class="steps">
+  <li>Primary Owner ใส่ HIPAA configuration</li>
+  <li>developer login ด้วย account Enterprise</li>
+  <li>เชื่อมต่อ <strong>ตรงไปที่ Claude API</strong></li>
+</ol>
+<div class="table-wrap"><table>
+  <tr><th>Claude Code เชื่อมต่อแบบไหน</th><th>Eligible?</th></tr>
+  <tr><td>account Claude Enterprise ต่อตรงเข้า Claude API</td><td>ได้</td></tr>
+  <tr><td>Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry, Claude Platform on AWS หรือ Claude apps gateway</td><td>ไม่ได้</td></tr>
+  <tr><td>LLM gateway หรือ <code>ANTHROPIC_BASE_URL</code> ที่ตั้งเอง</td><td>ไม่ได้</td></tr>
+  <tr><td>API key จาก Claude Console หรือ federation credentials</td><td>ไม่ได้</td></tr>
+</table></div>
+
+<p>ตัวอย่าง managed settings ที่ล็อกเครื่อง developer ให้อยู่บนเส้นทางที่ eligible (ค่า UUID สมมติ):</p>
+<pre><code>{
+  "forceLoginMethod": "claudeai",
+  "forceLoginOrgUUID": "00000000-1111-2222-3333-444444444444",
+  "allowedProviders": ["anthropic"],
+  "cleanupPeriodDays": 30
+}</code></pre>
+<ul>
+  <li><code>forceLoginMethod: "claudeai"</code> บังคับ login ด้วย account Claude (ไม่ใช่ Console key)</li>
+  <li><code>forceLoginOrgUUID</code> บังคับให้เป็น org ที่ระบุเท่านั้น</li>
+  <li><code>allowedProviders: ["anthropic"]</code> อนุญาตเฉพาะการต่อตรงกับ Anthropic</li>
+  <li><code>cleanupPeriodDays: 30</code> ระยะเวลาเก็บข้อมูล session ไว้ในเครื่อง</li>
+</ul>
+<p>เมื่อ config นี้มีผล Claude Code จะปิดบางอย่างไปเอง: <strong>WebFetch</strong> (แต่ web search ยังใช้ได้), cloud sessions และ Remote Control, คำสั่ง <code>/feedback</code> และ <code>/bug</code>, การ publish artifact และ <strong>MCP tool search</strong> (MCP tool จึงถูกโหลดทั้งหมดตั้งแต่ต้น)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"เซ็น BAA แล้ว PHI ผ่านช่องทางไหนของ org ก็ได้" ผิด BAA ครอบคลุมแค่ feature ที่ eligible ไม่รวม Console/Workbench และ Enterprise ต้อง activate ก่อน</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>PHI ต้องวิ่งใน org ที่เปิด HIPAA ผ่าน API ด้วย feature ที่ eligible เท่านั้น Console, แผน consumer, Enterprise ที่ยังไม่ activate และ integration ภายนอกไม่นับ Claude Code ต้องเป็น Enterprise + ต่อตรง Claude API</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>เครือคลินิกทันตกรรมเซ็น BAA กับ Anthropic แล้ว มี 4 ไอเดียจะใช้ Claude กับประวัติคนไข้ ไอเดียไหนอยู่ใต้ BAA?</p>
+  <ol type="A">
+    <li>ทันตแพทย์ copy ประวัติคนไข้ไปถามใน Workbench ของ org ที่เปิด HIPAA ไว้</li>
+    <li>ระบบสรุปประวัติการรักษาที่เรียก Claude API จาก org แยกที่เปิด HIPAA ใช้แต่ feature ที่ eligible</li>
+    <li>ผู้จัดการคลินิกใช้ account Max ส่วนตัวสรุปเคสยากๆ</li>
+    <li>ใช้ workspace ตั้งต้นของ Claude Enterprise ที่บริษัทเพิ่งซื้อ โดยยังไม่มีใครเข้าไปตั้งค่า HIPAA</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> เป็น pattern ที่ถูกต้อง Workbench อยู่นอก BAA แม้ org จะเปิด HIPAA (A) แผน consumer ไม่ครอบคลุม (C) และ Enterprise ต้องให้ Primary Owner เปิด HIPAA และ accept BAA ก่อน (D)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีม IT กำลังเขียน managed settings ให้ Claude Code ของ developer ในบริษัทประกันสุขภาพที่ใช้ Enterprise แบบ HIPAA-ready ช่อง <code>allowedProviders</code> ควรใส่ค่าไหนจึงจะอยู่บนเส้นทางที่ eligible?</p>
+  <ol type="A">
+    <li><code>["bedrock"]</code></li>
+    <li><code>["foundry"]</code></li>
+    <li><code>["anthropic"]</code></li>
+    <li><code>["gateway"]</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> มีแค่การต่อตรงเข้า Claude API ที่ eligible ภายใต้ Enterprise HIPAA configuration Bedrock, Foundry และ gateway ไม่ eligible ทั้งหมด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>บริษัท health-tech อยากให้ Claude ช่วยแยกข้อมูลจากแบบฟอร์มรับผู้ป่วย และให้ทีมพัฒนาใช้ Claude Code ใน repo ที่มีข้อมูลตัวอย่างเป็น PHI จริงด้วย ข้อไหนถูก? (เลือก 2 ข้อ)</p>
+  <ol type="A">
+    <li>pipeline แยกข้อมูลแบบฟอร์มควรรันใน org แยกที่เปิด HIPAA ผ่าน Claude API ด้วย feature ที่ eligible</li>
+    <li>Claude Code จะได้รับความคุ้มครองอัตโนมัติ เพราะใช้ API key ของ org ที่เปิด HIPAA เดียวกัน</li>
+    <li>ถ้าจะให้ Claude Code อยู่ใต้ BAA ต้องเป็น Enterprise ที่ HIPAA-ready, login ด้วย account Enterprise และต่อตรง Claude API</li>
+    <li>ให้ Claude Code วิ่งผ่าน LLM gateway ภายในบริษัทเพื่อเพิ่ม audit log จะทำให้เข้าเงื่อนไขมากขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, C</strong> HIPAA readiness ของ API org ไม่ครอบคลุม Claude Code (B ผิด) และ LLM gateway หรือ custom <code>ANTHROPIC_BASE_URL</code> ทำให้ไม่ eligible (D ผิด)</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ใช้ Covered Model ใน org ที่เป็น ZDR</h3>
+<p><strong>Covered Models</strong> ได้แก่ <strong>Claude Fable 5.1, Claude Mythos 5.1, Claude Fable 5 และ Claude Mythos 5</strong> โมเดลกลุ่มนี้บังคับ retention <strong>30 วัน</strong> เลยใช้ไม่ได้ใน org ที่เป็น ZDR เว้นแต่ Anthropic จะอนุญาตเป็นกรณีพิเศษอย่างชัดแจ้ง</p>
+<p>สิ่งที่ต้องรู้คือ API <strong>ไม่เปิด retention ให้เองอัตโนมัติ</strong> ถ้า org หรือ workspace ยังไม่ตรงเงื่อนไข request จะได้ 400 <code>invalid_request_error</code> บอกว่า org หรือ workspace ต้องเปิด data retention ก่อน</p>
+
+<h3>วิธี pilot แบบไม่กระทบทั้ง org: override ราย workspace</h3>
+<ol class="steps">
+  <li>ใน Console หน้า Data retention เลือก workspace ที่จะ pilot จาก dropdown (<strong>ห้ามใช้ Default Workspace</strong> เพราะมันตาม setting ของ org เสมอ)</li>
+  <li>เลือก <strong>Standard data retention (30-day retention)</strong> แล้วกด Save</li>
+  <li>อ่านและ accept เงื่อนไขในหน้าต่างยืนยัน (retention มีผล <strong>หลัง accept</strong> เท่านั้น)</li>
+  <li>ส่ง request ไป Covered Model จาก workspace นั้น เช็กว่าผ่าน ขณะที่ workspace อื่นยังเป็น ZDR ตาม default ของ org</li>
+</ol>
+<p>เปรียบเหมือนตึกที่ทุกห้องตั้งให้ทำลายเอกสารทันที แต่มีห้องเดียวที่ต้องเก็บเอกสาร 30 วันตามเงื่อนไขของอุปกรณ์ใหม่ เราตั้งค่าเฉพาะห้องนั้น ไม่ต้องเปลี่ยนนโยบายทั้งตึก</p>
+<p>อีกจุดที่สอบชอบหลอก: <strong>HIPAA readiness ไม่ใช่ทางปลดล็อกโมเดล</strong> มันมีไว้สำหรับ PHI และปิดไม่ได้ อย่างไรก็ตาม บน Enterprise ที่ HIPAA-ready และใส่ HIPAA configuration แล้ว สมาชิกใช้ Covered Models ใน Claude Code และ Cowork ภายใต้ BAA ได้</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"admin เปิด HIPAA readiness ลองเพื่อปลดล็อกโมเดล แล้วค่อยปิดทีหลังได้" ผิด HIPAA readiness มีผลทันทีและถาวร การ pilot Covered Model ต้องใช้ 30-day retention override ราย workspace</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Covered Models ต้องมี retention 30 วัน API ไม่เปิดให้เองแต่ตอบ 400 ถ้าจะลองใน org ZDR ให้ override เฉพาะ workspace (ไม่ใช่ Default Workspace) แล้ว accept เงื่อนไข อย่าใช้ HIPAA เป็นทางลัด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (เรียงลำดับ)</span>
+  <p>เรียงขั้นตอนเปิด Covered Model ให้ workspace "research-pilot" ใน org ที่เป็น ZDR:</p>
+  <ol>
+    <li>accept เงื่อนไขในหน้าต่างยืนยัน</li>
+    <li>ส่ง request ไป Covered Model จาก research-pilot แล้วเช็กว่า workspace อื่นยังเป็น ZDR</li>
+    <li>เลือก research-pilot จาก dropdown ในหน้า Data retention</li>
+    <li>เลือก Standard data retention (30-day) แล้วกด Save</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>3 → 4 → 1 → 2</strong> เลือก workspace ก่อน ตั้งค่าแล้ว Save จากนั้น accept เงื่อนไข (retention เริ่มมีผลตรงนี้) แล้วจึงทดสอบ request</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>บริษัทกฎหมายใช้ ZDR ทั้ง org ทีมวิจัยทีมเดียวอยากลอง Claude Mythos 5 โดยที่ทีมอื่นต้องอยู่บน ZDR ต่อไป ทางไหนถูก?</p>
+  <ol type="A">
+    <li>ขอให้ sales ยกเลิก ZDR ทั้ง org ชั่วคราวระหว่าง pilot</li>
+    <li>ส่ง request ไปเลย API จะเปิด retention 30 วันให้เฉพาะ request นั้นอัตโนมัติ</li>
+    <li>เปิด HIPAA readiness เพื่อปลดล็อก Mythos 5 แล้วค่อยปิดหลัง pilot</li>
+    <li>เปิด Standard data retention 30 วันเฉพาะ workspace ของทีมวิจัย (ที่ไม่ใช่ Default Workspace)</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> override ราย workspace กระทบเฉพาะทีมที่ต้องใช้ A กว้างเกินไป B ผิดเพราะ API ตอบ 400 ไม่ได้เปิดให้เอง C ผิดเพราะ HIPAA ไม่ได้ปลดล็อกโมเดลและปิดไม่ได้</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/manage-claude/api-and-data-retention">Anthropic: API and data retention</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/claude-platform-on-aws">Anthropic: Claude Platform on AWS</a></li>
+  <li><a href="https://privacy.claude.com/en/articles/8114513-business-associate-agreements-baa-for-commercial-customers">Anthropic Privacy Center: Business Associate Agreements (BAA) for Commercial Customers</a></li>
+  <li><a href="https://code.claude.com/docs/en/hipaa-setup">Claude Code: HIPAA setup</a></li>
+</ul>
+</section>

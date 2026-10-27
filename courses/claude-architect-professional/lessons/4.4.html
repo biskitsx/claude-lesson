@@ -1,0 +1,270 @@
+<section class="lesson" id="l-4-4">
+<h2>4.4 วินิจฉัยความล้มเหลวของระบบ Claude: hallucination, prompt, tool และ model</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/diagnosing-prompt-failures-tool-misuse-and-model-mismatch">CertSafari 4.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แยกได้ว่า output ที่ผิดมาจากชั้นไหน: grounding, prompt, tools หรือ model</li>
+    <li>ยืนยันว่าเป็น hallucination จริงด้วยวิธีที่ไม่หลงเชื่อความลื่นไหลของคำตอบ</li>
+    <li>อ่านอาการของ prompt failure และ tool misuse แล้วชี้จุดแก้ได้ตรง</li>
+    <li>บอกได้ว่าโมเดลใหญ่เกินหรือเล็กเกินงาน และควรเช็กอะไรก่อนเปลี่ยนรุ่น</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: output ผิดคืออาการ ไม่ใช่โรค</span>
+  <p>ก่อนลงมือแก้ ต้องหาให้เจอว่าต้นเหตุอยู่ชั้นไหนในสี่ชั้น: <strong>grounding, prompt, tools, model</strong> ถ้ายาไปผิดชั้น อาการอาจดูดีขึ้นชั่วคราว แต่ต้นเหตุยังอยู่ครบ เหมือนกินยาแก้ปวดหัวทั้งที่ปัญหาคือสายตาสั้น</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. สี่ชั้นของความล้มเหลว</h3>
+<div class="table-wrap"><table>
+  <tr><th>ชั้น</th><th>หน้าตาของปัญหา</th><th>คำถามวินิจฉัย</th></tr>
+  <tr><td><strong>Grounding</strong></td><td>โมเดลพูดสิ่งที่ input ไม่ได้รองรับ (hallucination)</td><td>ข้อความนี้มีหลักฐานในเอกสารที่ให้ไปไหม?</td></tr>
+  <tr><td><strong>Prompt</strong></td><td>โมเดลทำตามคำสั่ง แต่คำสั่งไม่ได้สื่อสิ่งที่คนเขียนตั้งใจ</td><td>ถ้าอ่านคำสั่งตามตัวอักษร ผลนี้ถือว่าทำตามไหม?</td></tr>
+  <tr><td><strong>Tools</strong></td><td>description หรือ schema ทำให้โมเดลต้องเดาว่าจะเรียก tool ไหน หรือเรียกยังไง</td><td>ถ้าเป็นคนอ่านแค่ description จะเลือกถูกไหม?</td></tr>
+  <tr><td><strong>Model</strong></td><td>โมเดลอ่อนเกินงาน หรือใหญ่ (และแพง) เกินงาน</td><td>prompt และ tool ชัดแล้ว แต่ยังพลาด/ยังช้าและแพงเกินไหม?</td></tr>
+</table></div>
+<p>ตัวอย่างชั้น tools: Claude เรียก <code>get_invoice</code> ทั้งที่ควรเรียก <code>get_payment_status</code> เพราะ description ของทั้งสองตัวเขียนคล้ายกันจนแยกไม่ออก ทางแก้คือเขียน description ให้ชัดว่าแต่ละตัวใช้ <em>เมื่อไหร่</em> การเปลี่ยนชื่ออย่างเดียวหรือเปลี่ยนไปใช้โมเดลใหญ่กว่าไม่ได้แก้ที่ต้นเหตุ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถามทีละชั้น: มีหลักฐานไหม (grounding) → คำสั่งสื่อถูกไหม (prompt) → tool ชัดไหม (tools) → โมเดลเหมาะกับงานไหม (model)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>agent ร้านค้ามี tool <code>check_stock</code> และ <code>check_delivery</code> ผู้ใช้ถาม "ของจะมาถึงเมื่อไหร่" แต่ Claude เรียก <code>check_stock</code> บ่อยครั้ง เมื่อเปิดดูพบว่า description ทั้งคู่เขียนว่า "ตรวจสอบสถานะสินค้า" ต้นเหตุและวิธีแก้คืออะไร?</p>
+  <ol type="A">
+    <li>ชั้น model: เปลี่ยนไปใช้โมเดลที่ใหญ่กว่า</li>
+    <li>ชั้น tools: เขียน description ให้แยกชัดว่าแต่ละตัวใช้ในสถานการณ์ไหน</li>
+    <li>ชั้น tools: เปลี่ยนชื่อเป็น <code>stock_v2</code> และ <code>delivery_v2</code></li>
+    <li>ชั้น grounding: บังคับให้ quote เอกสารก่อนตอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> description กำกวมเป็นต้นเหตุ ต้องแก้ที่ description การเปลี่ยนชื่ออย่างเดียวยังทิ้ง description ที่เหมือนกันไว้ และนี่ไม่ใช่ปัญหาความสามารถของโมเดลหรือ grounding</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ยืนยันว่าเป็น hallucination จริง</h3>
+<p>คำตอบที่ฟังดูมั่นใจและลื่นไหล ไม่ได้แปลว่าถูก ต้องใช้วิธีตรวจที่ไม่ขึ้นกับความลื่นไหล:</p>
+<ul>
+  <li><strong>Quote first</strong> ให้ Claude ดึงข้อความที่รองรับแบบคำต่อคำออกมาก่อน แล้วค่อยตอบจาก quote เหล่านั้น</li>
+  <li><strong>Cross-sample consistency</strong> รัน prompt เดิมหลายรอบ ข้อเท็จจริงที่เปลี่ยนไปมาระหว่างรอบ มักเป็นสิ่งที่โมเดลแต่งขึ้น ไม่ได้ดึงมาจากแหล่งจริง</li>
+  <li><strong>Cite or retract</strong> หลังร่างเสร็จ ให้ Claude หา quote รองรับแต่ละข้อความ ข้อไหนหาไม่เจอให้ลบออก การเว้นวงเล็บว่าง <code>[]</code> ไว้ตรงจุดที่ไม่มีหลักฐาน ช่วยให้คนรีวิวเห็นช่องโหว่ชัดๆ</li>
+  <li><strong>ดู reasoning</strong> ถ้าเปิด extended thinking ไว้ reasoning แบบสรุปอาจเผยสมมติฐานผิดที่ทำให้คำตอบเพี้ยน</li>
+</ul>
+<pre><code>&lt;instructions&gt;
+1. จาก &lt;policy&gt; ด้านล่าง ดึงประโยคที่เกี่ยวกับคำถามแบบคำต่อคำ ใส่ใน &lt;quotes&gt;
+2. ตอบโดยใช้เฉพาะสิ่งที่อยู่ใน &lt;quotes&gt;
+3. ถ้าไม่มี quote ที่ตอบคำถามได้ ให้ตอบว่า "ไม่พบในเอกสารนโยบาย"
+&lt;/instructions&gt;</code></pre>
+
+<h3>สาเหตุที่พบบ่อยและวิธีแก้</h3>
+<div class="table-wrap"><table>
+  <tr><th>สาเหตุ</th><th>อาการ</th><th>วิธีแก้</th></tr>
+  <tr><td>ขาด grounding</td><td>ตอบจากความรู้ทั่วไปแทนเอกสาร</td><td>จำกัดให้ตอบจากเอกสารที่ให้เท่านั้น และบังคับ quote</td></tr>
+  <tr><td>ถูกบังคับให้ต้องตอบ</td><td>ไม่มีข้อมูล แต่ก็ยังให้ตัวเลขมา</td><td>อนุญาตให้บอกว่า "ไม่รู้" อย่างชัดเจน</td></tr>
+  <tr><td>ข้อความจริงปนกับข้อความไม่มีหลักฐาน</td><td>ส่วนใหญ่ถูก แต่มีบางข้อแต่งขึ้น</td><td>เพิ่มรอบ cite-or-retract</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เอกสารไม่ครบ ก็ให้โมเดลเติมช่องว่างด้วยความรู้ทั่วไป"</strong> ไม่ใช่ นี่คือ <em>สาเหตุ</em> ของตัวเลขที่ไม่มีที่มา ไม่ใช่วิธีแก้</p>
+  <p><strong>"คำตอบละเอียดและมั่นใจ น่าจะถูก"</strong> ไม่ใช่ ความลื่นไหลไม่ใช่หลักฐาน ต้องตรวจด้วย quote หรือความสม่ำเสมอข้ามหลายรอบ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ตรวจ: quote first, รันหลายรอบดูความนิ่ง, cite-or-retract, อ่าน reasoning · แก้: จำกัดแหล่ง + บังคับ quote, อนุญาตให้ไม่รู้, ตัดข้อที่ไม่มีหลักฐาน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่สาเหตุของ hallucination กับวิธีแก้:</p>
+  <ol>
+    <li>bot ตอบคำถามสัญญาเช่าด้วยกฎหมายทั่วไป แทนที่จะอ่านจากสัญญาที่แนบมา</li>
+    <li>prompt เขียนว่า "ต้องให้ตัวเลขค่าปรับเสมอ" แม้สัญญาบางฉบับไม่มีค่าปรับ</li>
+    <li>สรุปสัญญาถูกเกือบทุกข้อ แต่มีบางเงื่อนไขที่สัญญาไม่ได้เขียนไว้</li>
+  </ol>
+  <p>ตัวเลือก: A) อนุญาตให้ตอบว่าไม่มีข้อมูล · B) รอบ cite-or-retract · C) จำกัดให้ตอบจากเอกสารและบังคับ quote</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-A, 3-B</strong> ขาด grounding → quote first · ถูกบังคับให้ตอบ → อนุญาตให้ไม่รู้ · ข้อความจริงปนแต่ง → cite-or-retract</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>assistant ตอบคำถามสวัสดิการพนักงาน บอกว่า "ค่ารักษาพยาบาลเบิกได้ปีละ 35,000 บาท" ทั้งที่เอกสารสวัสดิการไม่มีตัวเลขนี้ วิธีแก้ไหนดีที่สุด?</p>
+  <ol type="A">
+    <li>บังคับให้ quote ข้อความจากเอกสารสวัสดิการก่อนตอบ และอนุญาตให้บอกว่าไม่พบข้อมูล</li>
+    <li>สั่งให้ใช้ความรู้เรื่องสวัสดิการทั่วไปของบริษัทในไทยเมื่อเอกสารไม่ครอบคลุม</li>
+    <li>สั่งให้ตอบเป็นตัวเลขทุกครั้งเพื่อความชัดเจน</li>
+    <li>ขยาย <code>max_tokens</code> ให้โมเดลอธิบายได้ยาวขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B คือสาเหตุของปัญหาเอง C บังคับให้ต้องแต่งเมื่อไม่มีข้อมูล D ไม่เกี่ยวกับ grounding</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Prompt failure: ทำตามคำสั่ง แต่ไม่ใช่สิ่งที่ตั้งใจ</h3>
+<p>ลักษณะเฉพาะของ prompt failure คือ <strong>ไม่มีอะไรถูกแต่งขึ้น และไม่มี tool ไหนทำงานผิด</strong> โมเดลทำตามที่เขียนไว้ตรงๆ แต่สิ่งที่เขียนไว้ไม่ใช่สิ่งที่ต้องการ วิธีเทสต์ prompt ง่ายๆ: ลองให้คนที่แทบไม่มี context อ่านแล้วทำตาม ถ้าเขาทำผิด Claude ก็จะทำผิดเหมือนกัน</p>
+
+<h3>Pattern ที่ต้องรู้</h3>
+<ul>
+  <li><strong>Format ไม่ชัด (underspecified format):</strong> input หน้าตาคล้ายกันและสะอาดดี แต่โครงสร้าง JSON ที่ออกมากลับไม่เหมือนกันทุกครั้ง แปลว่า prompt ไม่ได้ล็อก format แก้ด้วยการระบุ field และการซ้อน (nesting) ให้ชัด พร้อมแนบตัวอย่าง response และห่อตัวอย่างด้วย tag เพื่อแยกตัวอย่างออกจากคำสั่ง</li>
+  <li><strong>กฎที่ไม่มีเหตุผล (rules without reasons):</strong> กฎโดดๆ อย่าง "ห้ามใช้ ..." จะถูกใช้ทุกที่ ถ้าบอกเหตุผลด้วย โมเดลจะรู้ว่ากฎนี้ควรใช้ตรงไหนและไม่ควรใช้ตรงไหน</li>
+  <li><strong>ตีความตามตัวอักษรเกินไป และคำสั่งเก่าค้าง:</strong> คำสั่งที่ขัดกันเองหรือล้าสมัยทำให้โมเดลสืบค้นเกินจำเป็น เรียก tool เกิน และเปลืองเงิน ลบคำสั่งเหล่านั้นออกแล้วความแม่นกลับมา</li>
+</ul>
+<pre><code>ตอบเป็น JSON ตามโครงสร้างนี้เท่านั้น:
+&lt;example&gt;
+{"order_id": "A-1029",
+ "items": [{"sku": "TS-01", "qty": 2}],
+ "shipping": {"method": "express", "eta_days": 2}}
+&lt;/example&gt;</code></pre>
+<p>ตัวอย่างกฎที่ใส่เหตุผล:</p>
+<pre><code>ไม่ใช้อักษรย่อทางการแพทย์ในคำตอบ
+เพราะผู้อ่านเป็นคนไข้ทั่วไปที่อาจไม่รู้ความหมาย
+(ในส่วนบันทึกภายในสำหรับแพทย์ ใช้ได้ตามปกติ)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"JSON ออกมาโครงสร้างไม่เหมือนกันทั้งที่ input สะอาด = hallucination"</strong> ไม่ใช่ ไม่มีข้อเท็จจริงไหนถูกแต่ง นี่คือ prompt ที่ระบุ format ไม่ชัด</p>
+  <p><strong>"โมเดลใช้กฎกว้างเกิน ก็เขียนกฎซ้ำให้แรงขึ้น ตัวใหญ่ขึ้น"</strong> ไม่ใช่ ยิ่งเน้นยิ่งถูกใช้กว้างขึ้น ให้อธิบายจุดประสงค์ของกฎแทน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>prompt failure = ทำตามตัวอักษรแต่ผิดเจตนา · format เพี้ยน → ระบุ field + ตัวอย่างใน tag · กฎกว้างเกิน → ใส่เหตุผล · คำสั่งเก่า/ขัดกัน → ลบออก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>system prompt ของ bot ธนาคารมีกฎ "ห้ามเปิดเผยเลขบัญชี" ผลคือ bot ปฏิเสธที่จะบอกลูกค้าว่าเลขบัญชีสำหรับโอนค่างวดของธนาคารคืออะไร ทั้งที่เป็นข้อมูลสาธารณะ วิธีแก้ที่ดีที่สุดคืออะไร?</p>
+  <ol type="A">
+    <li>เขียนกฎซ้ำด้วยตัวพิมพ์ใหญ่และคำว่า "สำคัญมาก"</li>
+    <li>ใส่เหตุผลของกฎ: ปกป้องเลขบัญชีส่วนตัวของลูกค้า ส่วนเลขบัญชีรับชำระของธนาคารเป็นข้อมูลสาธารณะ</li>
+    <li>เปลี่ยนไปใช้โมเดลที่ใหญ่กว่า</li>
+    <li>ลบกฎนี้ทิ้งทั้งหมด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> เมื่อรู้จุดประสงค์ โมเดลจะจำกัดขอบเขตของกฎได้เอง A ทำให้ใช้กว้างกว่าเดิม C ไม่ได้แก้ที่ prompt D ทิ้งการป้องกันที่จำเป็น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบสกัดข้อมูลใบสมัครงาน input เป็นฟอร์ม PDF แบบเดียวกันทั้งหมด แต่ output JSON บางครั้งใส่ <code>education</code> เป็น array บางครั้งเป็น object และบางครั้งชื่อ field เป็น <code>edu</code> ต้นเหตุคือ?</p>
+  <ol type="A">
+    <li>prompt ระบุ format ไม่ชัด แก้ด้วยการกำหนด field และ nesting ตายตัวพร้อมตัวอย่าง response</li>
+    <li>hallucination แก้ด้วยการบังคับ quote</li>
+    <li>โมเดลเล็กเกินไป ต้องอัปเกรด</li>
+    <li>tool schema ผิด ต้องเพิ่ม <code>strict: true</code> ให้ tool ค้นหา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> input เสถียรแต่โครงสร้างแกว่ง คือสัญญาณของ format ที่ไม่ได้ระบุ ไม่มีข้อเท็จจริงถูกแต่ง และไม่เกี่ยวกับ tool</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Tool misuse: อาการบอกจุดที่ต้องแก้</h3>
+<p>อาการของ tool แต่ละแบบชี้ไปที่ส่วนเฉพาะของ tool definition:</p>
+<div class="table-wrap"><table>
+  <tr><th>อาการ</th><th>สาเหตุที่น่าจะเป็น</th><th>วิธีแก้</th></tr>
+  <tr><td>เรียก tool A ทั้งที่ควรเรียก B</td><td>description กำกวม</td><td>เขียน description ให้คม แยกว่าแต่ละตัวใช้ <em>เมื่อไหร่</em></td></tr>
+  <tr><td>ไม่เคยเรียก tool ของเราเลย</td><td>ชื่อชนกับ tool อื่น หรือ schema กว้างจนไม่ชวนใช้</td><td>เช็กชื่อซ้ำ และเพิ่ม <code>input_examples</code></td></tr>
+  <tr><td>ส่ง parameter ผิด type</td><td>โมเดลเดา schema</td><td>เพิ่ม <code>strict: true</code> (ใช้ได้กับ schema subset ที่รองรับ) หรือ <code>input_examples</code></td></tr>
+  <tr><td>ส่ง parameter ที่ไม่มีอยู่จริง</td><td>สร้างเกินเพราะไม่มี strict mode</td><td>เพิ่ม <code>strict: true</code></td></tr>
+  <tr><td>ค่าอยู่นอก enum</td><td>ไม่มี strict mode หรือ enum ยาวเกินไป</td><td>ลดขนาด enum หรือเพิ่ม <code>input_examples</code></td></tr>
+  <tr><td>ปฏิเสธหรือขอคอนเฟิร์มคำสั่งที่มาจากผลของ tool</td><td>ใส่คำสั่งไว้ใน <code>tool_result</code></td><td>ย้ายคำสั่งไปไว้ใน user turn ให้ tool result มีแต่ข้อมูล</td></tr>
+</table></div>
+<p>แถวสุดท้ายสำคัญมาก: Claude มองคำสั่งที่อยู่ใน tool result ว่า <strong>อาจไม่น่าเชื่อถือ</strong> (เพราะอาจเป็น prompt injection จากข้อมูลภายนอก) การที่มันลังเลจึงเป็น <strong>ปัญหาเรื่องตำแหน่งที่วางคำสั่ง ไม่ใช่โมเดลมีปัญหา</strong></p>
+<p>อีกเทคนิค: ถ้ามี tool ที่ทำหน้าที่ซ้อนกันจากหลาย service ให้ใส่ prefix ตาม service เช่น <code>asana_search</code>, <code>jira_search</code> จะช่วยให้โมเดลแยกออก</p>
+<pre><code>{
+  "name": "crm_find_customer",
+  "description": "ค้นหาลูกค้าในระบบ CRM ด้วยอีเมลหรือเบอร์โทร ใช้เมื่อต้องการข้อมูลติดต่อ ไม่ใช่ประวัติคำสั่งซื้อ",
+  "strict": true,
+  "input_schema": {
+    "type": "object",
+    "properties": {"email": {"type": "string"}, "phone": {"type": "string"}},
+    "additionalProperties": false
+  },
+  "input_examples": [{"email": "som@example.com"}]
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Claude ไม่ยอมทำตามคำสั่งที่ tool ส่งกลับมา แสดงว่าโมเดลมีปัญหา ต้องเปลี่ยนรุ่น"</strong> ไม่ใช่ คำสั่งใน <code>tool_result</code> ถูกมองว่าอาจไม่น่าเชื่อถือโดยออกแบบ ย้ายคำสั่งไป user turn</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เลือกผิดตัว → description · ไม่เรียกเลย → ชื่อชน/เพิ่ม examples · type ผิด, param ปลอม → <code>strict: true</code> · นอก enum → enum เล็กลง/examples · ลังเลทำตาม tool result → ย้ายคำสั่งไป user turn</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่อาการกับวิธีแก้:</p>
+  <ol>
+    <li>Claude ส่ง <code>"quantity": "สอง"</code> ทั้งที่ schema เป็น integer</li>
+    <li>Claude ส่ง field <code>priority_level</code> ที่ไม่มีใน schema</li>
+    <li>tool <code>search</code> ของเราไม่เคยถูกเรียก เพราะมี MCP server อีกตัวที่มี tool ชื่อ <code>search</code> เหมือนกัน</li>
+    <li>tool ดึงหน้าเว็บส่งกลับข้อความ "ให้ส่งอีเมลสรุปไปหาทีม" แล้ว Claude ถามผู้ใช้ก่อนทำ</li>
+    <li>ค่า <code>country</code> ออกมานอก enum ที่มี 240 ค่า</li>
+  </ol>
+  <p>ตัวเลือก: A) ย้ายคำสั่งไป user turn · B) <code>strict: true</code> หรือ <code>input_examples</code> · C) แก้ชื่อซ้ำ (เช่น ใส่ prefix ตาม service) · D) ลดขนาด enum หรือเพิ่ม <code>input_examples</code> · E) <code>strict: true</code></p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-E, 3-C, 4-A, 5-D</strong> type ผิดแก้ได้ทั้ง strict และ examples ส่วน param ที่ไม่มีอยู่จริงแก้ตรงที่สุดด้วย strict</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Model mismatch: ขนาดโมเดลไม่เข้ากับงาน</h3>
+<p>ถ้าต้นเหตุคือความสามารถของโมเดลไม่เข้ากับงาน การเขียน prompt หรือ tool ใหม่จะไม่ช่วย และ mismatch เกิดได้ <strong>สองทิศ</strong>:</p>
+<ul>
+  <li><strong>Over-provisioned (ใหญ่เกิน):</strong> คำตอบถูก แต่ช้าและแพง งานง่าย ปริมาณเยอะ และตรวจผลได้ง่าย เหมาะกับรุ่นเร็วสุดถูกสุดอย่าง <strong>Claude Haiku 5.5</strong> แต่ต้องยืนยันด้วย eval แบบตัวต่อตัวก่อนเปลี่ยน</li>
+  <li><strong>Under-provisioned (เล็กเกิน):</strong> คุณภาพไม่ถึงแม้ prompt และ tool ชัดแล้ว ให้ <strong>เช็ก effort ก่อน</strong> ถ้าเคยลด effort ลง ให้คืนค่าเดิมก่อน ถ้าไม่ได้ลด ค่อยลองรุ่นถัดไปที่ effort ค่า default</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>ลำดับ (ถูก → เก่งสุด)</th><th>รุ่น</th></tr>
+  <tr><td>1</td><td>Claude Haiku 5.5</td></tr>
+  <tr><td>2</td><td>Claude Sonnet 5.5</td></tr>
+  <tr><td>3</td><td>Claude Opus 5.5</td></tr>
+  <tr><td>4</td><td>Claude Fable 5.1</td></tr>
+</table></div>
+<p>หลักการเทียบรุ่น:</p>
+<ul>
+  <li>เทียบด้วย <strong>ต้นทุนต่อ task ที่ทำสำเร็จ</strong> ไม่ใช่ราคาต่อ token รุ่นถูกที่ต้อง retry บ่อยอาจแพงกว่า</li>
+  <li>สร้าง eval จาก <strong>ข้อมูลของเราเอง</strong></li>
+  <li>ถ้าเพิ่งเปลี่ยนรุ่นแล้วพัง ให้ตรวจ prompt และโค้ด request ที่เขียนไว้สำหรับรุ่นเก่าก่อน เช่น การตั้ง <code>budget_tokens</code> ที่ได้ error 400 บน Opus 5 อย่าเพิ่งสรุปว่าโมเดลใหม่อ่อน</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"คุณภาพตก ให้อัปเกรดเป็นรุ่นใหญ่ขึ้นทันที"</strong> ไม่ใช่ ถ้าเคยลด effort ไว้ ให้คืน effort ก่อน</p>
+  <p><strong>"คำถามง่ายๆ ตอบช้าและแพง ให้เพิ่ม guardrail หรือเขียน prompt ให้ยาวขึ้น"</strong> ไม่ใช่ ปัญหาคือโมเดลใหญ่เกินงาน prompt ที่ยาวขึ้นยิ่งเพิ่มต้นทุน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใหญ่เกิน → ลอง Haiku 5.5 พร้อม eval เทียบ · เล็กเกิน → คืน effort ก่อน แล้วค่อยขึ้นรุ่น · เทียบด้วยต้นทุนต่อ task ที่สำเร็จ · พังหลังย้ายรุ่น → ตรวจ prompt/โค้ดเก่าก่อน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีมลด effort ของ Sonnet 5.5 เพื่อประหยัด แล้วคุณภาพการสรุปเคสลูกค้าตกจากเดิม prompt และ tool ไม่ได้เปลี่ยน ควรทำอะไรก่อน?</p>
+  <ol type="A">
+    <li>เปลี่ยนไปใช้ Opus 5.5 ทันที</li>
+    <li>คืนค่า effort เดิมแล้วรัน eval ซ้ำ</li>
+    <li>เขียน prompt ให้ยาวและละเอียดขึ้น</li>
+    <li>เพิ่มตัวอย่าง few-shot อีก 20 ตัว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ตัวแปรที่เปลี่ยนคือ effort ก็คืนค่านั้นก่อน การกระโดดขึ้นรุ่นหรือแก้ prompt คือแก้ผิดจุด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>widget ตอบคำถาม "ร้านเปิดกี่โมง / ที่จอดรถอยู่ไหน" รันบน Opus 5.5 คำตอบถูกทุกข้อแต่ใช้เวลาหลายวินาทีและบิลสูง ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>เพิ่ม guardrail ให้ตอบสั้นลง</li>
+    <li>ระบุว่าเป็น model mismatch แบบใหญ่เกิน แล้ว eval Haiku 5.5 เทียบกับ baseline ปัจจุบัน</li>
+    <li>เปลี่ยนไปใช้ Fable 5.1 เพื่อความแม่น</li>
+    <li>เพิ่ม system prompt ให้ละเอียดขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> งานง่าย ปริมาณเยอะ ตรวจได้ง่าย เหมาะกับรุ่นเล็ก แต่ต้องยืนยันด้วย eval ก่อน A และ D เพิ่มงานให้โมเดลที่ใหญ่เกินอยู่แล้ว C ไปผิดทิศ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ทีมย้ายจากรุ่นเก่ามาใช้ Opus 5 แล้ว request บางตัวได้ HTTP 400 ทันที ในโค้ดยังส่งค่า thinking แบบ <code>budget_tokens</code> ที่ตั้งไว้สำหรับรุ่นเก่า ควรสรุปว่าอย่างไร?</p>
+  <ol type="A">
+    <li>รุ่นใหม่ความสามารถไม่พอ ต้องถอยกลับรุ่นเก่า</li>
+    <li>ปัญหาน่าจะอยู่ที่โค้ด request ที่เขียนสำหรับรุ่นเก่า ต้องตรวจและปรับก่อนสรุปเรื่องความสามารถ</li>
+    <li>เป็น hallucination ต้องบังคับ quote</li>
+    <li>เป็น tool misuse ต้องเพิ่ม <code>strict: true</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ความล้มเหลวทันทีหลังย้ายรุ่นมักมาจาก prompt หรือ parameter ที่ผูกกับรุ่นเก่า error 400 คือ request ไม่ถูกต้อง ไม่ใช่โมเดลอ่อน</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/troubleshooting-tool-use">Claude Docs: Troubleshooting tool use</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations">Claude Docs: Reduce hallucinations</a></li>
+  <li><a href="https://support.claude.com/en/articles/8525154-claude-is-providing-incorrect-or-misleading-responses-what-s-going-on">Claude Help Center: Claude is providing incorrect or misleading responses</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices">Claude Docs: Prompting best practices</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Claude Docs: Optimizing for cost and intelligence</a></li>
+  <li><a href="https://www.anthropic.com/engineering/writing-tools-for-agents">Anthropic Engineering: Writing tools for agents</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude Docs: Choosing a model</a></li>
+</ul>
+</section>

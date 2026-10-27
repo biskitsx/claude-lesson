@@ -1,0 +1,259 @@
+<section class="lesson" id="l-3-7">
+<h2>3.7 Choosing between MCP, direct tools and agent-to-agent integration</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/choosing-between-mcp-direct-tool-use-and-subagents">CertSafari 3.7</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่าจะต่อ Claude เข้ากับระบบหนึ่งด้วย <strong>direct tool</strong>, <strong>MCP server</strong> หรือ <strong>agent อีกตัว</strong></li>
+    <li>อธิบายสิ่งที่ MCP ทำให้เป็นมาตรฐาน: primitive 3 แบบ, transport 2 แบบ และหน้าที่ของ server แบบ remote</li>
+    <li>ต่อ MCP server ใน Claude Code ได้ทั้งแบบ remote, local และ JSON config และรู้จุดที่มักพัง</li>
+    <li>เลือก surface ที่เหมาะ: Claude Code CLI, Agent SDK, Client SDK หรือ Managed Agents</li>
+    <li>ตั้งค่า MCP connector ใน Messages API ได้ และรู้ข้อจำกัดของมัน</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ส่งต่อ "การกระทำ" หรือส่งต่อ "การคิด"</span>
+  <p>Direct tool กับ MCP server ต่างกันที่ <strong>ใครใช้ซ้ำได้</strong>: tool ของแอปเดียว หรือ integration ที่หลาย client แชร์กัน แต่ทั้งคู่ยังเป็นแค่ "มือ" ที่ Claude สั่งให้ทำ ส่วนการส่งงานให้ <strong>agent อีกตัว</strong> คือส่ง "หัว" ไปด้วย ตัวรับมี prompt, tool และวิจารณญาณของตัวเอง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. สามทางในการต่อ Claude เข้ากับระบบ</h3>
+<div class="table-wrap"><table>
+  <tr><th>กลไก</th><th>ใครถืออะไร</th><th>เหมาะเมื่อ</th></tr>
+  <tr><td><strong>Direct tool</strong></td><td>แอปของเรานิยาม tool และ schema เอง รันทุก call เอง แล้วส่งผลกลับ</td><td>แอปเดียวเป็นเจ้าของระบบนั้น client อื่นไม่ต้องใช้</td></tr>
+  <tr><td><strong>MCP server</strong></td><td>integration อยู่หลัง protocol กลาง client ไหนก็ต่อได้</td><td>หลาย client ต้องใช้ร่วมกัน หรือ vendor มี server ให้อยู่แล้ว</td></tr>
+  <tr><td><strong>Agent อีกตัว</strong></td><td>ตัวรับมี prompt, tool, MCP server และ skills ของตัวเอง</td><td>ระบบนั้นต้องใช้การคิดวิเคราะห์ของตัวเอง ไม่ใช่แค่เรียก API</td></tr>
+</table></div>
+<p>เปรียบเทียบง่ายๆ direct tool คือเครื่องมือที่ซื้อมาใช้ในบ้านตัวเอง MCP server คือปลั๊กไฟมาตรฐานที่เสียบเครื่องใช้ไฟฟ้ายี่ห้อไหนก็ได้ ส่วน agent อีกตัวคือการจ้างช่างผู้เชี่ยวชาญมาทำงานทั้งก้อน</p>
+<p>เรื่องสำคัญของการส่งงานให้ agent ใน <strong>Managed Agents</strong>: การ delegate <strong>ลึกได้ชั้นเดียว</strong> subagent แต่ละตัวทำงานใน <strong>session thread ของตัวเอง</strong> แล้วส่งรายงานกลับให้ตัวหลัก (lead)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Specialist agent ส่งต่องานให้ agent อีกตัวได้อีกทอด"</strong> ไม่ได้ ใน Managed Agents การ delegate ลึกชั้นเดียว lead ส่งให้ specialist ได้ แต่ specialist ส่งต่อไม่ได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>แอปเดียวใช้ = direct tool, หลาย client ใช้ร่วม = MCP server, ต้องการวิจารณญาณแยก = agent อีกตัว (delegate ได้ชั้นเดียว)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่ความต้องการกับกลไก (direct tool / MCP server / agent อีกตัว):</p>
+  <ol>
+    <li>แอปจองห้องประชุมภายในบริษัท ทีมเดียวดูแลทั้งแอปและ schema ไม่มี client อื่นใช้</li>
+    <li>ระบบ ticketing ของ vendor ที่มี server สำเร็จรูปอยู่แล้ว และต้องใช้ทั้งจากแอป production และจาก Claude Code ของนักพัฒนา</li>
+    <li>งานตรวจสอบ compliance ของสัญญา ที่ต้องมี prompt เฉพาะ ชุด tool เฉพาะ และต้องใช้ดุลพินิจหลายขั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-direct tool, 2-MCP server, 3-agent อีกตัว</strong> เจ้าของเดียวไม่ต้องใช้ protocol กลาง, หลาย client + มี server จาก vendor คือจุดแข็งของ MCP, ส่วนงานที่ต้องคิดเองต้องส่งให้ agent</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. MCP ทำอะไรให้เป็นมาตรฐาน</h3>
+<p><strong>Primitive 3 แบบ</strong> แยกกันด้วยว่า <em>ใครเป็นคนคุม</em>:</p>
+<ul>
+  <li><strong>Tools</strong>: model-controlled โมเดลเลือกเองว่าจะเรียกเมื่อไหร่</li>
+  <li><strong>Resources</strong>: application-controlled แอปเป็นคนเลือกว่าจะเอาข้อมูลไหนใส่ context</li>
+  <li><strong>Prompts</strong>: user-controlled ผู้ใช้เลือกเอง เช่นเลือกจากเมนู slash command</li>
+</ul>
+<p><strong>Transport 2 แบบ:</strong></p>
+<ul>
+  <li><strong>stdio</strong>: client รัน server เป็น <strong>subprocess</strong> แล้วคุยกันด้วย JSON-RPC ที่คั่นด้วย newline ผ่าน stdin/stdout ส่วน log ต้องไปที่ <strong>stderr</strong> (ถ้าเขียน log ลง stdout จะปนกับข้อความ protocol)</li>
+  <li><strong>Streamable HTTP</strong>: client ส่ง JSON-RPC ด้วย POST ไปที่ endpoint ระยะไกล server ตอบเป็น JSON หรือ SSE stream และ client อาจเปิด GET stream ค้างไว้รับข้อความจาก server</li>
+</ul>
+<p><strong>หน้าที่ของ server เมื่อเปิดเป็น remote:</strong> ต้องตรวจ header <code>Origin</code>, server ที่รันในเครื่องควร bind แค่ localhost และต้อง authenticate การเชื่อมต่อ ดังนั้นการเปลี่ยน stdio server ที่รันในเครื่องให้กลายเป็น hosted service เป็น <strong>งาน deploy จริงจัง</strong> ไม่ใช่แค่สลับค่า config</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tools/Resources/Prompts = โมเดล/แอป/ผู้ใช้คุม stdio = subprocess ในเครื่อง, Streamable HTTP = remote ที่ต้องตรวจ Origin และ auth</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมมี MCP server ตัวหนึ่งที่รันแบบ stdio บนเครื่องนักพัฒนา ตอนนี้อยากให้ทีมอื่นทั่วบริษัทเรียกผ่านเครือข่ายได้ ต้องทำอะไร?</p>
+  <ol type="A">
+    <li>เปลี่ยน flag transport จาก stdio เป็น http ใน config ฝั่ง client ก็พอ</li>
+    <li>Deploy เป็น endpoint แบบ Streamable HTTP ที่ตรวจ <code>Origin</code> และ authenticate การเชื่อมต่อ</li>
+    <li>แชร์ไฟล์ binary ให้ทุกคนรันเองแบบ stdio</li>
+    <li>เปิด port ของ stdin ให้คนอื่นต่อเข้ามา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> การขึ้นเป็น hosted service ต้อง deploy ใหม่พร้อมหน้าที่ด้านความปลอดภัยของ remote server แค่เปลี่ยนค่าไม่พอ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ใน config ของ Claude Code มี server ที่ตั้งไว้ว่า <code>"command": "npx", "args": ["-y", "@acme/notion-mcp"]</code> server นี้ใช้ transport อะไร?</p>
+  <ol type="A">
+    <li>Streamable HTTP</li>
+    <li>SSE</li>
+    <li>stdio</li>
+    <li>WebSocket</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> client เป็นคนสั่งรันโปรเซส (npx) ในเครื่อง แล้วคุยผ่าน stdin/stdout นั่นคือ stdio</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ต่อ MCP server ใน Claude Code</h3>
+<pre><code># remote (Streamable HTTP) พร้อม bearer token
+claude mcp add --transport http billing https://mcp.example.com/mcp \
+  --header "Authorization: Bearer $TOKEN"
+
+# local stdio: ทุกอย่างหลัง -- คือคำสั่งที่ใช้รัน server
+claude mcp add --env API_KEY=xyz files -- npx -y @acme/files-mcp
+
+# จาก JSON
+claude mcp add-json billing '{"type":"http","url":"https://mcp.example.com/mcp"}'</code></pre>
+<ul>
+  <li><strong>Remote:</strong> <code>claude mcp add --transport http &lt;name&gt; &lt;url&gt;</code> ใส่ <code>--header</code> ได้ถ้าต้องส่ง token</li>
+  <li><strong>Local:</strong> <code>claude mcp add [options] &lt;name&gt; -- &lt;command&gt; [args...]</code> ทุกอย่างหลัง <code>--</code> คือคำสั่งรัน server ไม่ใช่ option ของ claude</li>
+  <li><strong>JSON config:</strong> <code>claude mcp add-json</code> รับ block แบบ <code>mcpServers</code> จุดพังคลาสสิก: entry ที่มี <code>url</code> แต่ <strong>ไม่ใส่ <code>type</code></strong> (<code>http</code>, <code>sse</code> หรือ <code>ws</code>) จะถูกอ่านเป็น stdio แล้วล้ม</li>
+  <li><strong>Lifecycle:</strong> พอปิด session, stdio server ที่ session รันไว้จะถูกปิดตามลำดับสัญญาณ <strong>SIGINT → SIGTERM → SIGKILL</strong></li>
+  <li><strong>ดูสถานะ:</strong> <code>claude mcp list</code>, <code>claude mcp get &lt;name&gt;</code> และ <code>/mcp</code> ในเซสชัน</li>
+  <li>Server ระดับโปรเจกต์จาก <code>.mcp.json</code> จะค้างสถานะ <strong>pending</strong> จนกว่าจะมีคนกดอนุมัติแบบ interactive ส่วนในโหมด <code>claude -p</code> (headless) จะต่อเฉพาะ server ที่ส่งผ่าน command line</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใส่แค่ <code>url</code> ใน JSON ก็พอ Claude Code รู้เองว่าเป็น HTTP"</strong> ไม่ใช่ ถ้าไม่ใส่ <code>type</code> จะถูกตีความเป็น stdio แล้วต่อไม่ติด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Remote ใช้ <code>--transport http</code>, local ใช้ <code>--</code> คั่นคำสั่ง, JSON ต้องมี <code>type</code> เสมอเมื่อมี <code>url</code> และ <code>.mcp.json</code> ต้องอนุมัติก่อนถึงจะต่อ</p></div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เลือก surface ให้ตรงงาน</h3>
+<div class="table-wrap"><table>
+  <tr><th>Surface</th><th>เหมาะเมื่อ</th></tr>
+  <tr><td><strong>Claude Code CLI</strong></td><td>มีคนนั่งทำงานแบบ interactive และคอยอนุมัติขั้นที่เสี่ยง</td></tr>
+  <tr><td><strong>Agent SDK</strong></td><td>สคริปต์ต้องการ agent loop, built-in tools และระบบ permission สำเร็จรูป โดยไม่ต้องเขียนส่วนจัดการ tool เอง</td></tr>
+  <tr><td><strong>Client SDK</strong></td><td>อยากคุมทุก request และทุก tool result เอง หรือใช้ beta tool runner</td></tr>
+  <tr><td><strong>Managed Agents</strong></td><td>ให้ Anthropic host agent loop ให้ ตั้งค่าผ่าน Claude API</td></tr>
+</table></div>
+<ul>
+  <li>ใน <strong>Client SDK</strong> เมื่อ response มี <code>tool_use</code> โค้ดของเรา <strong>ต้องรัน tool เองแล้วส่ง <code>tool_result</code> กลับ</strong> จะเขียนลูปเองหรือใช้ beta tool runner ก็ได้ SDK ไม่ได้ทำ agent loop ให้</li>
+  <li>ใน <strong>Agent SDK</strong> ใส่การเชื่อมต่อผ่าน option <code>mcpServers</code> ชื่อ tool จะอยู่ในรูป <code>mcp__&lt;server&gt;__&lt;tool&gt;</code> และ <code>allowedTools</code> ใช้ชื่อแบบนี้จับคู่</li>
+  <li>สำหรับ CI ที่ไม่มีคนเฝ้า ใช้ headless <code>claude -p</code> คู่กับ <code>--allowedTools</code> เพื่ออนุมัติ tool ไว้ล่วงหน้า</li>
+</ul>
+<pre><code>options = ClaudeAgentOptions(
+    mcp_servers={"jira": {"type": "http", "url": "https://mcp.example.com/jira"}},
+    allowed_tools=["mcp__jira__search_issues", "Read", "Edit", "Bash"],
+)</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Client SDK ก็มี agent loop ให้เหมือน Agent SDK"</strong> ไม่ใช่ Client SDK คืน <code>tool_use</code> มาให้เราจัดการเอง ตัวที่มี loop สำเร็จรูปคือ Agent SDK</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>มีคนเฝ้า = CLI, สคริปต์อัตโนมัติที่อยากได้ loop สำเร็จรูป = Agent SDK, อยากคุมเองทุกจังหวะ = Client SDK, อยากให้ Anthropic host = Managed Agents</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>คุณเรียก Messages API ผ่าน Client SDK ส่ง tool <code>lookup_stock</code> ไปด้วย แล้ว response กลับมาเป็น block <code>tool_use</code> ที่ขอเรียก <code>lookup_stock</code> ขั้นต่อไปคืออะไร?</p>
+  <ol type="A">
+    <li>รอ เดี๋ยว API จะรัน tool แล้วส่งคำตอบสุดท้ายมาเอง</li>
+    <li>โค้ดของคุณรัน <code>lookup_stock</code> แล้วส่ง <code>tool_result</code> กลับใน request ถัดไป (ลูปเองหรือใช้ beta tool runner)</li>
+    <li>เปลี่ยนเป็น MCP server ก่อนถึงจะรันได้</li>
+    <li>ส่ง request เดิมซ้ำพร้อม <code>tool_choice: none</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> direct tool ฝั่ง client เป็นหน้าที่ของแอปเราที่จะรันและส่งผลกลับ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีมต้องการงาน nightly บน CI ที่ให้ Claude แก้โค้ดและรันเทสต์วนไปจนเทสต์ผ่าน ไม่มีคนเฝ้า และไม่อยากเขียน tool handler เอง ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>Agent SDK</li>
+    <li>Client SDK เขียนลูปเอง</li>
+    <li>Claude Code CLI แบบ interactive</li>
+    <li>MCP server อย่างเดียว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> Agent SDK มี loop, built-in tools และ permission ให้ B ต้องเขียนเอง C ต้องมีคนนั่งอนุมัติ D เป็นแค่ช่องทางเชื่อมต่อ ไม่มี agent loop ในเครื่อง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>นักพัฒนากำลังไล่บั๊กใน service ที่รันอยู่ อยากให้ Claude ช่วยอ่าน log และลองแก้ แต่ต้องการกดอนุมัติเองก่อนทุกคำสั่งที่แตะ production ใช้อะไรดี?</p>
+  <ol type="A">
+    <li>Claude Code CLI</li>
+    <li>Managed Agents</li>
+    <li>Headless <code>claude -p</code> พร้อม <code>--allowedTools</code> ครอบทุก tool</li>
+    <li>Client SDK แบบ batch</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งาน interactive ที่มีคนคอยอนุมัติขั้นเสี่ยงคือจุดแข็งของ CLI ส่วน C อนุมัติทุกอย่างล่วงหน้า ตรงข้ามกับที่ต้องการ</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. MCP connector ใน Messages API</h3>
+<p>Messages API มี MCP connector ให้ Claude เรียก tool บน MCP server ได้โดยไม่ต้องเขียน client เอง แต่มีข้อจำกัดชัดเจน:</p>
+<ul>
+  <li><strong>ต่อได้เฉพาะ remote server</strong> (Streamable HTTP หรือ SSE ที่ URL แบบ <code>https://</code>) stdio server ต่อตรงไม่ได้ เพราะ API ไม่มีทางไปรัน subprocess บนเครื่องเรา</li>
+  <li><strong>รองรับแค่ส่วน tool call</strong> ของ MCP ใช้ resources กับ prompts ไม่ได้</li>
+  <li>config แยกเป็นสองที่: <code>mcp_servers</code> เก็บรายละเอียดการเชื่อมต่อ (<code>type: "url"</code>, <code>url</code>, <code>name</code> และ <code>authorization_token</code> ถ้ามี) ส่วน <code>tools</code> ใส่ <code>mcp_toolset</code> ที่อ้าง server ด้วยชื่อ</li>
+  <li>server แต่ละตัวต้องถูกอ้างด้วย toolset <strong>ตัวเดียวพอดี</strong> และ toolset เป็นตัวกำหนดว่าเปิด tool ไหนบ้าง</li>
+  <li>ฟีเจอร์นี้อยู่หลัง <strong>beta flag</strong></li>
+</ul>
+<pre><code>{
+  "mcp_servers": [
+    {"type": "url", "url": "https://mcp.example.com/sse",
+     "name": "inventory", "authorization_token": "..."}
+  ],
+  "tools": [
+    {"type": "mcp_toolset", "mcp_server_name": "inventory"}
+  ]
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"MCP connector สั่งรัน stdio server ในเครื่องได้"</strong> ไม่ได้ ต้อง deploy เป็น remote HTTPS ก่อน</p>
+  <p><strong>"ผ่าน connector ก็อ่าน resources ของ server ได้"</strong> ไม่ได้ connector รองรับแค่ tool call</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Connector = remote HTTPS เท่านั้น, tool เท่านั้น, ต่อใน <code>mcp_servers</code> แล้วเปิด tool ด้วย <code>mcp_toolset</code> หนึ่งตัวต่อหนึ่ง server</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>เติมคำในช่องว่าง: ใน request ของ Messages API ที่ใช้ MCP connector, ใน array <code>tools</code> ต้องมี object ที่ <code>"type"</code> เป็น ______ เพื่ออ้างถึง server ใน <code>mcp_servers</code> และเลือกเปิด tool</p>
+  <details><summary>ดูเฉลย</summary><p><strong><code>mcp_toolset</code></strong> ข้อมูลการเชื่อมต่ออยู่ใน <code>mcp_servers</code> ส่วนการเปิด tool อยู่ใน toolset ที่อ้างชื่อ server</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>บริษัทมี MCP server ภายในที่รันแบบ stdio สำหรับค้นข้อมูลลูกค้า ตอนนี้ backend ต้องการให้ Claude ใช้ server นี้ผ่าน Messages API ทำยังไง?</p>
+  <ol type="A">
+    <li>Deploy เป็น remote MCP server ที่ URL แบบ HTTPS แล้วใส่ไว้ใน <code>mcp_servers</code></li>
+    <li>ใส่ <code>command</code> ของ stdio ลงใน <code>mcp_servers</code></li>
+    <li>ใช้ connector อ่าน resources ของ server แทน</li>
+    <li>เปิด <code>.mcp.json</code> ใน repo ของ backend</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> connector ต่อได้แค่ remote HTTPS และ <code>.mcp.json</code> เป็นของ Claude Code ไม่เกี่ยวกับ Messages API</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. เมื่อไหร่ "agent อีกตัว" ดีกว่า</h3>
+<ul>
+  <li>ส่งงานให้ specialist agent = ส่งทั้ง <strong>วิจารณญาณและ integration</strong> ของมันไปด้วย และช่วยให้ context ของ lead ไม่รก</li>
+  <li>agent ใน Managed Agents session เดียวกัน <strong>แชร์ sandbox, filesystem และ credential ใน vault</strong> การส่งต่องานจึง <strong>แยกแค่ context ไม่ได้แยก permission</strong></li>
+  <li>thread ของ subagent อยู่ต่อ (persist) lead ส่งคำถามตามได้ ดังนั้นถ้าการคุยกับระบบนั้นอาจต้องโต้ตอบหลายรอบ ให้เลือก agent มากกว่า MCP server</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แยกเป็น subagent แล้วก็ปลอดภัย เพราะแต่ละตัวแยกกันขาด"</strong> ไม่ใช่ ใน session เดียวกัน subagent เห็น sandbox และ credential ชุดเดียวกับ lead สิ่งที่แยกคือประวัติบทสนทนาเท่านั้น ถ้าต้องการแยกสิทธิ์จริงต้องออกแบบอีกชั้น</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เลือก agent เมื่องานต้องคิดเองหรือต้องคุยหลายรอบ แต่จำไว้ว่าใน session เดียวกัน isolation มีแค่เรื่อง context</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ใน Managed Agents session หนึ่ง lead ส่งงานให้ subagent "license-checker" ตรวจ license ของ dependency ข้อไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>license-checker มี session thread และประวัติของตัวเอง แต่ใช้ sandbox, filesystem และ credential ร่วมกับ lead</li>
+    <li>license-checker มี sandbox แยกและ credential แยกโดยอัตโนมัติ</li>
+    <li>license-checker ส่งงานย่อยต่อให้ subagent อีกตัวได้</li>
+    <li>license-checker เห็นประวัติทั้งหมดของ lead</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> isolation อยู่ที่ context เท่านั้น B ผิดเพราะ sandbox และ vault แชร์กัน C ผิดเพราะ delegate ได้ชั้นเดียว D ผิดเพราะแต่ละตัวมี thread ของตัวเอง</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview">Claude Docs: Tool use overview</a></li>
+  <li><a href="https://modelcontextprotocol.io/specification/2025-11-25/architecture">MCP Specification: Architecture</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration">Claude Docs: Managed Agents multi-agent orchestration</a></li>
+  <li><a href="https://modelcontextprotocol.io/specification/2025-11-25/server">MCP Specification: Server</a></li>
+  <li><a href="https://code.claude.com/docs/en/mcp">Claude Code Docs: MCP</a></li>
+  <li><a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/transports">MCP Specification: Transports</a></li>
+  <li><a href="https://code.claude.com/docs/en/headless">Claude Code Docs: Headless mode</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/mcp-connector">Claude Docs: MCP connector</a></li>
+</ul>
+</section>

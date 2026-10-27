@@ -1,0 +1,265 @@
+<section class="lesson" id="l-3-4">
+<h2>3.4 Run-level telemetry และการติด tag สำหรับฝูง Claude agent</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/monitoring-strategy-for-claude-agents-privacy-collectors-and-reporting-apis">CertSafari 3.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่าทำไม log แบบแบนๆ ใช้ debug agent ไม่ได้ และอ่าน span tree ของ Claude Code / Agent SDK ได้</li>
+    <li>ใช้ attribute บน <code>claude_code.llm_request</code> แยก retry storm ออกจากการชน output limit ได้</li>
+    <li>กระจาย config ของ OpenTelemetry collector ผ่าน managed settings และรู้ว่า setting ไหนถูกล็อก setting ไหนไม่ถูกล็อก</li>
+    <li>ติด tag ตาม tenant, ทีม และ deployment และคุม cardinality ของ metric</li>
+    <li>เลือกเปิด content gate ให้แคบที่สุดตามความเสี่ยงด้าน privacy</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: มอง run เป็นต้นไม้ ไม่ใช่รายการ</span>
+  <p>prompt เดียวของ agent แตกออกเป็น model request หลายครั้ง, tool call, การรอ permission และ subagent และเส้นทางก็ไม่เหมือนกันทุกรอบ <strong>Run-level telemetry</strong> จัดสิ่งเหล่านี้เป็น <strong>span tree</strong> (ต้นไม้ของช่วงเวลาที่ซ้อนกัน) จึงเห็นว่าอะไรเป็นลูกของอะไร และเวลาหายไปที่ไหน</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ทำไม agent run ถึง debug แบบปกติได้ยาก</h3>
+<p>Request log แบบแบนๆ บอกได้ว่ามีการเรียก API กี่ครั้ง แต่ไม่บอกว่าแต่ละครั้งเกี่ยวกันยังไง เหมือนดูใบเสร็จร้านอาหารที่เรียงตามเวลา แต่ไม่รู้ว่าจานไหนเป็นของโต๊ะไหน</p>
+
+<h3>โครงสร้าง span tree ใน Claude Code / Agent SDK</h3>
+<pre><code>claude_code.interaction                 (1 turn)
+├── claude_code.llm_request
+├── claude_code.hook                    (ต้องเปิด detailed beta tracing)
+└── claude_code.tool
+    ├── claude_code.tool.blocked_on_user   (เวลารอคนกดอนุญาต)
+    └── claude_code.tool.execution         (เวลารันจริง)
+        └── ... span ของ subagent ซ้อนอยู่ใต้ Agent tool call ที่สร้างมันขึ้นมา</code></pre>
+<ul>
+  <li>แต่ละ turn คือ span <code>claude_code.interaction</code></li>
+  <li><code>claude_code.hook</code> จะมีก็ต่อเมื่อเปิด detailed beta tracing</li>
+  <li>แยก <code>blocked_on_user</code> ออกจาก <code>execution</code> ทำให้รู้ว่า "ช้า" เพราะ tool ทำงานช้า หรือเพราะคนยังไม่กดอนุญาต</li>
+</ul>
+
+<h3>Attribute ที่มีประโยชน์บน <code>claude_code.llm_request</code></h3>
+<div class="table-wrap"><table>
+  <tr><th>Attribute</th><th>บอกอะไร</th></tr>
+  <tr><td><code>agent_id</code>, <code>parent_agent_id</code></td><td>agent ตัวไหนส่ง request และใครเป็นคน spawn มัน</td></tr>
+  <tr><td><code>query_source_safe</code></td><td>subsystem ไหนเป็นต้นเรื่อง</td></tr>
+  <tr><td><code>attempt</code></td><td>ครั้งที่เท่าไหร่ของการลอง (มากกว่า 1 = retry)</td></tr>
+  <tr><td><code>stop_reason</code></td><td>เหตุที่การตอบหยุด เช่น ชน output limit</td></tr>
+  <tr><td><code>error_class</code></td><td>ประเภท error เช่น <code>api_timeout</code>, <code>server_overload</code></td></tr>
+</table></div>
+<p>สามตัวหลัง (<code>attempt</code>, <code>stop_reason</code>, <code>error_class</code>) ช่วยแยก "retry storm" (ลองซ้ำเพราะ server ล้น) ออกจาก "ตอบไม่จบเพราะชน output limit" ซึ่งอาการภายนอกดูคล้ายกัน แต่วิธีแก้คนละเรื่อง</p>
+
+<h3>Managed Agents และ API-side spans</h3>
+<ul>
+  <li><strong>Session viewer ใน Console</strong> มี timeline แยก lane ละ thread และแท็บ <strong>Tools</strong> แสดงจำนวนครั้งที่เรียก, จำนวนที่ล้มเหลว และค่ามัธยฐานของเวลา</li>
+  <li>ตั้ง <strong>OpenTelemetry destination</strong> เพื่อ export span ฝั่ง API ได้</li>
+  <li>อยากให้ span ของ API ไปซ้อนอยู่ใต้ span ของแอปเรา ให้เรียก SDK <strong>ภายใน span ของเราเอง</strong> SDK จะส่ง header W3C <code>traceparent</code> ไปให้</li>
+  <li>การส่ง span เป็นแบบ <strong>at-least-once</strong> (อาจซ้ำ ให้ dedupe ด้วย trace ID + span ID) และ <strong>best-effort</strong> (span ที่หายจะไม่ถูกส่งใหม่)</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>interaction → llm_request / hook / tool → blocked_on_user กับ execution ใช้ <code>attempt</code> + <code>error_class</code> ดู retry, <code>stop_reason</code> ดู output limit และ dedupe span ด้วย trace ID + span ID</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมสงสัยว่า agent ช้าเพราะ tool <code>deploy</code> รันนาน หรือเพราะต้องรอ on-call มากดอนุญาต ควรดู span ไหนใต้ <code>claude_code.tool</code>?</p>
+  <ol type="A">
+    <li><code>claude_code.hook</code></li>
+    <li><code>claude_code.llm_request</code></li>
+    <li><code>claude_code.tool.blocked_on_user</code> เทียบกับ <code>claude_code.tool.execution</code></li>
+    <li><code>claude_code.interaction</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>blocked_on_user</code> วัดเวลารอคนกดอนุญาต แยกจาก <code>execution</code> ที่วัดเวลารันจริง span อื่นไม่ได้แยกสองอย่างนี้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Dashboard แสดงว่า run บางตัวใช้เวลานานผิดปกติ อยากรู้ว่าเกิดจาก server overload แล้วถูก retry ซ้ำๆ หรือเพราะคำตอบชน output limit ควรดูอะไร?</p>
+  <ol type="A">
+    <li><code>agent_id</code> และ <code>parent_agent_id</code></li>
+    <li><code>query_source_safe</code></li>
+    <li>จำนวน span <code>claude_code.interaction</code></li>
+    <li><code>attempt</code> และ <code>error_class</code> (ประกอบกับ <code>stop_reason</code>) บน <code>claude_code.llm_request</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>attempt</code> มากกว่า 1 คู่กับ <code>error_class=server_overload</code> คือ retry storm ส่วน <code>stop_reason</code> บอกว่าชน limit หรือไม่ A บอกแค่ว่าใครส่ง B บอกแค่ subsystem</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. กระจาย config ของ collector ผ่าน managed settings</h3>
+<p>Claude Code export ได้ 3 สัญญาณ: <strong>metrics, log events และ traces</strong> วิธีที่ scale คือใส่ตัวแปร telemetry ไว้ใน block <code>env</code> ของ <code>settings.json</code> ที่ผู้ดูแลระบบจัดการ (managed settings) ทุกเครื่องจะได้ค่าเหมือนกันโดยนักพัฒนาไม่ต้องตั้งเอง</p>
+<pre><code>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.corp.example:4317",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ${COLLECTOR_TOKEN}"
+  }
+}</code></pre>
+
+<h3>Managed setting ล็อกอะไรได้บ้าง</h3>
+<div class="table-wrap"><table>
+  <tr><th>ถ้า managed settings ตั้ง…</th><th>ผลกับค่าที่นักพัฒนาตั้งเอง</th></tr>
+  <tr><td>endpoint</td><td>endpoint ทั้งแบบ per-signal และแบบ generic ของนักพัฒนาถูกลบทิ้ง</td></tr>
+  <tr><td>protocol</td><td>protocol ของนักพัฒนาถูกลบทิ้งเช่นกัน</td></tr>
+  <tr><td>headers หรือ client key/certificate</td><td><strong>endpoint ทุกตัวที่นักพัฒนาตั้งถูกลบทิ้ง</strong> เพื่อไม่ให้ credential ขององค์กรหลุดไปที่ collector ที่ไม่ได้อนุมัติ</td></tr>
+  <tr><td>exporter selector (<code>OTEL_METRICS_EXPORTER</code>, <code>OTEL_LOGS_EXPORTER</code>, <code>OTEL_TRACES_EXPORTER</code>)</td><td>ใช้ลำดับความสำคัญปกติรายคีย์ ถ้า managed ไม่ได้ตั้ง นักพัฒนาเปลี่ยนเองได้</td></tr>
+</table></div>
+<ul>
+  <li>ช่วงเวลา export ก็ควรคุมจาก managed settings ด้วย (ค่า default ของ metric คือ <strong>60 วินาที</strong>) ตอน debug ค่อยลดให้สั้นลง</li>
+  <li>สำหรับ Agent SDK ใน production ตั้งตัวแปรใน environment ของ process (shell, container หรือ orchestrator) แล้วทุก <code>query()</code> จะใช้ค่านั้นเองโดยไม่ต้องแก้โค้ด</li>
+</ul>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>managed settings ล็อก endpoint ไว้แล้ว แต่นักพัฒนาคนหนึ่งตั้ง <code>OTEL_METRICS_EXPORTER=console</code> ใน shell ของตัวเอง metrics ของเขาไปไหน? คำตอบ: <strong>ออกที่ console ของเขา ไม่ถึง collector กลาง</strong> เพราะการล็อก endpoint ไม่ได้ล็อก exporter selector</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ล็อก endpoint ใน managed settings แล้ว ข้อมูลทุกเครื่องจะไปถึง collector กลางแน่นอน"</strong> ไม่ใช่ ต้องใส่ exporter selector ใน managed settings ด้วย ไม่อย่างนั้นนักพัฒนาเปลี่ยนสัญญาณไปเป็น <code>console</code> หรือปิดไปเลยได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใส่ทุกอย่างไว้ใน managed <code>env</code>: เปิด telemetry, exporter, protocol, endpoint, headers และ interval การตั้ง headers/credential ใน managed จะลบ endpoint ทุกตัวของนักพัฒนา แต่ exporter selector ต้องล็อกแยกเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>managed settings ใส่ <code>OTEL_EXPORTER_OTLP_HEADERS</code> ที่มี token ขององค์กรไว้ นักพัฒนาคนหนึ่งตั้ง per-signal endpoint สำหรับ logs ชี้ไปที่ collector ส่วนตัว จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>logs ไปที่ collector ส่วนตัวพร้อม header ขององค์กร</li>
+    <li>logs ไปทั้งสองที่</li>
+    <li>Claude Code ลบ endpoint ที่นักพัฒนาตั้ง เพราะ managed settings ให้ credential มาแล้ว</li>
+    <li>Claude Code หยุดส่ง telemetry ทั้งหมด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> เมื่อ managed settings ให้ headers หรือ client key/cert endpoint ทุกตัวที่นักพัฒนาตั้งจะถูกลบ เพื่อกันไม่ให้ credential ขององค์กรถูกส่งไปที่ collector ที่ไม่ได้อนุมัติ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ติด tag ตาม tenant, ทีม และ deployment</h3>
+<ul>
+  <li><code>OTEL_SERVICE_NAME</code> ตั้งชื่อ agent</li>
+  <li><code>OTEL_RESOURCE_ATTRIBUTES</code> รับคู่ <code>key=value</code> คั่นด้วย comma เช่น version ของ service, deployment environment และคีย์ที่เรากำหนดเอง เช่น department, cost center</li>
+  <li>resource attribute ถูกแปะลงในทุก metric datapoint โดย default</li>
+</ul>
+
+<h3>Tag ต่อ run ในระบบ multi-tenant</h3>
+<p>ใน service ที่รับงานจากหลาย tenant ให้ส่ง tag เป็นราย run ผ่าน per-call options ของ Agent SDK และ <strong>URL-encode ค่าที่มาจาก request</strong> (เช่น ชื่อ tenant ที่มี comma หรือ = จะทำให้ parse ผิด)</p>
+<p>จุดที่ต่างกันระหว่างภาษา:</p>
+<ul>
+  <li><strong>TypeScript:</strong> <code>options.env</code> <em>แทนที่</em> environment ที่สืบทอดมาทั้งหมด ต้อง spread <code>process.env</code> ใส่ก่อน ไม่อย่างนั้น agent จะเสีย <code>PATH</code> และ API key</li>
+  <li><strong>Python:</strong> <code>env</code> <em>merge</em> ทับ environment ที่สืบทอดมา ใส่แค่ tag ก็พอ</li>
+</ul>
+<pre><code>// TypeScript
+const attrs = `tenant.id=${encodeURIComponent(tenantId)},team=payments`;
+query({ prompt, options: { env: { ...process.env, OTEL_RESOURCE_ATTRIBUTES: attrs } } });
+
+# Python
+opts = ClaudeAgentOptions(env={"OTEL_RESOURCE_ATTRIBUTES": f"tenant.id={quote(tenant_id)},team=payments"})</code></pre>
+
+<h3>Flag ที่คุม attribute บน metric</h3>
+<div class="table-wrap"><table>
+  <tr><th>ตัวแปร</th><th>เพิ่มอะไร</th><th>Default</th></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES</code></td><td>คีย์จาก <code>OTEL_RESOURCE_ATTRIBUTES</code> บน metric datapoint</td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_SESSION_ID</code></td><td><code>session.id</code> (และ <code>ccr.session.id</code> บน cloud session)</td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_ACCOUNT_UUID</code></td><td><code>user.account_uuid</code> และ <code>user.account_id</code></td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_VERSION</code></td><td><code>app.version</code></td><td>false</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_ENTRYPOINT</code></td><td><code>app.entrypoint</code></td><td>false</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_REPOSITORY</code></td><td><code>vcs.*</code> (ตัวตนของ repository)</td><td>false</td></tr>
+</table></div>
+<p><strong>Cardinality</strong> คือจำนวนชุดค่าที่ไม่ซ้ำของ label ใน metric ทุก session ใหม่หรือนักพัฒนาใหม่ที่มี ID ไม่ซ้ำจะสร้าง time series ใหม่ ถ้า dashboard ไม่ได้ group ด้วย ID พวกนี้ ก็ควรปิด</p>
+
+<h3>แยก span ฝั่ง API ตาม workspace</h3>
+<p>OpenTelemetry destination ใน Console เลือกได้ว่าจะครอบคลุมทุก workspace, เฉพาะบาง workspace หรือทุก workspace ยกเว้นที่ระบุ span จะถูกส่งไป<strong>ทุก destination ที่เปิดอยู่และครอบคลุม workspace นั้น</strong> ตัวอย่างเช่น ส่ง production ไป backend ราคาแพง แต่ไม่รวม staging</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"session ID และ account ID ต้อง opt-in ถึงจะถูกแนบไปกับ metric"</strong> ไม่ใช่ ทั้งสองเปิดเป็น default ถ้า dashboard ไม่ได้ใช้ ให้ปิดเอง ไม่อย่างนั้น time series จะงอกตามจำนวน session และนักพัฒนา</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใช้ <code>OTEL_RESOURCE_ATTRIBUTES</code> สำหรับ tag ทีม/tenant, ส่งต่อ run ผ่าน per-call env (TS ต้อง spread <code>process.env</code>), ปิด flag session/account ถ้าไม่ได้ใช้ และใช้ destination ราย workspace แยก production กับ staging</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>SaaS ที่รัน Agent SDK ให้หลายลูกค้าอยากให้ telemetry ของแต่ละ run มี tenant ID และ user ID ติดไปด้วย ควรตั้งตัวแปรไหนใน per-call env?</p>
+  <ol type="A">
+    <li><code>OTEL_RESOURCE_ATTRIBUTES</code></li>
+    <li><code>OTEL_SERVICE_NAME</code></li>
+    <li><code>OTEL_METRICS_INCLUDE_ACCOUNT_UUID</code></li>
+    <li><code>OTEL_EXPORTER_OTLP_HEADERS</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> <code>OTEL_RESOURCE_ATTRIBUTES</code> รับคู่ key=value ที่เรากำหนดเอง B คือชื่อ agent, C แนบ account ของ Claude ไม่ใช่ tenant ของเรา, D คือ header สำหรับส่งไป collector</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Dashboard ค่าใช้จ่ายแยกตามทีม (ทีมมาจาก resource attribute <code>team</code>) แต่ backend เตือนว่าจำนวน time series โตขึ้นทุกวันตามจำนวน session และนักพัฒนาใหม่ จะหยุดการโตโดยยังแยกตามทีมได้ ต้องทำอะไร?</p>
+  <ol type="A">
+    <li>ตั้ง <code>OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES=false</code></li>
+    <li>เปิด <code>OTEL_METRICS_INCLUDE_REPOSITORY</code></li>
+    <li>ตั้ง <code>OTEL_METRICS_INCLUDE_SESSION_ID=false</code> และ <code>OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false</code></li>
+    <li>ลด export interval เป็น 10 วินาที</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> session และ account ID เป็นตัวสร้าง series ใหม่ A จะทำให้คีย์ <code>team</code> หายไปด้วย B เพิ่ม cardinality D ไม่เกี่ยวกับจำนวน series</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (เลือก 3 ข้อ)</span>
+  <p>บริษัทมีนักพัฒนา 400 คนใช้ Claude Code อยากได้ telemetry ที่รวมศูนย์ แยกค่าใช้จ่ายตามแผนกได้ และไม่ทำให้ backend บวม ข้อไหนคือแนวปฏิบัติที่ถูกต้อง?</p>
+  <ol type="A">
+    <li>ส่งอีเมลให้นักพัฒนาแต่ละคน export ตัวแปร OTEL ใน shell profile ของตัวเอง</li>
+    <li>ใส่ตัวแปร telemetry ใน <code>settings.json</code> แบบ managed ที่ผู้ดูแลระบบจัดการ</li>
+    <li>ตั้ง <code>OTEL_METRICS_EXPORTER=console</code> ทุกเครื่องเพื่อให้เห็นผลทันที</li>
+    <li>เพิ่ม resource attribute เช่น <code>department</code> และ <code>cost_center</code></li>
+    <li>ปิด flag cardinality ที่ dashboard ไม่ได้ใช้ เช่น session ID</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B, D, E</strong> managed settings กระจายค่าเดียวกันทุกเครื่องโดยไม่ต้องพึ่งคน, custom attribute ใช้แยกแผนก, ปิด flag ที่ไม่ใช้ลด series A ทำให้ค่าแต่ละเครื่องไม่ตรงกันและไม่ scale C ใช้สำหรับ debug ในเครื่อง ไม่ใช่ส่งเข้าส่วนกลาง</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Content แบบไหนที่คุ้มจะเก็บในระดับ fleet</h3>
+<p>Content (prompt, คำตอบ, รายละเอียด tool) ถูก <strong>redact เป็น default</strong> การเปิด content gate แต่ละตัวคือการเปิดข้อมูลมากขึ้น และถ้าเปิดผ่าน managed settings ก็คือเปิดข้อมูลของ<strong>วิศวกรทุกคน</strong>ให้ใครก็ตามที่ query backend ได้เห็น ให้ตัดสินแต่ละ gate จาก "ใครจะเห็นอะไรบ้าง" ไม่ใช่จาก "ทำอะไรได้เพิ่ม"</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Gate</th><th>เปิดอะไร</th><th>ข้อควรระวัง</th></tr>
+  <tr><td>(ปิดทุก gate)</td><td>ยังมี <code>user.email</code> เมื่อใช้ OAuth</td><td>ส่งแค่ไป collector ของเรา ไม่ไป Anthropic แต่ backend เก็บไว้ ถ้านโยบายไม่ให้เก็บต้อง filter ที่ backend</td></tr>
+  <tr><td><code>OTEL_LOG_USER_PROMPTS</code></td><td>ข้อความที่ผู้ใช้พิมพ์</td><td>ถ้า strip ที่ collector ต้องตัดทั้ง <code>prompt</code> และ <code>prompt_text</code> ตัดตัวเดียวข้อความยังอยู่</td></tr>
+  <tr><td><code>OTEL_LOG_ASSISTANT_RESPONSES</code></td><td>คำตอบของ assistant</td><td>ถ้าไม่ตั้งจะ<strong>สืบทอดค่าจาก</strong> <code>OTEL_LOG_USER_PROMPTS</code> ถ้าอยากปิดต้องตั้ง <code>0</code> ชัดๆ</td></tr>
+  <tr><td><code>OTEL_LOG_TOOL_DETAILS</code></td><td>รายละเอียดการเรียก tool เช่น คำสั่ง</td><td>field อย่าง <code>full_command</code> ไม่ถูกตัด คำสั่งอาจมี secret</td></tr>
+  <tr><td><code>OTEL_LOG_RAW_API_BODIES</code></td><td>request/response body ทั้งก้อน รวมบทสนทนาทั้งหมด</td><td>เปิดตัวนี้ = ยินยอมกับทุกอย่างที่ gate prompt, tool detail และ tool content เปิดเผยรวมกัน แทบไม่เหมาะกับทั้ง fleet</td></tr>
+</table></div>
+
+<p>ตัวอย่าง: ทีม security อยาก audit คำสั่งที่ agent รัน ตัวเลือกที่แคบที่สุดคือเปิด <code>OTEL_LOG_TOOL_DETAILS</code> แล้วส่งเป็น log event เข้า SIEM ไม่ต้องเก็บ prompt หรือทั้งบทสนทนา แต่ก็ยังต้องระวังว่าคำสั่งอาจมี secret ติดอยู่</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Raw body logging เป็นสวิตช์แยกที่จำกัดขอบเขตได้"</strong> ไม่ใช่ การเปิด <code>OTEL_LOG_RAW_API_BODIES</code> เท่ากับยินยอมให้เปิดเผยทุกอย่างที่ content gate ตัวอื่นเปิดเผยรวมกัน</p>
+  <p><strong>"ปิด user prompts แล้ว assistant responses ก็ปิดแน่นอน / เปิด user prompts แล้ว responses ยังปิดอยู่"</strong> ต้องระวัง responses ที่ไม่ได้ตั้งค่าจะตามค่า prompts ถ้าอยากเปิด prompts แต่ไม่เปิด responses ต้องตั้ง <code>OTEL_LOG_ASSISTANT_RESPONSES=0</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เปิด gate ให้แคบที่สุดที่ตอบโจทย์ audit คำสั่งใช้ tool details, อย่าเปิด raw bodies ทั้ง fleet และจำไว้ว่า <code>user.email</code> มาเสมอภายใต้ OAuth</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีม compliance ต้องการบันทึกว่า agent ของทุกทีมรันคำสั่ง shell อะไรบ้าง แต่ห้ามเก็บข้อความที่วิศวกรพิมพ์คุยกับ agent ควรเปิด gate ไหน?</p>
+  <ol type="A">
+    <li><code>OTEL_LOG_RAW_API_BODIES</code></li>
+    <li><code>OTEL_LOG_USER_PROMPTS</code></li>
+    <li><code>OTEL_LOG_TOOL_DETAILS</code></li>
+    <li><code>OTEL_LOG_ASSISTANT_RESPONSES</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> tool details ให้รายละเอียดคำสั่งโดยไม่ต้องเก็บ prompt A เปิดบทสนทนาทั้งหมด B เก็บข้อความที่พิมพ์ซึ่งต้องห้าม D ไม่ได้ให้คำสั่ง (และถ้าไม่ตั้งจะตามค่าของ B)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทีมเปิด <code>OTEL_LOG_USER_PROMPTS=1</code> เพื่อวิเคราะห์คำถามที่พบบ่อย และไม่ได้ตั้งค่า <code>OTEL_LOG_ASSISTANT_RESPONSES</code> ไว้ ผลคืออะไร?</p>
+  <ol type="A">
+    <li>เก็บแค่ prompt ส่วนคำตอบยังถูก redact</li>
+    <li>ไม่เก็บอะไรเลยจนกว่าจะตั้งทั้งสองตัว</li>
+    <li>เก็บ raw API body ทั้งหมด</li>
+    <li>เก็บทั้ง prompt และคำตอบ เพราะ responses สืบทอดค่าจาก prompts</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ถ้าไม่ตั้ง responses จะใช้ค่าเดียวกับ prompts ถ้าอยากเก็บแค่ prompt ต้องตั้ง responses เป็น <code>0</code></p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code: Monitoring and usage</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/session-observability">Claude Managed Agents: Session observability</a></li>
+  <li><a href="https://platform.claude.com/docs/en/manage-claude/opentelemetry/api">Claude Platform: OpenTelemetry API</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/observability">Claude Agent SDK: Observability</a></li>
+</ul>
+</section>

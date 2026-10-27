@@ -1,0 +1,318 @@
+<section class="lesson" id="l-2-3">
+<h2>2.3 Few-shot and chain-of-thought prompting for Claude</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/zero-shot-and-few-shot-prompting-with-claude">CertSafari 2.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่างานไหนพอแค่ zero-shot งานไหนต้องเพิ่มเป็น one-shot หรือ few-shot และรู้ว่าทำไมต้องขยับทีละขั้น</li>
+    <li>ออกแบบชุดตัวอย่าง (examples) ที่ <strong>ตรงงาน หลากหลาย และมีโครงสร้าง</strong> ไม่ให้ Claude ไปจำรูปแบบที่เราไม่ได้ตั้งใจสอน</li>
+    <li>แยก chain-of-thought (CoT) 3 แบบ: basic, guided, structured และรู้ว่าแบบไหนเหมาะกับ pipeline</li>
+    <li>ตัดสินใจได้ว่าเมื่อไหร่ใช้ extended thinking เมื่อไหร่ต้องเขียน CoT เองใน tag และรู้ต้นทุนของ thinking</li>
+    <li>จัดวางเอกสารยาว ตัวอย่าง และคำถาม ให้ถูกลำดับใน prompt</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: บอก → ให้ดู → ให้เห็นวิธีคิด</span>
+  <p><strong>Instruction</strong> คือการ <em>บอก</em> ว่าอยากได้อะไร <strong>Example</strong> คือการ <em>ให้ดู</em> ว่าหน้าตา output ควรเป็นแบบไหน ส่วน <strong>chain-of-thought</strong> คือการ <em>ให้เห็นเส้นทางความคิด</em> ก่อนได้คำตอบ หลักคือเพิ่มเครื่องมือถัดไปก็ต่อเมื่อเครื่องมือก่อนหน้าเอาไม่อยู่แล้วเท่านั้น ไม่ใช่ใส่ทุกอย่างไว้ตั้งแต่แรก</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Zero-shot, one-shot และ few-shot</h3>
+<p>ลองนึกถึงการสอนเด็กฝึกงานใหม่ให้กรอกฟอร์ม ถ้างานง่าย แค่อธิบายเป็นคำพูดก็พอ ถ้าอธิบายแล้วยังทำออกมาไม่ตรง ก็ยื่นตัวอย่างที่กรอกแล้วให้ดูหนึ่งใบ และถ้ายังพลาดกับเคสแปลกๆ ก็ให้ดูหลายใบที่ต่างกัน prompt ก็ทำงานแบบเดียวกัน</p>
+<ul>
+  <li><strong>Zero-shot</strong>: มีแค่คำสั่ง ใช้ได้ดีเมื่อเราอธิบายรูปแบบ output และข้อจำกัดเป็นคำพูดได้ครบ เคล็ดลับคือ <strong>ใส่เหตุผลของแต่ละกฎ</strong> ด้วย เช่น "ตอบไม่เกิน 2 บรรทัด เพราะจะแสดงบน notification มือถือ" พอ Claude รู้ว่ากฎมีไว้ทำไม ก็จะใช้หลักเดียวกันกับเคสที่กฎไม่ได้เขียนไว้ได้</li>
+  <li><strong>One-shot</strong>: คำสั่ง + ตัวอย่าง 1 ชิ้น เหมาะเมื่อรูปแบบ น้ำเสียง หรือสไตล์ "ให้ดูง่ายกว่าอธิบาย"</li>
+  <li><strong>Few-shot (หรือ multishot)</strong>: คำสั่ง + ตัวอย่างหลายชิ้นที่ต่างกัน ใช้เมื่อให้ดูชิ้นเดียวแล้วผลยังไม่นิ่ง หรืองานมี pattern ละเอียดและ edge case เยอะ จำนวนที่แนะนำคือ <strong>ประมาณ 3–5 ตัวอย่างที่หลากหลาย</strong></li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>วิธี</th><th>ใน prompt มีอะไร</th><th>ใช้เมื่อ…</th></tr>
+  <tr><td>Zero-shot</td><td>คำสั่งชัดเจน รูปแบบ output ข้อจำกัด และเหตุผลของแต่ละข้อ</td><td>อธิบาย output ได้ครบด้วยคำพูด</td></tr>
+  <tr><td>One-shot</td><td>คำสั่ง + ตัวอย่าง 1 ชิ้น</td><td>รูปแบบ/น้ำเสียง/สไตล์ ให้ดูง่ายกว่าเขียนบรรยาย</td></tr>
+  <tr><td>Few-shot</td><td>คำสั่ง + ตัวอย่างหลายชิ้นที่ต่างกัน</td><td>ตัวอย่างเดียวแล้วผลยังแกว่ง หรืองานมี pattern ซับซ้อน</td></tr>
+</table></div>
+
+<p><strong>ทำไมต้องขยับทีละขั้น?</strong> เพราะตัวอย่างทุกชิ้นทำให้ prompt ยาวขึ้น และ <em>ทุกรายละเอียดในตัวอย่าง Claude อาจลอกตามได้หมด</em> ใส่เกินความจำเป็นก็เท่ากับเพิ่มสิ่งที่อาจถูกลอกโดยไม่ตั้งใจ</p>
+
+<h3>ปัญหา "label เพี้ยน" แก้ด้วยตัวอย่าง ไม่ใช่ด้วยการให้อธิบาย</h3>
+<p>อาการที่เจอบ่อย: โมเดลจัดหมวดถูก แต่เขียน label ไม่เหมือนกัน รอบหนึ่งได้ <code>Urgent</code> อีกรอบได้ <code>urgent!</code> อีกรอบได้ <code>ด่วนมาก</code> นี่คือปัญหา <strong>รูปร่างของ output (format drift)</strong> ไม่ใช่ปัญหาการคิด การสั่งให้ Claude "อธิบายเหตุผลเป็นย่อหน้า" ไม่ได้ทำให้ label นิ่งขึ้นเลย ทางแก้ที่ได้ผลคือใส่ตัวอย่าง input → output หลายคู่ที่ใช้ label สะกดแบบเดียวกัน และห่อแต่ละคู่ด้วย tag</p>
+<p>ส่วนการแปะตัวอย่างเดียวไว้ท้าย prompt แบบไม่มี tag ถือเป็นการแก้ที่อ่อนที่สุด เพราะ pattern น้อยเกินไปและ Claude แยกไม่ออกว่าอะไรคือตัวอย่าง อีกทางที่ผิดคือเพิ่ม temperature เพราะยิ่งเพิ่มความสุ่ม ผลยิ่งไม่นิ่ง</p>
+<p>ตัวอย่างใช้กับรูปภาพได้ด้วย แต่ต้นฉบับเตือนว่า few-shot กับภาพ <strong>ไม่ได้ผลเสมอไป</strong> ต้องทดสอบกับเคสของเราเอง</p>
+
+<pre><code>&lt;examples&gt;
+  &lt;example&gt;
+    &lt;input&gt;แอปเด้งออกทุกครั้งที่กดจ่ายเงิน ลูกค้าจ่ายไม่ได้เลย&lt;/input&gt;
+    &lt;output&gt;severity: P1 | area: payment&lt;/output&gt;
+  &lt;/example&gt;
+  &lt;example&gt;
+    &lt;input&gt;อยากให้เพิ่มโหมดมืดในหน้าโปรไฟล์&lt;/input&gt;
+    &lt;output&gt;severity: P4 | area: ui&lt;/output&gt;
+  &lt;/example&gt;
+  ...
+&lt;/examples&gt;</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"label สะกดไม่ตรงกัน ให้โมเดลอธิบายเหตุผลก่อนตอบก็จะดีขึ้น"</strong> ไม่ใช่ การอธิบายเป็นร้อยแก้วไม่ได้เปลี่ยนรูปร่าง output ตัวที่แก้ได้คือ few-shot examples ที่มี tag</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เริ่มที่ zero-shot (พร้อมเหตุผลของกฎ) แล้วค่อยเพิ่มตัวอย่างเมื่อจำเป็น ปัญหารูปแบบ/label ไม่นิ่ง แก้ด้วยตัวอย่าง 3–5 ชิ้นที่หลากหลายและห่อด้วย tag</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ระบบสกัดข้อมูลใบแจ้งหนี้ด้วย zero-shot ดึงยอดเงินถูกทุกครั้ง แต่ช่องสกุลเงินออกมาปนกันทั้ง <code>THB</code>, <code>บาท</code>, <code>฿</code> และ <code>thb</code> ทำให้ระบบปลายทางพัง ควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>เพิ่มคำสั่ง "ให้อธิบายเหตุผลที่เลือกสกุลเงินเป็นย่อหน้าก่อนตอบ"</li>
+    <li>ตัดคำสั่งเรื่องสกุลเงินออก ให้โมเดลเลือกรูปแบบเองอย่างอิสระ</li>
+    <li>ใส่คู่ใบแจ้งหนี้ → output หลายคู่ที่หลากหลาย ใช้ <code>THB</code> เหมือนกันทุกคู่ และห่อแต่ละคู่ด้วย <code>&lt;example&gt;</code></li>
+    <li>ย้ายไปใช้โมเดลรุ่นใหญ่ขึ้นโดยไม่แตะ prompt</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ปัญหาคือรูปร่าง output ไม่ใช่การคิด ตัวอย่างหลายชิ้นที่มี tag แสดงรูปแบบที่ต้องการชัดที่สุด A ไม่เปลี่ยนรูปร่าง B ยิ่งเปิดให้แกว่งมากขึ้น D ไม่ได้บอกโมเดลเลยว่ารูปแบบที่ถูกคือแบบไหน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>prompt แปลชื่อเมนูอาหารเป็นภาษาอังกฤษสำหรับร้านอาหาร ทีมต้องการ "สไตล์" แบบเฉพาะ: ชื่ออังกฤษสั้น ตามด้วยวงเล็บชื่อไทยแบบทับศัพท์ ซึ่งอธิบายด้วยคำพูดแล้วผลยังเพี้ยนบ้าง แต่ยังไม่มีเคสขอบที่ซับซ้อน ขั้นถัดไปที่เหมาะสมที่สุดคือ?</p>
+  <ol type="A">
+    <li>ข้ามไปใส่ตัวอย่าง 20 ชิ้นทันทีเพื่อความชัวร์</li>
+    <li>ลบคำสั่งทั้งหมดแล้วใช้แต่ตัวอย่าง</li>
+    <li>เปิด extended thinking</li>
+    <li>เพิ่มตัวอย่าง 1 ชิ้นที่แสดงสไตล์นั้น (one-shot) แล้ววัดผลก่อน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> สไตล์ที่ "ให้ดูง่ายกว่าอธิบาย" คือกรณีของ one-shot ควรขยับทีละขั้น เพราะตัวอย่างทุกชิ้นเพิ่มความยาวและเพิ่มสิ่งที่อาจถูกลอก ถ้าชิ้นเดียวยังไม่นิ่งค่อยขยับเป็น few-shot</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ออกแบบตัวอย่างให้ดี</h3>
+<p>Claude ดูตัวอย่าง <strong>ละเอียดทุกจุด</strong> รวมถึงจุดที่เราไม่ได้ตั้งใจสอน เช่น ความยาวเท่ากัน โครงประโยคเหมือนกัน หรือทุกชิ้นมีอารมณ์ไปทางเดียวกัน สิ่งที่เหมือนกันทั้งชุดจะกลายเป็น "pattern" ที่โมเดลเรียนไปด้วย ชุดตัวอย่างที่ดีต้องมี 3 คุณสมบัติ:</p>
+<ul>
+  <li><strong>Relevant (ตรงงาน)</strong>: หน้าตา input และ output เหมือนของจริงที่จะเจอ</li>
+  <li><strong>Diverse (หลากหลาย)</strong>: ครอบคลุม edge case และต่างกันพอที่จะไม่เกิด pattern บังเอิญ</li>
+  <li><strong>Structured (มีโครงสร้าง)</strong>: ตัวอย่างแต่ละชิ้นอยู่ใน <code>&lt;example&gt;</code> และทั้งชุดอยู่ใน <code>&lt;examples&gt;</code></li>
+</ul>
+
+<h3>ชุดตัวอย่างที่ "เหมือนกันหมด" อันตรายยังไง</h3>
+<p>ถ้าตัวอย่างทุกชิ้นหน้าตาคล้ายกัน ระบบจะทำงานดีเฉพาะกับ input ที่หน้าตาแบบนั้น แล้วพังกับอย่างอื่น และ <strong>การเพิ่มตัวอย่างแบบเดิมเข้าไปอีกยิ่งตอกย้ำ pattern ผิด</strong> ทางแก้คือความครอบคลุม: ทุก label ต้องมีตัวแทน มีเคสก้ำกึ่งที่ยาก และมีความยาว/การใช้คำหลากหลาย ความหลากหลายสำคัญที่สุดกับหมวดที่ก้ำกึ่ง เพราะคำนิยามที่เขียนเป็นตัวหนังสืออย่างเดียวมักจับเส้นแบ่งไม่ได้</p>
+
+<h3>Tag สำคัญพอๆ กับเนื้อหา</h3>
+<p>ถ้าแปะตัวอย่างปนกับคำสั่งโดยไม่มี tag จะเกิดความสับสน 2 ทาง: Claude อาจเข้าใจว่าค่าเฉพาะในตัวอย่างเป็น <em>ข้อบังคับ</em> หรือกลับกัน เข้าใจว่ากฎบางข้อเป็นแค่ <em>ข้อมูลตัวอย่าง</em> สิ่งที่บอก Claude ว่า "นี่คือการสาธิต" คือ tag ไม่ใช่ตำแหน่งใน prompt ควรใช้ชื่อ tag เดิมทุก prompt เพื่อให้ผลคาดเดาได้</p>
+<p>อีกข้อที่น่าสนใจ: ในงาน moderation การเปลี่ยนชุดตัวอย่างอย่างเดียว (ไม่แตะกฎ) ก็เปลี่ยนได้ว่าระบบจะปล่อยหรือบล็อกอะไร ตัวอย่างจึงเป็นเหมือน "นโยบาย" อีกชั้นหนึ่ง</p>
+
+<pre><code>&lt;examples&gt;
+  &lt;example&gt;&lt;comment&gt;ร้านนี้บริการดีมาก แนะนำเลย&lt;/comment&gt;&lt;label&gt;ALLOW&lt;/label&gt;&lt;/example&gt;
+  &lt;example&gt;&lt;comment&gt;เดี๋ยวจะไปดักรอหน้าบ้านแก&lt;/comment&gt;&lt;label&gt;BLOCK&lt;/label&gt;&lt;/example&gt;
+  &lt;example&gt;&lt;comment&gt;ดื่มน้ำมะนาวรักษามะเร็งได้ 100%&lt;/comment&gt;&lt;label&gt;BLOCK&lt;/label&gt;&lt;/example&gt;
+  &lt;example&gt;&lt;comment&gt;ของมาช้าไปหน่อย แต่ใช้ดี&lt;/comment&gt;&lt;label&gt;ALLOW&lt;/label&gt;&lt;/example&gt;
+&lt;/examples&gt;</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"classifier ไม่แม่น ก็เพิ่มจำนวนตัวอย่างเข้าไป เดี๋ยวก็ดีขึ้นเอง"</strong> ไม่จริง ถ้าตัวอย่างเพิ่มยังหน้าตาเหมือนเดิม จะยิ่งตอกย้ำลักษณะผิวเผินที่ชุดเดิมมีร่วมกัน สิ่งที่แก้ได้คือความหลากหลาย ไม่ใช่จำนวน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ตัวอย่างต้องตรงงาน หลากหลาย และอยู่ใน tag ถ้าทุกชิ้นหน้าตาเหมือนกัน Claude จะเรียนความเหมือนนั้นไปด้วย เพิ่มของเดิมไม่ช่วย ต้องเพิ่มความครอบคลุม</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ตัวจัดหมวดอีเมลมีตัวอย่าง 6 ชิ้น ทุกชิ้นเป็นอีเมลสั้น 1 บรรทัด และทุกชิ้นเป็นหมวด "สอบถามราคา" พอเจออีเมลยาวที่เป็นการร้องเรียน ระบบตอบผิดบ่อย ควรทำอะไร?</p>
+  <ol type="A">
+    <li>แทนตัวอย่างบางส่วนด้วยอีเมลยาว อีเมลร้องเรียน และหมวดอื่นๆ ที่โครงสร้างต่างกัน</li>
+    <li>เพิ่มตัวอย่างอีเมลสั้นหมวดสอบถามราคาอีก 10 ชิ้น</li>
+    <li>ย้ายตัวอย่างไปไว้ล่างสุดของ prompt</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ชุดเดิมสอนว่า "สั้น + สอบถามราคา" คือ pattern การเพิ่มแบบเดิมยิ่งตอกย้ำ และตำแหน่งไม่ใช่สิ่งที่บอกว่าเป็นตัวอย่าง ต้องเพิ่มความหลากหลาย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>prompt คัดกรองรีวิวโรงแรมมีกฎ 6 ข้อ และมีตัวอย่าง 5 คู่ (รีวิว + ผลลัพธ์) ที่หลากหลายและตรงงาน แต่ทั้งหมดเขียนสลับปนอยู่กับกฎโดยไม่มี tag เลย ความเสี่ยงหลักคืออะไร?</p>
+  <ol type="A">
+    <li>ตัวอย่างไม่หลากหลายพอ</li>
+    <li>prompt ยาวเกิน context window</li>
+    <li>ต้องเปิด extended thinking ก่อน ตัวอย่างถึงจะได้ผล</li>
+    <li>Claude อาจตีความค่าในตัวอย่างเป็นข้อบังคับ หรือตีความกฎเป็นแค่ข้อมูลตัวอย่าง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ชุดนี้ผ่านเรื่อง relevant และ diverse แล้ว แต่ขาด structure เมื่อไม่มี tag Claude แยกการสาธิตออกจากคำสั่งได้ไม่แน่นอน</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Chain-of-thought สามรูปแบบ</h3>
+<p><strong>Chain-of-thought (CoT)</strong> คือให้ Claude คิดเป็นขั้นๆ ก่อนตอบ ช่วยได้มากในงานที่คำตอบต้องอาศัย "งานระหว่างทาง" ซึ่งถ้าตอบรวดเดียวจะถูกบีบหรือข้ามไป เช่น วิเคราะห์หลายขั้น คณิตศาสตร์ หรือการชั่งน้ำหนักหลายปัจจัย</p>
+
+<div class="table-wrap"><table>
+  <tr><th>แบบ</th><th>เพิ่มอะไรใน prompt</th><th>ได้อะไร</th></tr>
+  <tr><td><strong>Basic</strong></td><td>วลีอย่าง "think step-by-step"</td><td>Claude คิดก่อนตอบ แต่เลือกเองว่าจะคิดเรื่องอะไร</td></tr>
+  <tr><td><strong>Guided</strong></td><td>ระบุขั้นการคิดเป็นลำดับ</td><td>มั่นใจว่าปัจจัยที่เราต้องการถูกพิจารณาครบ</td></tr>
+  <tr><td><strong>Structured</strong></td><td>Guided + tag แยกส่วนคิดกับส่วนคำตอบ</td><td>โค้ดตัดส่วนคิดทิ้งได้ และดึงคำตอบออกมาได้สะอาด</td></tr>
+</table></div>
+
+<p>ตัวอย่างสั้นๆ ของทั้ง 3 แบบ ในงานเขียนข้อความเสนอโปรโมชันให้ลูกค้าบัตรสมาชิก:</p>
+<pre><code>&lt;customer&gt;&#123;&#123;CUSTOMER_PROFILE&#125;&#125;&lt;/customer&gt;
+&lt;promotions&gt;&#123;&#123;ACTIVE_PROMOS&#125;&#125;&lt;/promotions&gt;
+
+# Basic
+คิดทีละขั้นก่อนเขียนข้อความ
+
+# Guided
+ก่อนเขียน ให้ (1) ดูประวัติการซื้อของลูกค้า (2) เลือกโปรที่ตรงกับพฤติกรรมนั้น
+(3) แล้วค่อยเขียนข้อความ
+
+# Structured
+ทำตามขั้น (1)-(3) ข้างบนใน &lt;thinking&gt;&lt;/thinking&gt;
+แล้วใส่ข้อความสุดท้ายใน &lt;output&gt;&lt;/output&gt; เท่านั้น</code></pre>
+<p>แบบ structured คือแบบที่ใช้ใน moderation filter: ให้เหตุผลอยู่ใน <code>&lt;thinking&gt;</code> และคำตัดสินอยู่ใน <code>&lt;output&gt;</code> โค้ดจะ parse เฉพาะคำตัดสิน ไม่ต้องเดาว่าคำตอบอยู่ตรงไหนของข้อความยาว</p>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>Structured CoT สำคัญที่สุดใน <strong>pipeline</strong> ที่โค้ดต้องรู้แน่นอนว่าส่วนคิดจบตรงไหน และคำตอบเริ่มตรงไหน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Basic = บอกให้คิด, Guided = บอกว่าคิดเรื่องอะไรตามลำดับ, Structured = guided + tag แยกความคิดออกจากคำตอบ เพื่อให้โค้ดแยกได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (จับคู่)</span>
+  <p>จับคู่สิ่งที่ใส่ใน prompt กับรูปแบบ CoT:</p>
+  <ol>
+    <li>"ก่อนประเมินสินเชื่อ ให้ดูรายได้ก่อน แล้วดูภาระหนี้ แล้วค่อยสรุป"</li>
+    <li>"ลองคิดทีละขั้นก่อนตอบ"</li>
+    <li>"ทำขั้นรายได้ → หนี้ → สรุป ใน &lt;thinking&gt; แล้วใส่ APPROVE/REJECT ใน &lt;output&gt;"</li>
+  </ol>
+  <p>A = Basic, B = Guided, C = Structured</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-A, 3-C</strong> ข้อ 1 ระบุขั้นการคิดตามลำดับ (guided) ข้อ 2 แค่บอกให้คิด (basic) ข้อ 3 มีทั้งขั้นและ tag แยกส่วน (structured)</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Extended thinking กับ CoT ที่เขียนเอง</h3>
+<p><strong>Extended thinking</strong> คือ CoT ที่มีมาในตัวโมเดล เหตุผลจะมาใน <strong>thinking block</strong> ก่อนข้อความคำตอบ ถ้ารุ่นที่ใช้รองรับ โดยทั่วไปควรเลือกใช้สิ่งนี้มากกว่าเขียน CoT เอง</p>
+<ul>
+  <li><strong>Adaptive thinking</strong> (<code>thinking={"type": "adaptive", ...}</code>) ให้ Claude ตัดสินเองว่าจะคิดเมื่อไหร่และคิดลึกแค่ไหน</li>
+  <li>บน <strong>Claude Opus 4.6 ถึง 4.8 และ Sonnet 4.6</strong> thinking ปิดอยู่จนกว่าเราจะเปิด adaptive thinking เอง ส่วน <strong>Claude Sonnet 5</strong> เปิดไว้เป็นค่าเริ่มต้น</li>
+</ul>
+<pre><code>response = client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=16000,
+    thinking={"type": "adaptive", "display": "summarized"},
+    messages=[{"role": "user", "content": "ห.ร.ม. ของ 1071 กับ 462 คือเท่าไร"}],
+)</code></pre>
+
+<h3>Thinking block ไม่ใช่ความคิดดิบ</h3>
+<ul>
+  <li><code>display: "summarized"</code> ได้ <strong>สรุป</strong> ของ thinking กลับมา</li>
+  <li><code>display: "omitted"</code> (ค่าเริ่มต้นในหลายรุ่น) ช่อง thinking จะ <strong>ว่างเปล่า</strong></li>
+  <li><strong>ไม่มีค่าไหนที่คืน chain of thought ดิบ</strong> ทั้งหมด ถ้าต้องการร่องรอยการคิดที่ตรวจสอบได้เต็มๆ ต้องสั่ง CoT ใน tag ให้เขียนออกมาในคำตอบเอง เพราะนั่นคือสิ่งที่ Claude เขียนจริง</li>
+</ul>
+
+<h3>เมื่อไหร่ยังต้องเขียน CoT เอง</h3>
+<ul>
+  <li>ใช้ extended thinking ไม่ได้ เช่น บน Claude.ai แผนฟรี</li>
+  <li>มีคน (เช่น auditor, reviewer) ต้องอ่านเหตุผลฉบับเต็ม</li>
+  <li>และใช้ทั้งสองอย่างร่วมกันได้ ไม่ต้องเลือกอย่างเดียว</li>
+</ul>
+
+<h3>ต้นทุนของ thinking</h3>
+<ul>
+  <li>Thinking token <strong>คิดเงินเป็น output token</strong> แม้ไม่ได้ถูกส่งกลับมาให้เห็น</li>
+  <li>นับรวมใน <code>max_tokens</code></li>
+  <li>เพิ่ม latency</li>
+</ul>
+<p><strong>ปรับระดับการคิดรายรอบ (turn-level steering)</strong>: วลีอย่าง "Please think hard before responding." ทำให้คิดมากขึ้น ส่วน "Answer directly without deliberating." ทำให้คิดน้อยลง agent harness อาจใช้แบบแรกในขั้นวางแผน และแบบหลังในขั้นยืนยันงานประจำ แต่ก่อนใช้งานจริงต้องวัด trigger rate, จำนวน token, latency และคุณภาพก่อนเสมอ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด extended thinking แล้วได้ audit trail ครบ เพราะ thinking block คือเหตุผลดิบ"</strong> ไม่ใช่ thinking block มีอย่างมากก็แค่สรุป (หรือว่างเปล่าถ้า omitted) ถ้าต้องตรวจสอบเหตุผลฉบับเต็ม ใช้ CoT ใน tag</p>
+</div>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>มี extended thinking และงานต้องคิดหลายขั้น → ใช้ extended thinking. ไม่มี หรือต้องให้คนอ่านเหตุผลเต็ม → ใช้ CoT ใน tag</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Extended thinking เป็นตัวเลือกแรกเมื่อมี แต่ได้แค่สรุปหรือช่องว่าง คิดเงินเป็น output และกิน max_tokens ถ้าต้องการเหตุผลเต็มเพื่อ audit ให้ใช้ CoT ใน tag</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (เติมคำ)</span>
+  <p>ทีมเปิด adaptive thinking แล้วพบว่า field thinking กลับมาว่างทุกครั้ง อยากให้มีข้อความสรุปการคิดกลับมาด้วย ต้องตั้ง <code>thinking={"type": "adaptive", "display": "____"}</code> เป็นค่าใด?</p>
+  <ol type="A">
+    <li><code>"omitted"</code></li>
+    <li><code>"verbose"</code></li>
+    <li><code>"summarized"</code></li>
+    <li><code>"enabled"</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>summarized</code> ให้สรุปกลับมา <code>omitted</code> คือสิ่งที่ทำให้ว่างอยู่ตอนนี้ และไม่มีค่าไหนคืนความคิดดิบ ถ้าต้องการเต็มๆ ใช้ CoT ใน tag</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ฝ่าย compliance ของธนาคารต้องเก็บเหตุผลฉบับเต็มของทุกการตัดสินใจอนุมัติวงเงิน เพื่อให้ผู้ตรวจสอบอ่านย้อนหลังได้ ทางเลือกไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>เปิด extended thinking แบบ <code>display: "omitted"</code> แล้วเก็บ field thinking</li>
+    <li>เปิด extended thinking แบบ <code>display: "summarized"</code> เพราะสรุปคือเหตุผลดิบที่ย่อแล้ว ถือว่าครบ</li>
+    <li>สั่งให้เขียนเหตุผลตามขั้นที่กำหนดใน <code>&lt;thinking&gt;</code> และคำตัดสินใน <code>&lt;output&gt;</code> แล้วเก็บทั้งสองส่วน</li>
+    <li>เพิ่ม <code>max_tokens</code> เพื่อให้ thinking block ยาวพอจะเป็นฉบับเต็ม</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> thinking block ไม่ใช่ความคิดดิบในทุกโหมด ร่องรอยที่ตรวจสอบได้เต็มคือ CoT ที่โมเดลเขียนในคำตอบเองผ่าน tag (structured CoT) และ max_tokens ไม่ได้เปลี่ยนว่า block คืนอะไร</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. วางเอกสารยาว ตัวอย่าง และคำถามตรงไหน</h3>
+<p>เรื่องการจัดวางสำคัญมากเมื่อ input ยาวราวๆ <strong>20,000 token ขึ้นไป</strong> (การจัดการขีดจำกัด token ดูบทที่ 2.4) หลักมี 3 ข้อ:</p>
+<ol class="steps">
+  <li><strong>เอกสารยาวไว้บนสุด</strong> เหนือคำถาม คำสั่ง และตัวอย่าง วิธีนี้ทำให้ผลดีขึ้นในทุกรุ่นโมเดล</li>
+  <li><strong>ห่อเอกสารแต่ละชิ้นด้วย tag</strong>: <code>&lt;document&gt;</code> ที่มี <code>&lt;source&gt;</code> กับ <code>&lt;document_content&gt;</code> ข้างใน และรวมทุกชิ้นไว้ใน <code>&lt;documents&gt;</code> อย่าแปะข้อความดิบ</li>
+  <li><strong>ให้ quote ก่อนตอบ</strong>: สั่งให้ Claude ดึงข้อความที่เกี่ยวข้องออกมาใส่ tag ของมันเองก่อน แล้วค่อยทำงาน นี่คือ CoT แบบหนึ่งสำหรับเอกสารยาว ช่วยให้ความสนใจอยู่กับเนื้อหาที่เกี่ยวข้อง</li>
+</ol>
+<pre><code>&lt;documents&gt;
+  &lt;document&gt;
+    &lt;source&gt;policy_2025.pdf&lt;/source&gt;
+    &lt;document_content&gt;&#123;&#123;POLICY&#125;&#125;&lt;/document_content&gt;
+  &lt;/document&gt;
+  &lt;document&gt;
+    &lt;source&gt;claims_log.csv&lt;/source&gt;
+    &lt;document_content&gt;&#123;&#123;CLAIMS&#125;&#125;&lt;/document_content&gt;
+  &lt;/document&gt;
+&lt;/documents&gt;
+
+[คำสั่ง + ตัวอย่าง]
+
+ก่อนตอบ ให้ยกข้อความที่เกี่ยวข้องมาไว้ใน &lt;quotes&gt; ก่อน
+คำถาม: เคลมรายการไหนบ้างที่ขัดกับนโยบาย</code></pre>
+<p>ถ้าคำตอบพลาดรายละเอียดที่ซ่อนอยู่กลางเอกสาร ทางแก้คือ <strong>วางเอกสารไว้บนสุด + quote ก่อน</strong> ไม่ใช่ตัดให้เหลือเอกสารชิ้นเดียว เพราะโครงสร้างหลายเอกสารมีไว้เพื่องานที่ต้องเทียบข้ามแหล่งอยู่แล้ว</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เอาคำถามไว้บนสุด Claude จะได้รู้ก่อนว่าจะหาอะไรในเอกสาร"</strong> ผิดทิศ เอกสารยาวต้องอยู่บน คำถามอยู่ล่าง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เอกสารยาว (ใน tag) อยู่บนสุด → คำสั่งและตัวอย่าง → คำถามอยู่ท้าย และให้ quote ส่วนที่เกี่ยวข้องก่อนลงมือวิเคราะห์</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีมกฎหมายส่งรายงานตรวจสอบภายใน 4 ฉบับ รวมราว 50,000 token เข้าไปพร้อมคำสั่ง ตัวอย่าง 2 ชิ้น และคำถาม โดยตอนนี้วางคำถามไว้บนสุดแล้วตามด้วยเอกสารดิบ คำตอบมักพลาดข้อค้นพบที่อยู่กลางรายงาน ควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>เพิ่มประโยค "อ่านทุกบรรทัดอย่างละเอียด" ในคำสั่ง แต่คงลำดับเดิมไว้</li>
+    <li>ย้ายคำถามขึ้นไปทั้งบนสุดและท้ายสุดเพื่อย้ำ แต่คงเอกสารดิบไว้</li>
+    <li>เพิ่มตัวอย่างอีก 10 ชิ้น</li>
+    <li>ห่อรายงานแต่ละฉบับด้วย document tag ย้ายไว้บนสุด แล้วให้ quote ข้อค้นพบที่เกี่ยวข้องก่อนตอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ตรงกับการจัดวางที่แนะนำทั้ง 3 ข้อ A ไม่ได้แก้ลำดับหรือโครงสร้าง B ยังเอาคำถามไว้ผิดที่และไม่แก้เรื่องข้อความดิบ C ไม่เกี่ยวกับปัญหาหาข้อมูลกลางเอกสาร</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (เลือก 3 ข้อ)</span>
+  <p>นักพัฒนากำลังสร้าง prompt ถาม-ตอบจากคู่มือภายในหลายเล่มที่ยาวมาก ข้อไหนเป็นแนวปฏิบัติที่ถูกต้อง?</p>
+  <ol type="A">
+    <li>วางคำถามไว้บรรทัดแรกสุดของ prompt</li>
+    <li>ห่อแต่ละเล่มด้วย <code>&lt;document&gt;</code> ที่มี <code>&lt;source&gt;</code> และ <code>&lt;document_content&gt;</code></li>
+    <li>แทรกตัวอย่าง few-shot ไว้ระหว่างคู่มือแต่ละเล่ม เพื่อให้อยู่ใกล้เนื้อหา</li>
+    <li>วางคู่มือทั้งหมดไว้เหนือคำสั่งและคำถาม</li>
+    <li>ให้ Claude ดึงข้อความที่เกี่ยวข้องมาไว้ใน tag ก่อนเขียนคำตอบสุดท้าย</li>
+    <li>สั่งให้ตอบทันทีโดยไม่ต้องยกข้อความอ้างอิง เพื่อประหยัด output token</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B, D, E</strong> คือ 3 หลักของการวางเอกสารยาว A ผิดทิศ C ทำให้ตัวอย่างปนกับเอกสารจนแยกยาก และ F ตัดขั้น quote ที่ช่วยให้ความสนใจอยู่กับเนื้อหาที่เกี่ยวข้องทิ้งไป</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices">Claude Docs: Prompting best practices</a></li>
+  <li><a href="https://claude.com/blog/best-practices-for-prompt-engineering">Claude blog: Best practices for prompt engineering</a></li>
+  <li><a href="https://platform.claude.com/cookbook/multimodal-best-practices-for-vision">Claude Cookbook: Multimodal best practices for vision</a></li>
+  <li><a href="https://platform.claude.com/cookbook/misc-building-moderation-filter">Claude Cookbook: Building a moderation filter</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/thinking">Claude Docs: Extended thinking</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost">Claude Docs: Thinking steering and cost</a></li>
+</ul>
+</section>

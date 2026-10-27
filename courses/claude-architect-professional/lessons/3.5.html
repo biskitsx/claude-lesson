@@ -1,0 +1,259 @@
+<section class="lesson" id="l-3-5">
+<h2>3.5 RAG ingestion: chunking, embeddings และ contextual indexing</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/rag-pipeline-design-chunking-embeddings-and-hybrid-indexing">CertSafari 3.5</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ตัดสินได้ว่า knowledge base ต้องใช้ RAG หรือใส่ทั้งก้อนลง prompt ได้เลย</li>
+    <li>อธิบายได้ว่าขนาด chunk, จุดตัด (boundary) และ overlap กระทบ retrieval ยังไง และทำไม chunk ที่ถูกตัดออกมาเดี่ยวๆ ถึงเสีย context ของเอกสาร</li>
+    <li>เลือก embedding model ของ Voyage ได้ และตั้ง <code>input_type</code> ถูกทั้งฝั่งเอกสารและฝั่ง query</li>
+    <li>สร้าง contextual embeddings และ contextual BM25 index จาก context ชุดเดียวกัน โดยใช้ prompt caching คุมต้นทุน</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: contextual retrieval</span>
+  <p>ก่อน index ให้ Claude เขียนคำอธิบายสั้นๆ ว่า chunk นี้อยู่ตรงไหนของเอกสารต้นทาง แล้วเอาข้อความนั้น<strong>แปะไว้หน้า chunk ก่อนทั้งการทำ embedding และการทำ BM25 index</strong> ทั้งสอง index จะจับคู่ chunk ที่ถ้าอ่านเดี่ยวๆ แล้วไม่รู้เรื่องได้</p>
+  <p>เปรียบเหมือนฉีกหน้าหนังสือออกมาหน้าเดียว ถ้าไม่เขียนกำกับมุมกระดาษว่า "บทที่ 3 ของคู่มือพนักงานสาขาเนเธอร์แลนด์" คนที่หยิบขึ้นมาทีหลังก็ไม่รู้ว่ามันพูดถึงใคร</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ขนาด chunk, จุดตัด และ context ที่หายไป</h3>
+<h3>RAG จำเป็นจริงไหม</h3>
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>Knowledge base ขนาดราว 150,000 token อัปเดตเดือนละครั้ง ดีไซน์ที่ง่ายที่สุดที่ใช้ได้คืออะไร? คำตอบ: <strong>ใส่ทั้งก้อนลงใน prompt แล้วใช้ prompt caching</strong> ไม่ต้องมี vector database ไม่ต้อง fine-tune embedding model</p>
+</div>
+<ul>
+  <li>ถ้า corpus เล็กกว่าประมาณ <strong>200,000 token (ราว 500 หน้า)</strong> ใส่ทั้งหมดใน prompt ได้ caching ทำให้การส่งซ้ำเร็วและถูก</li>
+  <li>RAG คือการค้นหา passage ที่เกี่ยวข้องแล้วเติมลง prompt มันคุ้มกับความซับซ้อนที่เพิ่มขึ้น<strong>ก็ต่อเมื่อ corpus ใหญ่จนใส่ไม่ลง</strong></li>
+</ul>
+
+<h3>ขั้นตอน ingestion</h3>
+<ol class="steps">
+  <li>หั่น corpus เป็น chunk (ปกติไม่เกินไม่กี่ร้อย token)</li>
+  <li>ทำ embedding ของแต่ละ chunk</li>
+  <li>เก็บ vector ลง vector database</li>
+  <li>ตอน query หา chunk ที่ใกล้ที่สุดแล้วใส่ลง prompt ของ Claude</li>
+</ol>
+
+<h3>3 ค่าที่ปรับได้</h3>
+<div class="table-wrap"><table>
+  <tr><th>ค่า</th><th>ผลที่ต้องรู้</th></tr>
+  <tr><td>ขนาด chunk (size)</td><td>เล็ก = แม่นแต่ขาดบริบท ใหญ่ = บริบทเยอะแต่เจือจาง แต่ไม่ว่าขนาดไหนก็มีปัญหา context หาย</td></tr>
+  <tr><td>จุดตัด (boundary)</td><td>ตัดตาม heading ทำให้หัวข้อย่อยไม่ขาดกลาง ส่วน character splitter แบบง่ายจะตัดตรงไหนก็ได้ที่ตัวนับหมด</td></tr>
+  <tr><td>Overlap</td><td>การตัด overlap ออกเพื่อให้ index เร็วขึ้นจะเปลี่ยนผล retrieval ต้องวัดก่อนตัดสินใจ</td></tr>
+</table></div>
+
+<h3>ปัญหา context loss</h3>
+<p>ตัวอย่างคลาสสิก: chunk จากรายงาน SEC เขียนว่า "รายได้เติบโต 3% จากไตรมาสก่อน" แต่ไม่ได้บอกว่าบริษัทไหน ไตรมาสไหน ถ้าผู้ใช้ถามโดยระบุชื่อบริษัทและไตรมาส chunk นี้แทบไม่มีอะไรให้จับคู่ <strong>การเปลี่ยนขนาด chunk ไม่ได้แก้ปัญหานี้</strong></p>
+<p>ทางแก้มี 2 ทาง:</p>
+<ol>
+  <li><strong>Contextual retrieval</strong>: เขียน context ลงไปในแต่ละ chunk ก่อน index (หัวข้อ 3)</li>
+  <li><strong>Contextualized chunk embedding model</strong> เช่น <code>voyage-context-4</code> เรียกด้วย <code>contextualized_embed()</code> แทน <code>embed()</code> โมเดลจะใส่บริบทของทั้งเอกสารลงใน vector ของ chunk ให้เอง</li>
+</ol>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ต่ำกว่า ~200K token ใส่ทั้งก้อน + cache ก่อน ถ้าต้อง RAG ให้ระวังว่า chunk ทุกขนาดเสีย context ของเอกสาร แก้ด้วย contextual retrieval หรือ contextualized embedding model</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ระบบถามตอบนโยบายบริษัทมีเอกสาร "สวัสดิการพนักงาน สาขาสิงคโปร์" ซึ่งมี chunk หนึ่งเขียนว่า "ได้รับเงินช่วยเหลือค่าเดินทาง 200 ต่อเดือน" ชื่อประเทศอยู่แค่ในชื่อเอกสาร เมื่อพนักงานถามว่า "สาขาสิงคโปร์ได้ค่าเดินทางเท่าไหร่" ระบบหา chunk นี้ไม่เจอ สาเหตุและทางแก้คือ?</p>
+  <ol type="A">
+    <li>chunk เสีย context ของเอกสาร ให้เติม context ลงในแต่ละ chunk ก่อน index หรือใช้ contextualized embedding model อย่าง <code>voyage-context-4</code></li>
+    <li>chunk ใหญ่เกินไป ให้หั่นเล็กลง</li>
+    <li>ต้อง fine-tune embedding model ให้รู้จักคำว่าสิงคโปร์</li>
+    <li>overlap ทำให้เกิด chunk ซ้ำ ให้ปิด overlap</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ไม่มีอะไรใน chunk บอกว่าเป็นของสาขาไหน ไม่ว่าจะหั่นขนาดไหนก็ยังขาดข้อมูลนี้ การ fine-tune หรือแก้ overlap ไม่ได้คืน context ที่หายไป</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เลือกและเรียก embedding model</h3>
+<p>Anthropic <strong>ไม่มี embedding model ของตัวเอง</strong> บทเรียนใช้ Voyage AI เป็นตัวอย่าง และแนะนำให้เทียบ vendor จาก 3 เรื่อง: ข้อมูลที่ใช้เทรน, ประสิทธิภาพตอน inference (ความเร็วในการค้นและ latency ตลอดเส้นทาง) และความสามารถในการ customize</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Model</th><th>เรียกด้วย</th><th>Context length</th><th>เลือกเมื่อ</th></tr>
+  <tr><td><code>voyage-4-large</code></td><td><code>embed()</code></td><td>32,000</td><td>อยากได้คุณภาพ retrieval ทั่วไปและหลายภาษาดีที่สุด</td></tr>
+  <tr><td><code>voyage-4</code></td><td><code>embed()</code></td><td>32,000</td><td>สมดุลระหว่างคุณภาพกับประสิทธิภาพ</td></tr>
+  <tr><td><code>voyage-4-lite</code></td><td><code>embed()</code></td><td>32,000</td><td>latency และค่าใช้จ่ายมาก่อน</td></tr>
+  <tr><td><code>voyage-code-4</code></td><td><code>embed()</code></td><td>32,000</td><td>corpus เป็นโค้ด หรืองาน agentic coding</td></tr>
+  <tr><td><code>voyage-law-2</code></td><td><code>embed()</code></td><td>16,000</td><td>retrieval และ RAG ด้านกฎหมาย</td></tr>
+  <tr><td><code>voyage-finance-2</code></td><td><code>embed()</code></td><td>32,000</td><td>retrieval และ RAG ด้านการเงิน</td></tr>
+  <tr><td><code>voyage-context-4</code></td><td><code>contextualized_embed()</code></td><td>120,000 (เมื่อเปิด <code>enable_auto_chunking</code>)</td><td>อยากได้ vector ระดับ chunk ที่มีบริบทของทั้งเอกสาร</td></tr>
+  <tr><td><code>voyage-multimodal-3.5</code></td><td><code>multimodal_embed()</code></td><td>32,000</td><td>embed ข้อความ ภาพ และวิดีโอร่วมกัน</td></tr>
+</table></div>
+<p>Context length สำคัญขึ้นเมื่อเราเติม context ให้ chunk ถ้าหลังเติม context แล้ว retrieval แย่ลง อาจเป็นเพราะข้อความยาวเกิน input limit แล้วถูกตัดทิ้ง การเปลี่ยนไปใช้โมเดลที่รับ input ได้ยาวกว่าแก้ได้ สังเกตว่า <code>voyage-law-2</code> รับ input ได้แค่ครึ่งหนึ่งของโมเดลทั่วไป</p>
+
+<h3><code>input_type</code>: บอกโมเดลว่าเป็นเอกสารหรือคำถาม</h3>
+<ul>
+  <li>ตั้ง <code>"document"</code> ให้ chunk และ <code>"query"</code> ให้คำถามของผู้ใช้</li>
+  <li>อย่าละไว้หรือส่ง <code>None</code></li>
+  <li>เหตุผล: Voyage จะเติม instruction สำหรับ retrieval ที่ต่างกันไว้หน้าแต่ละประเภท ทำให้ได้ vector ที่ค้นหาได้ดีกว่า</li>
+</ul>
+<pre><code>import voyageai
+vo = voyageai.Client()
+
+doc_vecs = vo.embed(chunks, model="voyage-4", input_type="document").embeddings
+q_vec    = vo.embed([question], model="voyage-4", input_type="query").embeddings[0]</code></pre>
+
+<h3>Metric ไม่ค่อยสำคัญ เพราะ vector ยาว 1</h3>
+<p>Vector ของ Voyage ถูก normalize ให้ยาวเท่ากับ 1 (unit length) ดังนั้น cosine similarity กับ dot product จัดอันดับเหมือนกันทุกประการ และ Euclidean distance ก็ให้อันดับเดียวกันด้วย การเปลี่ยน metric จึงไม่เปลี่ยนผล</p>
+
+<h3>ลดขนาดและต้นทุนของ index</h3>
+<div class="table-wrap"><table>
+  <tr><th>ค่า</th><th>ตัวเลือก</th><th>ผล</th></tr>
+  <tr><td><code>output_dtype</code></td><td><code>float</code> (default)</td><td>ความละเอียดสูงสุด</td></tr>
+  <tr><td></td><td><code>int8</code> / <code>uint8</code></td><td>ลดพื้นที่เก็บ 4 เท่า</td></tr>
+  <tr><td></td><td><code>binary</code> / <code>ubinary</code></td><td>ลดพื้นที่เก็บ 32 เท่า</td></tr>
+  <tr><td><code>output_dimension</code></td><td>เช่น 256 แทน 1024 (Matryoshka)</td><td>vector สั้นลง และ vector ที่เก็บไว้แล้วตัดเหลือมิติแรกๆ แล้ว renormalize ได้</td></tr>
+</table></div>
+<p>สองค่านี้ช่วย<strong>ลดขนาดและค่าใช้จ่าย</strong> แต่<strong>ไม่ได้ช่วยหา chunk ที่เกี่ยวข้องแต่หาไม่เจอ</strong></p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ไม่ต้องใส่ <code>input_type</code> ก็ได้ เพราะ query กับ chunk อยู่ใน vector space เดียวกันอยู่แล้ว"</strong> ไม่ใช่ การระบุว่าเป็น document หรือ query ทำให้ได้ vector ที่ค้นหาได้ดีกว่า</p>
+  <p><strong>"retrieval พลาดเพราะใช้ cosine ลองเปลี่ยนเป็น dot product"</strong> ไม่ช่วย กับ vector ที่ยาว 1 ทั้งสองจัดอันดับเหมือนกัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เลือกโมเดลตามโดเมนและ context length, ใส่ <code>input_type</code> ทุกครั้ง, ไม่ต้องกังวลเรื่อง metric และใช้ dtype/dimension ลดต้นทุน ไม่ใช่แก้คุณภาพ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับโมเดล Voyage ที่เหมาะสม:</p>
+  <ol>
+    <li>แชตบอตตอบคำถามจากคลังสัญญาและคำพิพากษา</li>
+    <li>ค้นหาฟังก์ชันใน monorepo ให้ coding agent</li>
+    <li>ค้นสินค้าจากรูปถ่ายและคำบรรยายรวมกัน</li>
+    <li>autocomplete ที่ต้องตอบเร็วมากและงบน้อย</li>
+    <li>อยากให้ vector ของแต่ละ chunk รู้บริบทของทั้งเอกสาร โดยไม่ต้องเขียน context เอง</li>
+  </ol>
+  <ol type="A">
+    <li><code>voyage-4-lite</code></li>
+    <li><code>voyage-law-2</code></li>
+    <li><code>voyage-code-4</code></li>
+    <li><code>voyage-context-4</code> ผ่าน <code>contextualized_embed()</code></li>
+    <li><code>voyage-multimodal-3.5</code> ผ่าน <code>multimodal_embed()</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-C, 3-E, 4-A, 5-D</strong> และอย่าลืมว่า law-2 รับ input ได้ 16,000 ครึ่งหนึ่งของตัวทั่วไป</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>เพื่อนร่วมทีมลบ <code>input_type</code> ออกจากทุกการเรียก embed ให้โค้ดสั้นลง โดยบอกว่า "ยังไง query กับเอกสารก็ไปอยู่ใน space เดียวกัน" ควรตอบว่าอะไร?</p>
+  <ol type="A">
+    <li>ถูกแล้ว แค่เปลี่ยน metric เป็น Euclidean ก็ชดเชยได้</li>
+    <li>ให้ตั้งทุกอย่างเป็น <code>"query"</code> จะได้เหมือนกันหมด</li>
+    <li>ให้ใส่กลับ: <code>"document"</code> สำหรับ chunk และ <code>"query"</code> สำหรับคำถาม เพราะแต่ละแบบได้ instruction ต่างกันซึ่งทำให้ vector ค้นหาได้ดีกว่า</li>
+    <li>ห้ามใส่ เพราะจะทำให้ query กับ chunk ไปอยู่คนละ space ที่เทียบกันไม่ได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> metric ไม่ชดเชย (A), ตั้งเหมือนกันหมดก็เสียความต่าง (B) และ label ไม่ได้ทำให้ space เทียบกันไม่ได้ (D)</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Contextual embeddings และ contextual BM25</h3>
+<p>สำหรับแต่ละ chunk ให้ Claude อ่าน<strong>เอกสารทั้งฉบับ</strong>คู่กับ chunk นั้น แล้วเขียน context สั้นๆ (ปกติ <strong>50–100 token</strong>) ที่บอกว่า chunk นี้อยู่ตรงไหนของเอกสาร จากนั้นแปะไว้หน้า chunk ในตัวอย่าง SEC context จะบอกชื่อบริษัท ไตรมาส และรายได้ของไตรมาสก่อน</p>
+<p>Prompt สำหรับ contextualizer ที่ Anthropic ใช้ (ทดลองกับ Claude 3 Haiku) มีโครงคร่าวๆ คือ ใส่เอกสารทั้งฉบับในช่อง <code>&#123;&#123;WHOLE_DOCUMENT&#125;&#125;</code>, ใส่ chunk, ขอให้เขียน context สั้นๆ เพื่อช่วยการค้นหา และให้ตอบแค่ context เท่านั้น ตัวอย่างที่เขียนเองตามแนวคิดนี้:</p>
+<pre><code>&lt;document&gt;
+&#123;&#123;WHOLE_DOCUMENT&#125;&#125;
+&lt;/document&gt;
+นี่คือ chunk ที่ต้องการวางตำแหน่งในเอกสารข้างบน:
+&lt;chunk&gt;
+&#123;&#123;CHUNK_CONTENT&#125;&#125;
+&lt;/chunk&gt;
+เขียนบริบทสั้นๆ ที่บอกว่า chunk นี้อยู่ส่วนไหนของเอกสาร เพื่อช่วยให้ค้นหาเจอ
+ตอบเฉพาะบริบทเท่านั้น</code></pre>
+
+<h3>Hybrid indexing: chunk ที่มี context ป้อนเข้าทั้งสอง index</h3>
+<ul>
+  <li><strong>Contextual embeddings:</strong> แปะ context ก่อนทำ embedding</li>
+  <li><strong>Contextual BM25:</strong> แปะ context ก่อน tokenize สำหรับ BM25 (การค้นแบบ lexical ที่จับคู่คำตรงตัว) ข้อความเดิมยังอยู่ครบ ดังนั้น string ตรงตัวอย่าง error code <code>TS-999</code> ยังจับคู่ได้ และคำที่ปรากฏแค่ที่อื่นในเอกสาร (เช่น ชื่อบริษัท) ก็จับคู่ได้ด้วย</li>
+</ul>
+<pre><code>for chunk in chunks:
+    ctx = contextualize(whole_doc, chunk)       # 50-100 token
+    text = ctx + "\n\n" + chunk
+    vector_index.add(embed(text, input_type="document"))
+    bm25_index.add(tokenize(text))              # ใช้ข้อความเดียวกัน</code></pre>
+
+<h3>ผลลัพธ์ (top-20 retrieval failure rate)</h3>
+<p>ทดสอบบน codebase, นิยาย, ArXiv และเปเปอร์วิทยาศาสตร์:</p>
+<div class="table-wrap"><table>
+  <tr><th>วิธี</th><th>Failure rate</th><th>ลดลง</th></tr>
+  <tr><td>Embedding ปกติ</td><td>5.7%</td><td>-</td></tr>
+  <tr><td>Contextual embeddings อย่างเดียว</td><td>3.7%</td><td>35%</td></tr>
+  <tr><td>Contextual embeddings + contextual BM25</td><td>2.9%</td><td>49%</td></tr>
+</table></div>
+<ul>
+  <li>embedding model ทุกตัวดีขึ้น โดย Gemini และ Voyage ได้ประโยชน์มากที่สุด</li>
+  <li>context ต้อง<strong>เฉพาะเจาะจงกับแต่ละ chunk</strong> การแปะสรุปเอกสารแบบเดียวกันทุก chunk ได้ผลน้อยมาก</li>
+  <li>prompt ที่ปรับให้เข้ากับโดเมน (เช่น ใส่ glossary ที่นิยามไว้ในเอกสารอื่น) อาจได้ผลดีกว่าเดิม</li>
+</ul>
+
+<h3>คุมต้นทุนด้วย prompt caching</h3>
+<ul>
+  <li>วางเอกสารทั้งฉบับไว้ต้น prompt แล้วใส่ <code>cache_control</code> ที่ท้ายเอกสาร</li>
+  <li>chunk แรกเขียน cache, chunk ถัดๆ ไปของเอกสารเดียวกันอ่าน cache ได้ส่วนลด <strong>90%</strong></li>
+  <li>cache อยู่ได้ <strong>5 นาที</strong> จึงควรประมวลผล chunk ของเอกสารเดียวกันต่อเนื่องกันจนหมด ค่อยไปเอกสารถัดไป</li>
+</ul>
+<p>ตัวเลขต้นทุน: chunk 800 token, เอกสาร 8k token, context 100 token ต่อ chunk ใช้ราว <strong>$1.02 ต่อ document token หนึ่งล้าน token</strong> เป็นต้นทุนครั้งเดียวตอน ingest บน codebase ที่มี 737 chunk การ cache ลดค่า input จากราว <strong>$9.20 เหลือ $2.85</strong></p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เติม context ให้ฝั่ง embedding ก็พอ ส่วน BM25 ใช้ chunk ดิบ"</strong> ไม่ใช่ ทั้งสอง index ควรได้ข้อความที่มี context ชุดเดียวกัน ตัวเลข 49% มาจากการทำทั้งคู่</p>
+  <p><strong>"แปะสรุปเอกสารชุดเดียวกันให้ทุก chunk ก็ได้ผลเท่ากัน"</strong> ไม่ใช่ ผลมาจาก context ที่เฉพาะกับแต่ละ chunk สรุปทั่วไปให้ผลน้อยมาก</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Claude อ่านทั้งเอกสาร + chunk → เขียน context 50–100 token → แปะหน้า chunk → ป้อนทั้ง embedding และ BM25 ใช้ cache ต่อเอกสารและทำทีละเอกสารเพื่อให้อยู่ใน 5 นาที</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมทำ knowledge base ของ log error ผู้ใช้มักค้นด้วยรหัสตรงตัวอย่าง <code>ERR-4012</code> วิศวกรอยากให้ BM25 ยังจับรหัสพวกนี้ได้แม่นเหมือนเดิม แต่ embedding ได้ context เพิ่ม ดีไซน์ไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>เติม context เฉพาะฝั่ง embedding เพราะ context จะทำให้ BM25 จับรหัสพลาด</li>
+    <li>เติม context ตอน query แทนตอน index</li>
+    <li>แปะ context ชุดเดียวกันไว้หน้า chunk ก่อนทั้ง embedding และ tokenize BM25 ข้อความเดิมยังอยู่ รหัสจึงยังจับคู่ได้</li>
+    <li>เติม context ให้ BM25 อย่างเดียว ส่วน embedding ใช้ chunk ดิบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> context ถูก<em>เพิ่ม</em>เข้าไป ไม่ได้แทนที่ข้อความเดิม BM25 ยังจับรหัสได้และยังได้คำจากส่วนอื่นของเอกสารเพิ่ม ตัวเลือกอื่นทำแค่ครึ่งเดียวหรือผิดจังหวะ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ใน contextualizer prompt ช่องสำหรับเอกสาร ควรใส่อะไร?</p>
+  <ol type="A">
+    <li>คำถามของผู้ใช้</li>
+    <li>chunk ก่อนหน้า</li>
+    <li>เอกสารทั้งฉบับ (<code>&#123;&#123;WHOLE_DOCUMENT&#125;&#125;</code>)</li>
+    <li>สรุปเอกสารสั้นๆ ที่ทำไว้ล่วงหน้า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> โมเดลต้องเห็นทั้งเอกสารถึงจะเขียน context ที่เฉพาะกับ chunk นั้นได้ คำถามผู้ใช้ยังไม่มีตอน index และสรุปเอกสารให้ผลน้อยตามที่ทดลองไว้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีม support ต้องการให้ lexical index ยังจับ SKU และข้อความ error ได้ตรงตัว แต่ให้แต่ละ chunk รู้ว่ามาจากคู่มือสินค้ารุ่นไหน ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>แปะ context เฉพาะ chunk ชุดเดียวกับที่ใช้ทำ embedding ไว้หน้า chunk ก่อน tokenize BM25</li>
+    <li>เลิกใช้ BM25 แล้วสร้าง embedding index ตัวที่สองแทน</li>
+    <li>ลดน้ำหนัก term frequency ของ BM25 ลง</li>
+    <li>index แค่ชื่อเอกสารและหัวข้อ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B ทิ้งการจับคู่ตรงตัว, C ทำให้ lexical matching อ่อนลง, D ทิ้งเนื้อหาที่การจับคู่ตรงตัวต้องใช้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีม ingest เอกสาร 2,000 ฉบับด้วย contextual retrieval โดยสุ่มลำดับ chunk จากทุกเอกสารปนกันเพื่อกระจายโหลด ค่าใช้จ่ายสูงกว่าที่คาดมาก สาเหตุที่น่าจะเป็นที่สุดคือ?</p>
+  <ol type="A">
+    <li>ไม่ได้ใช้ <code>input_type="document"</code></li>
+    <li>context ยาวเกิน 100 token</li>
+    <li>ใช้ <code>output_dtype="float"</code></li>
+    <li>chunk ของเอกสารเดียวกันไม่ได้ถูกประมวลผลต่อเนื่องกัน cache ที่อยู่ได้ 5 นาทีจึงหมดอายุก่อนถูกอ่านซ้ำ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ส่วนลด 90% ได้เมื่ออ่าน cache ของเอกสารเดิมภายใน 5 นาที ถ้าสลับเอกสารไปมา cache หมดอายุและต้องเขียนใหม่ทุกครั้ง A และ C ไม่กระทบค่า Claude</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://www.anthropic.com/engineering/contextual-retrieval">Anthropic Engineering: Introducing Contextual Retrieval</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/embeddings">Claude Docs: Embeddings</a></li>
+  <li><a href="https://platform.claude.com/cookbook/capabilities-contextual-embeddings-guide">Claude Cookbook: Contextual embeddings guide</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">Claude Docs: Prompt caching</a></li>
+</ul>
+</section>

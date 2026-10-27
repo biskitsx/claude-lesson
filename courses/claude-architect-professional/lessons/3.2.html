@@ -1,0 +1,289 @@
+<section class="lesson" id="l-3-2">
+<h2>3.2 MCP authorization: discovery, client registration และ scoped token</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/mcp-authorization-requirements-discovery-registration-and-token-binding">CertSafari 3.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกได้ว่า MCP server ตัวไหนควรใช้ OAuth และตัวไหนควรดึง credential จาก environment โดยดูจาก <strong>transport</strong></li>
+    <li>ไล่ขั้นตอนที่ client ใช้ค้นหา (discovery) authorization server และลงทะเบียนตัวเอง (registration) ได้ พร้อมชี้จุดที่ถูกโจมตีได้</li>
+    <li>หาช่องโหว่เรื่อง audience ของ token ได้ รวมถึงการส่ง token ต่อไปยัง API ปลายทาง (token passthrough)</li>
+    <li>แยก 401 กับ 403 ออกจากกัน และออกแบบการขอ scope เพิ่มแบบแคบ (step-up authorization) ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: token ผูกกับ server ตัวเดียว</span>
+  <p><strong>Audience-bound access token</strong> คือ token ที่ออกให้ใช้กับ MCP server ตัวเดียว ซึ่งระบุด้วย <strong>canonical URI</strong> (URI มาตรฐานที่ใช้เรียกชื่อ server ตัวนั้น) server ต้องปฏิเสธ token ที่ออกให้ server ตัวอื่น และ<strong>ห้ามส่ง token ที่ได้รับต่อไปให้บริการอื่นเด็ดขาด</strong></p>
+  <p>เปรียบเหมือนบัตรผ่านงานสัมมนาที่พิมพ์ชื่อห้องไว้ ถึงจะเป็นบัตรจริงจากผู้จัดงาน แต่ถ้าชื่อห้องไม่ตรง คนเฝ้าประตูก็ต้องไม่ให้เข้า</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Transport เป็นตัวกำหนดว่า MCP server จะยืนยันตัวตนแบบไหน</h3>
+<p>คำถามแรกที่ต้องถามเวลา audit MCP server ไม่ใช่ "ใช้ OAuth หรือยัง" แต่เป็น "server นี้คุยกับ client ผ่าน transport อะไร" เพราะ spec ของ MCP กำหนดกลไกต่างกันตาม transport:</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Transport</th><th>กลไกที่ควรใช้</th><th>ช่องโหว่ที่ต้องมองหา</th></tr>
+  <tr><td><strong>HTTP-based</strong> (server อยู่บนเครือข่าย)</td><td>OAuth 2.1 ตาม MCP authorization spec</td><td>server ที่รับ request โดยไม่มี token เลย หรือใช้ static key ตัวเดียวแชร์กันทุกคน</td></tr>
+  <tr><td><strong>STDIO</strong> (server เป็น child process บนเครื่องเดียวกัน)</td><td><strong>ไม่</strong>ใช้ spec นี้ ให้ดึง credential จาก environment แทน</td><td>process อื่นใน environment เดียวกันอ่าน secret พวกนั้นได้</td></tr>
+  <tr><td><strong>Transport อื่นๆ</strong></td><td>MCP ไม่ได้กำหนดกลไกไว้ ให้ทำตาม security best practice ของ protocol นั้นๆ</td><td>ขึ้นกับ protocol</td></tr>
+</table></div>
+
+<p>เหตุผลที่ STDIO ไม่ใช้ OAuth: server ตัวนั้นถูก client spawn ขึ้นมาเป็น process ลูกบนเครื่องเดียวกัน ไม่มีเครือข่ายคั่นกลาง การทำ OAuth flow เต็มรูปแบบเลยไม่มีประโยชน์ แต่ข้อแลกคือ secret ที่อยู่ใน environment variable ก็มองเห็นได้จาก process อื่นที่อยู่ใน environment เดียวกัน</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"MCP server ทุกตัวต้องทำ OAuth 2.1"</strong> ไม่ใช่ OAuth ใช้กับ transport แบบ HTTP เท่านั้น STDIO server ควรอ่าน credential จาก environment ส่วน transport อื่นใช้แนวทางของ protocol ตัวเอง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>HTTP → OAuth 2.1, STDIO → credential จาก environment, อื่นๆ → best practice ของ protocol นั้น ดู transport ก่อนเสมอ แล้วค่อยตัดสินว่า "ขาดอะไร"</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่ MCP server แต่ละตัวกับวิธียืนยันตัวตนที่เหมาะสม:</p>
+  <ol>
+    <li>server อ่านไฟล์ในเครื่องที่ IDE ของนักพัฒนา spawn ขึ้นมาเป็น child process</li>
+    <li>server ภายในบริษัทที่เปิดเป็น endpoint <code>https://tools.corp.example/mcp</code></li>
+    <li>server ที่ทีมทดลองต่อผ่าน message queue ของตัวเอง ซึ่ง MCP ไม่ได้นิยามกลไก auth ไว้</li>
+  </ol>
+  <ol type="A">
+    <li>OAuth 2.1 ตาม MCP authorization spec</li>
+    <li>ดึง credential จาก environment</li>
+    <li>ใช้ security best practice ของ protocol นั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-A, 3-C</strong> STDIO คือ process ในเครื่อง จึงใช้ environment, HTTP ใช้ OAuth 2.1 ส่วน transport ที่ MCP ไม่ได้กำหนดก็ต้องพึ่งแนวทางของ protocol นั้นเอง</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Client ค้นหา authorization server ได้ยังไง</h3>
+<p>Client ที่เพิ่งเจอ MCP server ครั้งแรกไม่จำเป็นต้องรู้ล่วงหน้าว่าจะไปขอ token จากที่ไหน มันค้นเองได้จากการลองเรียกดูก่อน:</p>
+<ol class="steps">
+  <li>Client ส่ง request แรก <strong>โดยไม่มี token</strong></li>
+  <li>Server ตอบ <code>401 Unauthorized</code> พร้อม header <code>WWW-Authenticate</code> ที่มี URL ของ <strong>Protected Resource Metadata</strong> (field <code>resource_metadata</code>) และอาจมี <code>scope</code> เป็นคำใบ้ว่าควรขอ scope อะไร</li>
+  <li>Client ไปอ่านเอกสาร metadata นั้น ซึ่งอยู่ที่ path แบบ well-known: <code>/.well-known/oauth-protected-resource</code> จะอยู่ที่ root ของโดเมนหรือต่อท้ายด้วย path ของ MCP endpoint ก็ได้ ในเอกสารนี้จะมี <code>scopes_supported</code> ด้วย</li>
+  <li>จากนั้นไปอ่าน metadata ของ authorization server ซึ่ง server ต้องมีอย่างน้อยหนึ่งแบบ: <strong>OAuth 2.0 Authorization Server Metadata</strong> (<code>/.well-known/oauth-authorization-server</code>) หรือ <strong>OpenID Connect Discovery</strong> (<code>/.well-known/openid-configuration</code>) และ <strong>client ต้องรองรับทั้งสองแบบ</strong></li>
+  <li>ตรวจว่า authorization server รองรับ PKCE หรือไม่ ถ้าไม่มี field <code>code_challenge_methods_supported</code> แปลว่าไม่รองรับ PKCE และ <strong>client ต้องหยุด ห้ามทำต่อ</strong></li>
+</ol>
+
+<p>ตัวอย่าง challenge ที่ server ส่งกลับมา (ตัวอย่างนี้เขียนเอง):</p>
+<pre><code>HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://notes.example.com/.well-known/oauth-protected-resource", scope="notes:read"</code></pre>
+
+<div class="box key"><span class="tag">เช็กลิสต์ตอน audit discovery</span>
+  <ul>
+    <li>endpoint ของ authorization server ทุกตัวต้องเป็น <strong>HTTPS</strong></li>
+    <li>redirect URI ต้องเป็น <strong>localhost หรือ HTTPS</strong> เท่านั้น</li>
+    <li>ไม่มี <code>code_challenge_methods_supported</code> = ไม่มี PKCE = client ต้องปฏิเสธ ไม่ใช่ "ลองต่อไปก่อน"</li>
+  </ul>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ได้ token มาใช้งานได้จริง แปลว่า flow ถูกต้องแล้ว"</strong> ไม่ใช่ ถ้า metadata ของ authorization server ไม่ประกาศว่ารองรับ PKCE แต่ client ยังเดินหน้าจนได้ token มา นั่นคือช่องโหว่ฝั่ง client ถึง token จะใช้ได้ก็ตาม เพราะ spec บังคับให้ client หยุดตั้งแต่ตอนเห็นว่าไม่มี PKCE</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เรียกแบบไม่มี token → ได้ 401 พร้อมที่อยู่ของ metadata → อ่าน Protected Resource Metadata → อ่าน metadata ของ authorization server (รองรับทั้ง OAuth และ OIDC) → ไม่มี PKCE ให้หยุด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม security ตรวจ log ของ MCP client แล้วพบว่า metadata ของ authorization server ตัวหนึ่ง<strong>ไม่มี</strong> <code>code_challenge_methods_supported</code> แต่ client ยังทำ OAuth flow ต่อจนได้ access token ที่ใช้เรียก tool ได้ปกติ ควรสรุปผลการ audit ว่าอย่างไร?</p>
+  <ol type="A">
+    <li>ไม่มีปัญหา เพราะ token ที่ได้มาใช้งานได้และยังไม่หมดอายุ</li>
+    <li>แก้ได้ด้วยการลดอายุ token ให้สั้นลง</li>
+    <li>เป็นปัญหาฝั่ง MCP server เพราะควรส่ง 403 แทน 401</li>
+    <li>เป็นช่องโหว่ฝั่ง client เพราะเมื่อไม่เห็นการรองรับ PKCE client ต้องปฏิเสธที่จะทำ flow ต่อ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ไม่มี field นี้แปลว่า server ไม่รองรับ PKCE และ spec กำหนดให้ client หยุด การที่ได้ token ที่ใช้งานได้ไม่ได้แปลว่าปลอดภัย ส่วน 401/403 กับอายุ token ไม่เกี่ยวกับปัญหานี้</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ลงทะเบียน client ที่ server ไม่เคยรู้จักมาก่อน</h3>
+<p>ก่อนจะขอ token ได้ authorization server ต้องรู้ก่อนว่า client คือใคร MCP กำหนดลำดับความสำคัญของวิธีลงทะเบียนไว้ ให้ client ไล่จากบนลงล่าง:</p>
+<ol class="steps">
+  <li><strong>ใช้ข้อมูล client ที่ลงทะเบียนไว้แล้ว (pre-registered)</strong> ถ้ามีความสัมพันธ์กันมาก่อน</li>
+  <li><strong>Client ID Metadata Document</strong> ถ้า authorization server ประกาศว่ารองรับ (field <code>client_id_metadata_document_supported</code>)</li>
+  <li><strong>Dynamic Client Registration</strong> ผ่าน <code>registration_endpoint</code> ซึ่งตอนนี้ <strong>deprecated แล้ว</strong> เก็บไว้เพื่อ backward compatibility เท่านั้น</li>
+  <li>ให้ผู้ใช้กรอกรายละเอียด client เอง</li>
+</ol>
+
+<h3>Client ID Metadata Document ทำงานยังไง</h3>
+<p>แทนที่จะลงทะเบียนแล้วได้ client ID เป็นสตริงสุ่ม วิธีนี้ให้ <code>client_id</code> <strong>เป็น HTTPS URL</strong> เลย และ URL นั้นเสิร์ฟ JSON ที่บรรยายตัว client:</p>
+<pre><code>// https://app.example.dev/oauth/client.json
+{
+  "client_id": "https://app.example.dev/oauth/client.json",
+  "client_name": "Example Notes Agent",
+  "redirect_uris": ["https://app.example.dev/callback"]
+}</code></pre>
+<ul>
+  <li>field ที่ต้องมีคือ <code>client_id</code>, <code>client_name</code>, <code>redirect_uris</code> (ใส่ <code>client_uri</code>, <code>logo_uri</code>, <code>grant_types</code>, <code>response_types</code>, <code>token_endpoint_auth_method</code> เพิ่มได้)</li>
+  <li><code>client_id</code> ในเอกสารต้อง<strong>ตรงกับ URL ที่เสิร์ฟเอกสารทุกตัวอักษร</strong></li>
+  <li>authorization server ตรวจ redirect URI ที่ client ส่งมากับ <code>redirect_uris</code> ในเอกสารทุกครั้ง</li>
+</ul>
+
+<h3>จุดอ่อน: redirect แบบ localhost เปิดช่องให้ปลอมตัว</h3>
+<p>Metadata document เป็น URL สาธารณะ ใครก็อ่านได้ ถ้าใน <code>redirect_uris</code> มี localhost อยู่ ผู้โจมตีสามารถ:</p>
+<ol class="steps">
+  <li>เอา metadata URL ของแอปจริงมาใช้เป็น <code>client_id</code> ของตัวเอง</li>
+  <li>เปิด listener บน localhost port ที่ระบุไว้ในเอกสารบนเครื่องเหยื่อ</li>
+  <li>รอดัก authorization code ที่ถูก redirect กลับมา</li>
+</ol>
+<p>หน้า consent จะแสดงชื่อแอปจริง ผู้ใช้เลยกดอนุญาตโดยไม่สงสัย วิธีลดความเสี่ยง:</p>
+<ul>
+  <li>แสดง hostname ของ redirect บนหน้า consent</li>
+  <li>เตือนเมื่อ client มี redirect เป็น localhost อย่างเดียว</li>
+  <li>บังคับ attestation (การพิสูจน์ว่าเป็นแอปตัวจริง)</li>
+  <li>ใช้ allowlist ของโดเมน หรือตรวจ reputation ของโดเมน</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Dynamic Client Registration เป็นวิธีหลักสำหรับ client ที่ไม่เคยเจอกัน"</strong> ไม่ใช่แล้ว DCR ถูก deprecate ถ้า server ประกาศรองรับ Client ID Metadata Document ให้ใช้วิธีนั้นก่อน DCR เป็นแค่ทางสำรอง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Pre-registered → Client ID Metadata Document → DCR (deprecated) → ให้ผู้ใช้กรอก ระวัง redirect แบบ localhost ที่เปิดให้คนอื่นแอบอ้าง metadata URL ของเราได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>MCP client ตัวใหม่ต้องเชื่อมกับ authorization server ที่ไม่เคยติดต่อกันมาก่อน metadata ของ server ประกาศทั้ง <code>client_id_metadata_document_supported</code> และ <code>registration_endpoint</code> client ควรลงทะเบียนด้วยวิธีไหน?</p>
+  <ol type="A">
+    <li>Dynamic Client Registration เพราะมี endpoint ให้ใช้และ server ออก client ID ให้ทันที</li>
+    <li>ขอให้ผู้ใช้พิมพ์ client ID เข้ามาเอง</li>
+    <li>Client ID Metadata Document โดยใช้ HTTPS URL ของตัวเองเป็น <code>client_id</code></li>
+    <li>ส่ง request โดยไม่มี client ID แล้วรอ server สร้างให้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ไม่มีความสัมพันธ์เดิม (pre-registered ใช้ไม่ได้) และ server รองรับ Client ID Metadata Document ซึ่งอยู่ลำดับก่อน DCR ที่ deprecated แล้ว การให้ผู้ใช้กรอกเป็นทางสุดท้าย</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ผูก token กับ server ตัวเดียว และห้ามส่งต่อ</h3>
+<h3>Parameter <code>resource</code> และ canonical URI</h3>
+<p>Client ต้องใส่ parameter <code>resource</code> ทั้งใน authorization request และ token request โดยค่าคือ canonical URI ของ MCP server ที่จะใช้ token นั้น กติกาคือ:</p>
+<ul>
+  <li>ต้องมี scheme (เช่น <code>https://</code>)</li>
+  <li>ห้ามมี fragment (ส่วน <code>#...</code>)</li>
+  <li>แนะนำให้ไม่มี slash ปิดท้าย</li>
+  <li>ใส่ port หรือ path ได้ถ้าจำเป็นต้องใช้ระบุตัว server</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>ค่า <code>resource</code></th><th>ใช้ได้ไหม</th><th>เหตุผล</th></tr>
+  <tr><td><code>https://notes.example.com/mcp</code></td><td>ได้</td><td>มี scheme, มี path ระบุ server</td></tr>
+  <tr><td><code>https://notes.example.com:9443</code></td><td>ได้</td><td>port ช่วยระบุ server</td></tr>
+  <tr><td><code>https://notes.example.com/team-a/mcp</code></td><td>ได้</td><td>path หลายระดับก็ได้</td></tr>
+  <tr><td><code>notes.example.com</code></td><td>ไม่ได้</td><td>ไม่มี scheme</td></tr>
+  <tr><td><code>https://notes.example.com#mcp</code></td><td>ไม่ได้</td><td>มี fragment</td></tr>
+</table></div>
+
+<h3>การส่งและเก็บ token</h3>
+<ul>
+  <li>ส่ง access token ใน header <code>Authorization: Bearer ...</code> เท่านั้น <strong>ห้ามใส่ใน query string</strong> (URL ไปโผล่ใน log, history, proxy ได้ง่าย)</li>
+  <li>refresh token ต้องเก็บเป็นความลับ และ client <strong>ห้ามสมมติว่าจะได้ refresh token เสมอ</strong></li>
+</ul>
+
+<h3>Audience validation</h3>
+<p>MCP server ต้อง<strong>ปฏิเสธทุก token ที่ไม่ได้ออกมาให้ตัวเองโดยเฉพาะ</strong> แม้ลายเซ็นถูกต้องและยังไม่หมดอายุก็ตาม เพราะลายเซ็นบอกแค่ว่า "ใครออก" ไม่ได้บอกว่า "ออกให้ใคร"</p>
+
+<h3>Token passthrough และ confused deputy</h3>
+<p>สมมติ MCP server ของเราต้องเรียก API ปลายทางอีกตัว ถ้ามันเอา token ที่ client ส่งมาไปใช้ต่อทั้งดุ้น นี่คือ <strong>token passthrough</strong> และทำให้เกิด <strong>confused deputy</strong>: API ปลายทางเห็น token ที่ถูกต้อง แต่ไม่รู้ว่าถูกส่งผ่านตัวกลางมา ตัวกลางเลยกลายเป็น "ตัวแทนที่ถูกหลอกใช้" ให้ทำสิ่งที่ผู้เรียกไม่ควรทำได้โดยตรง และการควบคุม/audit ที่ server ตัวกลางก็ถูกข้ามไป</p>
+<p>วิธีแก้มี 2 ส่วนคู่กัน:</p>
+<ol class="steps">
+  <li>MCP server ตรวจ audience ของ token ที่รับเข้ามา (ต้องออกให้ตัวเองเท่านั้น)</li>
+  <li>เวลาเรียก API ปลายทาง ให้ใช้ <strong>token แยกต่างหาก</strong> ที่ออกมาสำหรับ API นั้นโดยเฉพาะ</li>
+</ol>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"token ที่ authorization server ของบริษัทเซ็นมา ใช้กับ MCP server ไหนของบริษัทก็ได้ และส่งต่อไปเลยจะได้ไม่ต้องขอ token ใหม่"</strong> ไม่ใช่ token ผูกกับ canonical URI ของ server ตัวเดียว การส่งต่อคือ token passthrough ที่สร้าง confused deputy</p>
+  <p><strong>"แก้ passthrough ได้ด้วยการลดอายุ token หรือใช้ลายเซ็นที่แข็งแรงขึ้น"</strong> ไม่ใช่ ปัญหาอยู่ที่ audience ไม่ใช่ความแข็งแรงของ token สิ่งที่แก้ได้คือ audience validation + token แยกสำหรับปลายทาง</p>
+</div>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>MCP server ได้รับ token ที่ลายเซ็นถูกต้อง ยังไม่หมดอายุ แต่ออกให้ MCP server อีกตัวหนึ่ง ควรรับไหม? คำตอบคือ <strong>ไม่รับ</strong> ลายเซ็นพิสูจน์แค่ผู้ออก ไม่ได้พิสูจน์ผู้รับที่ตั้งใจไว้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใส่ <code>resource</code> = canonical URI ทั้งตอนขอ code และขอ token, ส่ง token ทาง header, server ตรวจ audience ทุกครั้ง และใช้ token ใหม่เมื่อเรียกบริการปลายทาง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>MCP server "expense-tools" รับ bearer token จาก client แล้วเอา token เดิมแนบไปเรียก API ระบบบัญชีภายในทันทีโดยไม่ตรวจอะไร ข้อสรุปของการ audit คืออะไร?</p>
+  <ol type="A">
+    <li>ไม่มีปัญหา เพราะ token มาจาก authorization server ของบริษัทเดียวกัน</li>
+    <li>ควรลดอายุ token เหลือ 5 นาทีเพื่อลดความเสี่ยง</li>
+    <li>เป็น token passthrough ต้องตรวจ audience ที่ MCP server และใช้ token แยกตอนเรียก API บัญชี</li>
+    <li>ควรย้าย token ไปไว้ใน query string เพื่อให้ API บัญชีอ่านได้ง่าย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> การส่ง token ของผู้ใช้ต่อไปให้ API อื่นคือ token passthrough ทำให้เกิด confused deputy การลดอายุไม่แก้ต้นเหตุ ส่วน query string ห้ามใช้อยู่แล้ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Client กำลังขอ token สำหรับ MCP server ที่เปิดอยู่ที่ <code>https://docs.example.org:8443/mcp</code> ค่า <code>resource</code> แบบไหนถูกต้อง? (เลือกได้มากกว่าหนึ่ง)</p>
+  <ol type="A">
+    <li><code>https://docs.example.org:8443/mcp</code></li>
+    <li><code>docs.example.org:8443/mcp</code></li>
+    <li><code>https://docs.example.org:8443/mcp#tools</code></li>
+    <li>ใส่ค่าเดียวกันทั้งใน authorization request และ token request</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, D</strong> canonical URI ต้องมี scheme (B ไม่มี) และห้ามมี fragment (C มี) และต้องใส่ <code>resource</code> ทั้งสอง request</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. 401 กับ 403 และการขอ scope เพิ่มเฉพาะตอนจำเป็น</h3>
+<div class="table-wrap"><table>
+  <tr><th>Status</th><th>ความหมาย</th><th>Client ควรทำอะไร</th></tr>
+  <tr><td><strong>401</strong></td><td>ต้อง authorize หรือ token ใช้ไม่ได้</td><td>ทำ discovery แล้วขอ token</td></tr>
+  <tr><td><strong>403</strong></td><td>token ใช้ได้ แต่ scope ไม่พอ</td><td>อ่าน challenge <code>insufficient_scope</code> แล้วทำ step-up</td></tr>
+  <tr><td><strong>400</strong></td><td>request ผิดรูปแบบ</td><td>แก้ request ไม่ต้อง authorize ใหม่</td></tr>
+</table></div>
+
+<h3>Step-up authorization</h3>
+<p>เมื่อเจอ 403 พร้อม <code>error="insufficient_scope"</code> client ทำแบบนี้:</p>
+<ol class="steps">
+  <li>รวม scope ที่เคยขอไปแล้ว <strong>กับ</strong> scope ที่ระบุใน challenge (union ไม่ใช่แทนที่)</li>
+  <li>ขอ authorize ใหม่ด้วยชุด scope รวมนั้น</li>
+  <li>retry request เดิม</li>
+  <li>ถ้าลองไม่กี่ครั้งแล้วยังไม่ผ่าน ให้หยุดและถือว่าเป็นความล้มเหลวถาวร ไม่วนไม่รู้จบ</li>
+</ol>
+<pre><code>HTTP/1.1 403 Forbidden
+WWW-Authenticate: Bearer error="insufficient_scope", scope="notes:write"
+
+# client เคยขอ notes:read → ขอใหม่เป็น "notes:read notes:write"</code></pre>
+
+<h3>Scope ตอนเริ่มต้น</h3>
+<ul>
+  <li>ถ้า 401 แรกมีคำใบ้ <code>scope</code> ให้ขอตามนั้น</li>
+  <li>ถ้าไม่มีคำใบ้ client จะขอ<strong>ทุก scope ใน <code>scopes_supported</code></strong> ซึ่งทำให้ได้สิทธิ์เกินจำเป็นตั้งแต่ครั้งแรก (over-grant)</li>
+</ul>
+<p>เพราะฉะนั้นฝั่ง server ควรใส่ <code>scope</code> ใน challenge 401 เสมอ เพื่อให้ client ขอแค่ที่ต้องใช้จริง แล้วค่อย step-up ทีหลัง (หลัก least privilege)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"403 แปลว่า token หมดอายุ ให้ login ใหม่"</strong> ไม่ใช่ 403 คือ token ยังใช้ได้แต่ scope ไม่พอ ถ้า login ใหม่ด้วย scope เดิม ก็จะได้สิทธิ์ชุดเดิมกลับมาและเจอ 403 ซ้ำ ต้อง step-up ด้วย scope ที่รวมของใหม่เข้าไป</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>401 = ไปเอา token, 403 = ขอ scope เพิ่มแบบ union, 400 = แก้ request server ควรให้คำใบ้ scope ใน 401 ไม่อย่างนั้น client จะขอทุก scope ตั้งแต่ต้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>Agent เรียก tool "delete_note" ด้วย token ที่ยังไม่หมดอายุและผ่าน audience แล้ว แต่ token มีแค่ <code>notes:read</code> server ควรตอบแบบไหน และ client ควรทำอะไร?</p>
+  <ol type="A">
+    <li>401 แล้ว client ทำ discovery ใหม่ตั้งแต่ต้น</li>
+    <li>403 แล้ว client login ใหม่ด้วย scope ชุดเดิมจนกว่าจะผ่าน</li>
+    <li>400 แล้ว client แก้รูปแบบ request</li>
+    <li>403 พร้อม <code>error="insufficient_scope"</code> แล้ว client ขอ authorize ใหม่ด้วย scope เดิมรวมกับ scope ที่ขาด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> token ใช้ได้แต่สิทธิ์ไม่พอ = 403 <code>insufficient_scope</code> แล้ว step-up แบบ union B ผิดเพราะ scope เดิมจะได้ผลเดิม และต้องหยุดหลังลองไม่กี่ครั้ง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีมพบว่า token ที่ client ได้มาครั้งแรกมี scope <code>admin:write</code> ทั้งที่ผู้ใช้แค่จะอ่านเอกสาร ตรวจแล้วพบว่า challenge 401 ของ server ไม่มี <code>scope</code> เลย สาเหตุและวิธีแก้ที่น่าจะถูกที่สุดคือ?</p>
+  <ol type="A">
+    <li>client ขอทุก scope ใน <code>scopes_supported</code> เพราะไม่มีคำใบ้ ให้ server ใส่ <code>scope</code> ใน challenge 401</li>
+    <li>authorization server มีบั๊กออก scope เกิน ต้องเปลี่ยน authorization server</li>
+    <li>token ถูกส่งต่อแบบ passthrough จาก server อื่น</li>
+    <li>ควรตอบ 403 แทน 401 ในครั้งแรก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> เมื่อไม่มีคำใบ้ client จะขอทุก scope ที่ server ประกาศว่ารองรับ จึง over-grant ตั้งแต่ต้น การใส่คำใบ้ scope ที่แคบใน 401 แก้ได้ตรงจุด</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization">MCP Specification 2026-07-28: Authorization</a></li>
+  <li><a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization">MCP Specification 2025-11-25: Authorization</a></li>
+  <li><a href="https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization/security-considerations">MCP Specification 2026-07-28: Authorization security considerations</a></li>
+</ul>
+</section>

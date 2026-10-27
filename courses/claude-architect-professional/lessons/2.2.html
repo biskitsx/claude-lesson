@@ -1,0 +1,206 @@
+<section class="lesson" id="l-2-2">
+<h2>2.2 System prompt และ prompt template ที่ใช้ซ้ำได้สำหรับ Claude</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/system-prompts-and-reusable-prompt-templates-for-claude">CertSafari 2.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ตั้ง role ใน system prompt และอธิบายได้ว่าทำไม role คืองานหลักของ system prompt</li>
+    <li>เขียนคำสั่งที่บอกเหตุผลกำกับ และรู้ว่าเมื่อไหร่ควรเขียนเป็นขั้นตอนเรียงเลข</li>
+    <li>ประกอบ template จาก role, ช่องตัวแปรที่ห่อด้วย XML tag, rules, scenario responses และ output format</li>
+    <li>รู้ว่าเทคนิค prefill แบบเดิมใช้ไม่ได้แล้วกับโมเดลปัจจุบัน</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: system prompt เริ่มจาก role</span>
+  <p><strong>Role-first system prompt</strong> คือใช้ system prompt เป็นที่ประกาศว่า Claude เป็นใครเป็นอันดับแรก แล้วค่อยวาง rules, scenario และ output format ซ้อนลงบน role นั้น เหมือนบอกพนักงานใหม่ก่อนว่า "คุณคือใคร ทำงานให้ใคร" แล้วค่อยแจกคู่มือ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. เริ่ม system prompt ด้วย role</h3>
+<p>ใน Messages API, system prompt อยู่ใน parameter ระดับบนสุดชื่อ <code>system</code> <strong>แยกจาก</strong> array <code>messages</code> ที่เก็บ turn ของ user กับ assistant</p>
+<pre><code>client.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=1024,
+    system="คุณคือผู้ช่วยด้านบัญชีภาษีสำหรับร้านค้าออนไลน์ขนาดเล็กในไทย ตอบสุภาพและกระชับ",
+    messages=[{"role": "user", "content": "ขายของออนไลน์ต้องจด VAT เมื่อไหร่"}],
+)</code></pre>
+<ul>
+  <li>Role ปรับพฤติกรรมและน้ำเสียงให้เข้ากับ use case ก่อนที่ user จะพิมพ์อะไร และ <strong>แม้แค่ประโยคเดียวก็มีผล</strong> เช่น "ผู้ช่วยเขียนโค้ดที่เชี่ยวชาญ Python"</li>
+  <li>Role ทำให้คำตอบ <strong>สม่ำเสมอตลอดบทสนทนา</strong> ซึ่งสำคัญที่สุดกับ support bot และผู้ช่วยภายในองค์กร</li>
+  <li>แม้ system prompt จะมีเป้าหมายอื่น เช่น ป้องกันไม่ให้คำสั่งลับรั่ว ก็ยังถือว่าเป็น role prompt เป็นหลัก เอกสารของ Anthropic ระบุว่า role prompting คือวิธีใช้ system prompt ที่ได้ผลที่สุด</li>
+</ul>
+<p>ระวังสับสน: <code>role</code> ที่อยู่ใน message แต่ละอัน (<code>"user"</code> / <code>"assistant"</code>) แค่บอกว่าใครพูด ไม่ใช่ที่ใส่ persona</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Persona และน้ำเสียงถาวรใส่ใน <code>system</code> ไม่ใช่ใน <code>role</code> ของ message ประโยคเดียวก็เปลี่ยนพฤติกรรมได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>คุณเรียก <code>messages.create(model="claude-sonnet-5-5", max_tokens=800, ___="คุณคือติวเตอร์คณิตศาสตร์ ม.ปลาย อธิบายทีละขั้น", messages=[...])</code> ช่องว่างคือ parameter ไหน?</p>
+  <ol type="A">
+    <li><code>role</code></li>
+    <li><code>context</code></li>
+    <li><code>instructions</code></li>
+    <li><code>system</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> persona ใส่ใน <code>system</code> ส่วน <code>role</code> เป็น key ภายใน message ที่บอกว่าใครพูด และ <code>context</code> กับ <code>instructions</code> ไม่ใช่ parameter สำหรับใส่ role ในการเรียกนี้</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เขียนคำสั่งให้เจาะจง และบอกเหตุผล</h3>
+<p>Claude ทำตามที่ขอ ไม่ได้ทำเกินที่ขอ ถ้าอยากได้มากก็ต้องพูดออกมา ตัวอย่างเช่น สั่ง "สร้าง dashboard วิเคราะห์ข้อมูล" จะได้ dashboard พื้นๆ แต่ถ้าเติม "ใส่ฟีเจอร์และ interaction ที่เกี่ยวข้องให้มากที่สุด" จะได้เวอร์ชันเต็ม หลักคือ:</p>
+<ul>
+  <li><strong>ระบุ output format และข้อจำกัดให้ชัด</strong></li>
+  <li><strong>ใช้ข้อเรียงเลขหรือ bullet เมื่อลำดับหรือความครบถ้วนของขั้นตอนสำคัญ</strong> แทนการเขียนเป็นย่อหน้า</li>
+  <li><strong>ให้เหตุผลกำกับกฎ</strong> เพราะ Claude ฉลาดพอจะเอาเหตุผลไปใช้กับกรณีที่กฎไม่ได้เขียนถึง</li>
+</ul>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>แอปอ่านคำตอบออกเสียงด้วย text-to-speech แต่ engine อ่านเครื่องหมาย "..." ไม่ได้ จะเขียนกฎแบบไหนดีที่สุด: (1) "ห้ามใช้ ... เด็ดขาด" ตัวใหญ่ (2) "ห้ามใช้ ... ไม่ว่ากรณีใด เรื่องนี้สำคัญมาก" หรือ (3) "คำตอบจะถูกอ่านออกเสียงด้วย text-to-speech ซึ่งออกเสียง ... ไม่ได้ จึงไม่ต้องใช้"?</p>
+  <p>คำตอบคือ <strong>แบบที่ 3</strong> เพราะบอกเหตุผล Claude จะเข้าใจเองว่าสัญลักษณ์อื่นที่ออกเสียงไม่ได้ เช่น emoji หรือตารางก็ควรเลี่ยงด้วย ส่วนกฎเปล่าๆ ไม่ว่าจะตะโกนแค่ไหน เอกสารจัดว่าได้ผลน้อยกว่า</p>
+</div>
+
+<h3>ตัวอย่าง: ห่อกฎไว้ใน XML tag ที่ตั้งชื่อตามหน้าที่</h3>
+<p>กฎพฤติกรรมที่ใช้ซ้ำได้มักเขียนเป็นก้อน แล้วห่อด้วย tag ที่ชื่อบอกว่าทำอะไร เช่น กฎ "ตรวจก่อนตอบ" สำหรับผู้ช่วยเขียนโค้ด:</p>
+<pre><code>&lt;investigate_before_answering&gt;
+อย่าเดาเรื่องโค้ดที่ยังไม่ได้เปิดอ่าน ถ้าผู้ใช้อ้างถึงไฟล์ใด ต้องอ่านไฟล์นั้นก่อนตอบ
+ก่อนตอบคำถามเกี่ยวกับ codebase ให้ค้นและอ่านไฟล์ที่เกี่ยวข้อง
+อย่ายืนยันข้อเท็จจริงเรื่องโค้ดที่ไม่แน่ใจ ตอบจากหลักฐานที่เห็นเท่านั้น
+&lt;/investigate_before_answering&gt;</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"กฎตัวใหญ่แบบ NEVER คือการเขียนข้อจำกัดที่แรงที่สุด"</strong> ไม่ใช่ เอกสารจัดกฎเปล่าว่าได้ผลน้อยกว่ากฎที่มีเหตุผล เพราะเหตุผลทำให้ Claude ขยายไปยังกรณีใกล้เคียงได้</p>
+  <p><strong>"ต้องเขียนเป็นข้อเรียงเลขตลอด"</strong> ไม่ใช่ ใช้เมื่อลำดับหรือความครบถ้วนสำคัญ ไม่มีเกณฑ์ว่า prompt ต้องยาวกี่ token และไม่ได้จำกัดว่าใช้ได้แค่ใน user turn</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>บอกให้ชัดว่าต้องการอะไร ใส่เหตุผลกำกับกฎ ใช้ข้อเรียงเลขเมื่อลำดับหรือความครบสำคัญ และห่อกฎที่ใช้ซ้ำใน tag ที่ตั้งชื่อตามหน้าที่</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>เมื่อไหร่ควรเขียนคำสั่งใน prompt เป็นข้อเรียงเลขหรือ bullet แทนย่อหน้า?</p>
+  <ol type="A">
+    <li>เมื่อลำดับหรือความครบถ้วนของขั้นตอนสำคัญ</li>
+    <li>เมื่อ prompt ยาวเกิน 10,000 token</li>
+    <li>เฉพาะใน user turn เท่านั้น ห้ามใช้ใน system prompt</li>
+    <li>ทุกครั้ง เพราะ Claude ไม่สนใจคำสั่งที่เขียนเป็นย่อหน้า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> เอกสารไม่มีเกณฑ์ token ไม่ได้จำกัดว่าใช้ที่ไหน และไม่ได้บอกว่า Claude เมินย่อหน้า ข้อเรียงเลขเป็นเครื่องมือสำหรับงานที่ลำดับหรือความครบสำคัญ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ผู้ช่วยทำรายงานส่งออกเป็นไฟล์ CSV แต่บางครั้งใส่เครื่องหมายจุลภาคในตัวเลข (เช่น 1,200) ทำให้คอลัมน์เลื่อน กฎแบบไหนน่าจะได้ผลดีที่สุดและครอบคลุมกรณีใกล้เคียงด้วย?</p>
+  <ol type="A">
+    <li>"ห้ามใส่จุลภาคในตัวเลข!!!"</li>
+    <li>เพิ่ม <code>max_tokens</code> ให้โมเดลมีที่ตรวจทานตัวเอง</li>
+    <li>"สำคัญมาก: ห้ามใช้จุลภาคในทุกกรณี"</li>
+    <li>"ผลลัพธ์จะถูกอ่านเป็น CSV ที่ใช้จุลภาคแบ่งคอลัมน์ ดังนั้นตัวเลขห้ามมีจุลภาคคั่นหลัก เพราะจะทำให้คอลัมน์เลื่อน"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> เมื่อรู้เหตุผล Claude จะเข้าใจเองว่าข้อความที่มีจุลภาคก็ต้องระวังด้วย (เช่น ใส่เครื่องหมายคำพูดครอบ) A และ C เป็นกฎเปล่า และ C ยังกว้างเกินจนห้ามจุลภาคในข้อความทั่วไป B ไม่เกี่ยวกับปัญหา</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เปลี่ยน prompt ให้เป็น template ที่ใช้ซ้ำได้</h3>
+<p>Prompt ใน production คือ template: มี <strong>ส่วนคงที่</strong> (role, rules, พฤติกรรมที่คาดหวัง) และ <strong>ส่วนแปรผัน</strong> (คำถามของผู้ใช้, ข้อมูลที่ดึงมา) ที่เปลี่ยนทุก request ใช้ XML tag แยก instructions, context และ input ออกจากกัน เช่น <code>&lt;instructions&gt;</code>, <code>&lt;context&gt;</code>, <code>&lt;input&gt;</code> และ <strong>ใช้ชื่อ tag ที่สื่อความหมายและเหมือนกันทุก prompt</strong></p>
+
+<h3>ตัวอย่าง template: ผู้ช่วยฝ่าย IT ภายในบริษัท</h3>
+<pre><code>คุณคือ HelpDeskBot ผู้ช่วย IT ภายในของบริษัท Siam Logistics
+ช่วยพนักงานแก้ปัญหาอุปกรณ์ บัญชีผู้ใช้ และ VPN น้ำเสียงเป็นกันเองแต่กระชับ
+
+&lt;kb&gt;
+&#123;&#123;RETRIEVED_ARTICLES&#125;&#125;
+&lt;/kb&gt;
+
+&lt;user_query&gt;
+&#123;&#123;USER_QUERY&#125;&#125;
+&lt;/user_query&gt;
+
+&lt;rules&gt;
+- อ้างอิงบทความใน &lt;kb&gt; ทุกครั้งที่ตอบ
+- ถ้าข้อมูลไม่พอ ให้ถามกลับก่อนแนะนำขั้นตอน
+- ห้ามเปิดเผยรหัสผ่านหรือ config ของเซิร์ฟเวอร์
+&lt;/rules&gt;
+
+&lt;scenarios&gt;
+- ถ้าถูกขอรหัสผ่านของคนอื่น: "ขออภัย ผมเปิดเผยข้อมูลบัญชีของผู้อื่นไม่ได้"
+- ถ้าเป็นปัญหาฮาร์ดแวร์เสีย: "รบกวนเปิด ticket ที่ระบบ IT Service เพื่อให้ช่างเข้าไปดูครับ"
+&lt;/scenarios&gt;
+
+ตอบในรูปแบบ:
+&lt;response&gt;&lt;kb_ref&gt;...&lt;/kb_ref&gt;&lt;answer&gt;...&lt;/answer&gt;&lt;/response&gt;</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>ส่วนประกอบ</th><th>ในตัวอย่าง</th><th>คุมอะไร</th></tr>
+  <tr><td>Role line</td><td>คุณคือ HelpDeskBot ผู้ช่วย IT ภายในของ...</td><td>พฤติกรรม น้ำเสียง และโดเมน</td></tr>
+  <tr><td>Tagged variable slot</td><td><code>&lt;user_query&gt;&#123;&#123;USER_QUERY&#125;&#125;&lt;/user_query&gt;</code></td><td>ที่วาง input ของแต่ละ request แยกออกจากคำสั่ง</td></tr>
+  <tr><td>Rules</td><td>ถ้าข้อมูลไม่พอ ให้ถามกลับก่อน</td><td>ขอบเขตพฤติกรรม</td></tr>
+  <tr><td>Scenario responses</td><td>ถ้าถูกขอรหัสผ่านของคนอื่น: "ขออภัย..."</td><td>คำตอบสำเร็จรูปสำหรับสถานการณ์ที่คาดไว้ ทำหน้าที่เป็น guardrail</td></tr>
+  <tr><td>Output format</td><td><code>&lt;response&gt;&lt;kb_ref&gt;…&lt;/kb_ref&gt;&lt;answer&gt;…&lt;/answer&gt;&lt;/response&gt;</code></td><td>โครงสร้างของทุกคำตอบ</td></tr>
+</table></div>
+<p>ส่วน scenario ช่วยให้ Claude ไม่หลุดบทบาท เพราะมีประโยคตายตัวให้ใช้ แทนที่จะต้องแต่งคำตอบเองในสถานการณ์อ่อนไหว ส่วน block <code>&lt;kb&gt;</code> ของข้อมูลที่ดึงมาช่วยผูกคำตอบไว้กับชุดข้อมูลที่กำหนด เหมาะกับ chatbot และ knowledge base</p>
+
+<h3>Output format และตัวอย่าง</h3>
+<ul>
+  <li>กำหนด output ให้แม่นด้วย JSON, XML หรือ custom template แล้ว Claude จะทำตามทุกองค์ประกอบที่ระบุ</li>
+  <li><strong>ตัวอย่าง (examples) เป็นวิธีที่เชื่อถือได้ที่สุด</strong> ในการกำหนด format, น้ำเสียง และโครงสร้าง ต้องตรงกับ use case จริง และหลากหลายพอที่ Claude จะไม่ลอกรูปแบบบังเอิญบางอย่างไปทุกคำตอบ</li>
+  <li>ห่อแต่ละตัวอย่างด้วย <code>&lt;example&gt;</code> ถ้ามีหลายตัวให้รวมใน <code>&lt;examples&gt;</code> เพื่อให้ Claude แยกตัวอย่างออกจากคำสั่ง</li>
+</ul>
+
+<h3>Prefill: เทคนิคเก่าที่ใช้ไม่ได้แล้ว</h3>
+<p>สมัยก่อนนิยมใส่ข้อความเริ่มต้นของ Assistant turn ไว้ก่อน (prefill) เช่น ใส่ <code>{</code> เพื่อบังคับให้ตอบเป็น JSON แต่ <strong>prefill ไม่รองรับบน Claude 4.6 ขึ้นไป และบน Claude Mythos Preview</strong> template ปัจจุบันจึงต้องคุม format ด้วยคำสั่งและตัวอย่างแทน</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Prefill เป็นวิธีบังคับ format ที่ใช้ได้กับ Claude ทุกโมเดล"</strong> ไม่ใช่ โมเดลตั้งแต่ Claude 4.6 และ Claude Mythos Preview ไม่รองรับ ใช้ instructions กับ examples แทน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Template = role + ช่องตัวแปรใน tag + rules + scenario responses + output format ใช้ tag ชื่อเดียวกันทุก prompt ห่อตัวอย่างด้วย <code>&lt;example&gt;</code>/<code>&lt;examples&gt;</code> และเลิกพึ่ง prefill</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมทำผู้ช่วยตอบคำถามลูกค้าของร้านเฟอร์นิเจอร์ออนไลน์ system prompt ตอนนี้มีแค่ "You are a helpful assistant." ผลคือบางทีพูดเป็นทางการ บางทีพูดเล่น และบางทีตอบเรื่องที่ไม่เกี่ยวกับร้าน ควรแก้อะไรก่อน?</p>
+  <ol type="A">
+    <li>เขียน role ให้เจาะจง ระบุว่าเป็นผู้ช่วยของร้านไหน ลูกค้าเป็นใคร และใช้น้ำเสียงแบบไหน</li>
+    <li>ย้ายคำสั่งเรื่องพฤติกรรมทั้งหมดไปไว้ใน user turn แรก</li>
+    <li>เพิ่ม <code>max_tokens</code> ให้โมเดลมีที่ปรับน้ำเสียงระหว่างตอบ</li>
+    <li>แทนที่ system prompt ด้วยรายการคำและหัวข้อที่ห้ามพูด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> role ใน system prompt คือที่กำหนดพฤติกรรมและน้ำเสียงถาวร C คุมแค่ความยาว B ย้ายออกจากที่ที่ควรอยู่ D บอกแค่สิ่งที่ห้ามแต่ไม่ได้กำหนดน้ำเสียงที่ต้องการ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ระบบสร้างคำบรรยายสินค้าเป็น JSON บน Claude Opus 5.5 ทีมเดิมใช้วิธีใส่ <code>{"title":</code> ไว้ใน Assistant turn เพื่อบังคับรูปแบบ แต่ตอนนี้ใช้ไม่ได้ ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>กำหนด schema ของ JSON ให้ชัดในคำสั่ง และใส่ตัวอย่างหลายแบบใน <code>&lt;examples&gt;</code></li>
+    <li>prefill ให้ยาวขึ้นจนครอบคลุมทุก field</li>
+    <li>ย้ายข้อความ prefill ไปไว้ท้าย user turn แทน</li>
+    <li>เขียนกฎตัวใหญ่ว่า "MUST OUTPUT JSON"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> prefill ไม่รองรับบนโมเดลรุ่นใหม่ จึงต้องคุม format ด้วยคำสั่งที่ชัดและตัวอย่าง B ยังเป็น prefill C ไม่ได้ทำหน้าที่เดียวกับการกำหนด format ส่วน D เป็นกฎเปล่าที่ได้ผลน้อยกว่าการอธิบาย format ให้ชัด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่เทคนิคใน template กับปัญหาที่มันแก้:</p>
+  <ol>
+    <li>แยก instructions, context และ input ด้วย XML tag</li>
+    <li>ห่อตัวอย่างด้วย <code>&lt;example&gt;</code></li>
+    <li>เขียนสถานการณ์ที่เจอบ่อยพร้อมคำตอบที่คาดหวัง</li>
+    <li>กำหนด output ด้วย JSON, XML หรือ template</li>
+  </ol>
+  <ol type="A">
+    <li>ผู้ช่วยหลุดบทบาทเมื่อเจอคำถามแปลกๆ หรืออ่อนไหว</li>
+    <li>คำตอบขาดบาง field ที่ระบบปลายทางต้องใช้</li>
+    <li>Claude เข้าใจผิดว่าข้อความในเอกสารที่แนบมาเป็นคำสั่ง</li>
+    <li>Claude ทำตามตัวอย่างราวกับเป็นคำสั่งที่ต้องทำ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-A, 4-B</strong> แต่ละเทคนิคแก้ความไม่สม่ำเสมอคนละต้นเหตุ: โครงสร้าง prompt, การปนกันของตัวอย่างกับคำสั่ง, สถานการณ์ที่ไม่ได้คาด และ format ที่หลุด</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices">Claude prompting best practices</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/increase-consistency">Increase consistency</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-prompt-leak">Reduce prompt leak</a></li>
+</ul>
+</section>

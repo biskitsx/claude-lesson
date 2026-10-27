@@ -1,0 +1,293 @@
+<section class="lesson" id="l-6-4">
+<h2>6.4 Architecture documentation สำหรับ Claude solutions</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/documenting-an-ai-solution-architecture-for-engineering-teams">CertSafari 6.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกได้ว่าเอกสาร architecture ต้องระบุ 5 อย่าง: components, data flows, models, tools และ boundaries</li>
+    <li>แนะนำได้ว่า agent loop ควรรันที่ไหน (Agent SDK ใน process ของเรา หรือ Managed Agents) และ tool ควรต่อเข้ามาทางไหน</li>
+    <li>บันทึกเหตุผลของแต่ละ layer ไว้ เพื่อไม่ให้ทีมรุ่นหลังลบของที่จำเป็นทิ้ง หรือสร้างของซ้ำ</li>
+    <li>ระบุสิ่งที่ต้องเปลี่ยนเพื่อยก prototype ขึ้นเป็น service จริง: การ serve, configuration, error handling และการ deploy</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เอกสารที่ดีบอกทั้ง "อะไร" และ "ทำไม"</span>
+  <p>เอกสาร architecture ต้องบอกวิศวกรว่า <strong>ชิ้นส่วนหลักมีอะไรบ้าง คุยกันยังไง แต่ละชิ้นใช้โมเดลและ tool อะไร และเส้นแบ่งอยู่ตรงไหน</strong> และที่ขาดไม่ได้คือ <strong>เหตุผลที่แต่ละชิ้นมีอยู่</strong> ถ้าไม่มีส่วนนี้ ทีมถัดไปจะเดาเอง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. เอกสารต้องตอกหมุดอะไรบ้าง</h3>
+<p>ใช้ตัวอย่างเดียวตลอดบท: <strong>customer support agent</strong> ที่มี <strong>intent classifier</strong> คอยดูว่าคำถามลูกค้าเป็นเรื่องอะไร แล้วส่งต่อไปยัง "บทสนทนาเฉพาะทาง" (specialized conversation) ที่แต่ละตัวมี tool และ system prompt ของตัวเอง</p>
+<p>เอกสารต้องตอบให้ครบ 5 เรื่อง:</p>
+<div class="table-wrap"><table>
+  <tr><th>องค์ประกอบ</th><th>คำถามที่ต้องตอบ</th><th>ในตัวอย่าง support agent</th></tr>
+  <tr><td><strong>Components</strong></td><td>มีชิ้นส่วนอะไรบ้าง</td><td>intent classifier, บทสนทนาเฉพาะทาง, API wrapper, web interface</td></tr>
+  <tr><td><strong>Data flows</strong></td><td>ข้อมูลไหลจากไหนไปไหน</td><td>คำถามลูกค้า → classifier → บทสนทนาเฉพาะทาง → คำตอบ stream กลับผ่าน Server-Sent Events</td></tr>
+  <tr><td><strong>Models</strong></td><td>ใช้โมเดลอะไร หนึ่ง request เรียก Claude กี่ครั้ง</td><td>classifier เพิ่มการเรียก Claude อีก 1 ครั้งก่อนบทสนทนาเริ่ม</td></tr>
+  <tr><td><strong>Tools</strong></td><td>แต่ละชิ้นใช้ tool อะไร</td><td>บทสนทนาเฉพาะทางแต่ละตัวมี tool และ system prompt ของตัวเอง</td></tr>
+  <tr><td><strong>Boundaries</strong></td><td>ส่วนไหนเราดูแล ส่วนไหนเป็นของภายนอก</td><td>HTTP service ที่ทีมรันเอง กับ Claude API ที่ service ไปเรียก</td></tr>
+</table></div>
+<p>ข้อ Models มักถูกลืม ทั้งที่สำคัญมาก ถ้าเอกสารไม่บอกว่าหนึ่ง request เรียก Claude 2 ครั้ง คนที่มาประเมิน latency หรือค่าใช้จ่ายทีหลังจะคำนวณผิดทันที</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Components, data flows, models (รวมจำนวน call ต่อ request), tools และ boundaries ต้องอยู่ในเอกสารครบทุกตัว</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>ทีมทำระบบตอบคำถามพนักงานเรื่อง HR: มี router แยกคำถามเป็น "วันลา" กับ "สวัสดิการ" แต่ละสายมี prompt และ tool ของตัวเอง จับคู่ประโยคในเอกสารกับองค์ประกอบ:</p>
+  <ol>
+    <li>"router, ผู้ช่วยวันลา, ผู้ช่วยสวัสดิการ, หน้าเว็บ Slack bot"</li>
+    <li>"คำถาม → router → ผู้ช่วยที่ตรงเรื่อง → คำตอบ stream กลับไปที่ Slack"</li>
+    <li>"router เรียก Claude 1 ครั้ง แล้วผู้ช่วยเรียกอีกอย่างน้อย 1 ครั้ง"</li>
+    <li>"ผู้ช่วยวันลาใช้ tool ดึงยอดวันลาคงเหลือได้อย่างเดียว"</li>
+    <li>"service ของเรารันบน k8s ของบริษัท ส่วน Claude API กับระบบ HRIS เป็นของภายนอก"</li>
+  </ol>
+  <p>ตัวเลือก: (a) Components (b) Data flows (c) Models (d) Tools (e) Boundaries</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-d, 5-e</strong></p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Agent loop รันอยู่ที่ไหน</h3>
+<p>Agent SDK กับ Managed Agents ใช้แนวคิดเดียวกัน (agent, tool, session) แต่ <strong>รันคนละที่</strong>:</p>
+<ul>
+  <li><strong>Agent SDK</strong> รันใน process ที่เราดูแลเอง</li>
+  <li><strong>Managed Agents</strong> รันบน infrastructure ของ Anthropic</li>
+</ul>
+<p>เอกสารต้องระบุให้ชัดว่าใช้ตัวไหน เพราะมันกำหนดว่า <strong>ใครถือ filesystem ใครเป็นคนรัน tool และอะไรต้องข้าม network</strong></p>
+
+<div class="table-wrap"><table>
+  <tr><th>เรื่อง</th><th>Agent SDK</th><th>Managed Agents</th></tr>
+  <tr><td>รันที่ไหน</td><td>process ที่เราดูแล</td><td>infrastructure ของ Anthropic</td></tr>
+  <tr><td>ตั้งค่า agent</td><td>สร้าง <code>ClaudeAgentOptions(...)</code> ใหม่ทุกครั้งที่รัน</td><td>เรียก <code>client.beta.agents.create(...)</code> ครั้งเดียว เก็บไว้และมี version ฝั่ง server</td></tr>
+  <tr><td>Custom tools</td><td>ฟังก์ชันที่ประกาศด้วย <code>@tool</code> SDK dispatch ให้อัตโนมัติ</td><td>ประกาศไว้บน Agent แล้ว client ของเราต้องตอบ event <code>agent.custom_tool_use</code> เอง</td></tr>
+  <tr><td>Built-in tools</td><td>รันใน process ของเรา กับ filesystem ของเรา</td><td>รันใน sandbox ที่ Anthropic ดูแล</td></tr>
+</table></div>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ถ้า agent ที่สร้างด้วย Agent SDK ใช้ built-in tool อ่านไฟล์ การอ่านเกิดที่ไหน? คำตอบ: <strong>ใน process ของเรา กับ filesystem ของเรา</strong> ไม่ใช่ใน sandbox ของ Anthropic และไม่ใช่ผ่าน MCP server ระยะไกล</p>
+</div>
+
+<p>ตัวอย่างการตัดสินใจ: ทีมต้องการให้ทุกอย่างอยู่บนเครื่องของบริษัท ทำงานกับ git checkout บนดิสก์ และมี custom tool ที่รันใน process เดียวกัน คำตอบคือ <strong>ฝัง Agent SDK เป็น library ใน service ของตัวเอง</strong> เหตุผลแต่ละทาง:</p>
+<ul>
+  <li>Managed Agents ไม่เข้า เพราะ sandbox อยู่ฝั่ง Anthropic และ custom tool จะกลายเป็น event ที่ client ต้องตอบเอง</li>
+  <li>เขียน tool loop เองด้วย Messages API ก็ได้ แต่เท่ากับสร้างกลไก dispatch ที่ SDK มีให้แล้วขึ้นมาใหม่</li>
+  <li>MCP connector อย่างเดียวไม่ได้ให้ agent loop ไม่ได้ให้เข้าถึง filesystem และไม่มี custom tool แบบ in-process</li>
+</ul>
+<pre><code>from claude_agent_sdk import tool, ClaudeAgentOptions
+
+@tool("lookup_order", "ดึงสถานะคำสั่งซื้อจาก DB ภายใน", {"order_id": str})
+async def lookup_order(args):
+    ...  # รันใน process ของเรา SDK เรียกให้อัตโนมัติ
+
+options = ClaudeAgentOptions(...)  # สร้างใหม่ทุกครั้งที่รัน</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"service ของเราเป็นคนสั่ง Managed Agents ดังนั้นมันก็รันบน infrastructure ของเรา"</strong> ไม่ใช่ ทั้ง agent loop และ sandbox ของ Managed Agents อยู่บน infrastructure ของ Anthropic มีแค่ Agent SDK ที่รัน loop และ tool ใน process ที่เราดูแล</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Agent SDK = loop และ tool อยู่ใน process เรา, custom tool ใช้ <code>@tool</code> / Managed Agents = loop และ sandbox อยู่ที่ Anthropic, custom tool มาเป็น event <code>agent.custom_tool_use</code> เขียนให้ชัดในเอกสารว่าใช้ตัวไหน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม compliance ของธนาคารต้องการ agent ที่อ่าน log จากดิสก์ของเซิร์ฟเวอร์ภายใน เรียกฟังก์ชัน Python ภายในเพื่อ mask ข้อมูล และห้ามให้ไฟล์ออกนอกเครือข่าย ทีมไม่อยากเขียน tool loop เอง ควรเลือกอะไร?</p>
+  <ol type="A">
+    <li>Client SDK (Messages API) แล้วเขียน loop จัดการ tool_use เอง</li>
+    <li>ฝัง Agent SDK เป็น library ใน service ภายใน แล้วประกาศฟังก์ชัน mask เป็น <code>@tool</code></li>
+    <li>Managed Agents แล้วอัปโหลด log เข้า sandbox</li>
+    <li>ใช้ MCP connector ของ Messages API อย่างเดียว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A ต้องเขียน loop เอง ซึ่งทีมไม่อยากทำ C ทำให้ไฟล์ไปอยู่ใน sandbox ของ Anthropic และ D ไม่มี agent loop ไม่มี filesystem และไม่มี custom tool แบบ in-process</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. บันทึกว่า tool ต่อเข้ามายังไง</h3>
+<p>ใน Claude Code การต่อ agent เข้ากับ issue tracker, ระบบ monitoring หรือ database ทำผ่าน <strong>MCP server</strong> และเอกสารควรใส่ <strong>คำสั่งลงทะเบียนแบบเป๊ะๆ</strong> ไว้ ไม่ใช่แค่เขียนว่า "ต่อ Jira ไว้"</p>
+<h3>Transport บอกว่าใครเป็นคนรัน server</h3>
+<ul>
+  <li><strong>Hosted server</strong> คือ URL ที่มีคนรันไว้แล้ว เพิ่มด้วย <code>--transport http</code></li>
+  <li><strong>Local server</strong> คือโปรแกรมที่ agent สั่งรันบนเครื่องตัวเอง <strong>ไม่ต้องใส่ transport flag</strong> เพราะ local server ใช้ <strong>stdio</strong> เป็นค่าเริ่มต้น</li>
+</ul>
+<p>ตัวอย่างลงทะเบียน local stdio server (ทุกอย่างหลัง <code>--</code> คือคำสั่งที่ Claude Code จะรัน):</p>
+<pre><code>claude mcp add playwright -- npx -y @playwright/mcp@latest</code></pre>
+<p>ส่วน hosted server ก็ใส่ transport กับ URL แทน เช่น <code>claude mcp add --transport http tracker https://mcp.example.com/mcp</code></p>
+<p>ถ้ามี connector โอเพนซอร์สของ Confluence หรือ Jira อยู่แล้ว ที่ agent สั่งรันบนเครื่องได้ ให้บันทึกเป็น stdio MCP server ไปเลย การเขียน API call เดิมใหม่เป็น custom tool เท่ากับทิ้ง connector ที่ใช้งานได้อยู่แล้ว</p>
+
+<h3>Scope ของ MCP server</h3>
+<div class="table-wrap"><table>
+  <tr><th>Scope</th><th>ใครได้ใช้</th><th>เก็บที่ไหน</th></tr>
+  <tr><td><code>local</code></td><td>คนเดียว ในโปรเจกต์เดียว</td><td>config ส่วนตัว</td></tr>
+  <tr><td><code>user</code></td><td>คนเดียว ทุกโปรเจกต์</td><td>config ส่วนตัว</td></tr>
+  <tr><td><code>project</code></td><td>ทุกคนที่ clone repo</td><td><code>.mcp.json</code> ที่ root ของโปรเจกต์</td></tr>
+</table></div>
+<p>คำแนะนำสำหรับทั้งทีมมักต้องใช้ scope <code>project</code> เพราะทุกคนที่ clone ได้ config ชุดเดียวกัน</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Hosted = <code>--transport http</code> + URL, local = stdio ไม่ต้องใส่ flag ใส่คำสั่ง <code>claude mcp add</code> เป๊ะๆ ในเอกสาร เลือก scope ให้ถูก (ทีม = <code>project</code> / <code>.mcp.json</code>) และใช้ connector ที่มีอยู่แทนการเขียนใหม่</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>บริษัทมี MCP connector สำหรับระบบ ticket ภายในที่ทีม platform ดูแลอยู่แล้ว และอยากให้ coding agent ของทุกทีมใช้ได้ เอกสารควรแนะนำอะไร?</p>
+  <ol type="A">
+    <li>เขียน tool loop ใหม่ด้วย Messages API ที่เรียก REST ของระบบ ticket ตรงๆ</li>
+    <li>ลงทะเบียน connector เดิมเป็น MCP server และใส่คำสั่งลงทะเบียนที่ใช้ได้จริงไว้ในเอกสาร</li>
+    <li>ประกาศเป็น custom tool บน Managed Agent</li>
+    <li>เขียน API call ของ connector ใหม่เป็นฟังก์ชัน <code>@tool</code> ใน Agent SDK</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A และ D สร้างของที่มีอยู่แล้วขึ้นใหม่และทิ้ง connector ที่ใช้ได้ ส่วน C เป็นกลไกผิดที่ ไม่ใช่วิธีต่อ connector เข้ากับ coding agent</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมต้องการให้ agent อ่านหน้า wiki ภายในผ่าน connector โอเพนซอร์ส แต่บริษัทไม่อนุญาตให้เปิด network endpoint ใหม่ ควรทำแบบไหน?</p>
+  <ol type="A">
+    <li>ติดตั้ง connector เป็น MCP server ที่ agent สั่งรันบนเครื่องเองผ่าน stdio</li>
+    <li>เขียน integration ใหม่ใน prompt ให้โมเดลเรียก REST ตรงๆ โดยไม่ผ่าน MCP</li>
+    <li>เปิด extended thinking ให้โมเดลวางแผนการเรียก wiki</li>
+    <li>อัปโหลดหน้า wiki ทั้งหมดผ่าน Files API</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> stdio ไม่ต้องเปิด endpoint ทาง network เลย B ทำซ้ำของเดิมและข้าม MCP server C เป็นเรื่องการคิด ไม่ใช่การเรียกระบบภายนอก และ D ใช้กับเอกสารที่อัปโหลด ไม่ได้ให้เข้าถึงข้อมูลสด</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. บันทึกการเลือกโมเดล</h3>
+<p>ทุกจุดที่เรียกโมเดลต้องเขียนว่า <strong>ใช้โมเดลอะไร และเพราะอะไร</strong> เพื่อให้ตรวจสอบใหม่ได้เมื่อมีโมเดลใหม่ออกมา</p>
+<p>ตัวอย่าง: งานคัดแยก ticket ปริมาณสูง ที่มีงบ latency และค่าใช้จ่ายตึง แต่ยังต้องใช้ reasoning จริง คำแนะนำในบทคือ <strong>Claude Haiku 4.5</strong> เพราะเป็น class ที่ถูกและเร็วที่สุด ออกแบบมาสำหรับงาน real-time ปริมาณมากที่อ่อนไหวเรื่องต้นทุนแต่ยังต้องคิดเป็น ส่วน Opus ถูกวางไว้สำหรับงาน enterprise ที่ต้อง reasoning หนัก ซึ่งเกินความจำเป็นของการจัดประเภท ticket ทีละใบ</p>
+<p>บันทึกในเอกสารอาจหน้าตาแบบนี้:</p>
+<pre><code>call: intent_classifier
+model: claude-haiku-4-5
+why: เรียกทุกคำถาม (ปริมาณสูง), งบ latency ตึง, ต้องการ reasoning พอแยก intent
+recheck: เมื่อมีโมเดลเล็กรุ่นใหม่ หรือ eval การแยก intent ตกต่ำกว่าเป้า</code></pre>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p><strong>effort ไม่ใช่ตัวช่วยประหยัดเงินหรือเวลา</strong> มันแลกระหว่างความละเอียดถี่ถ้วนกับประสิทธิภาพ การเพิ่ม effort ทำให้ละเอียดขึ้น (และใช้เวลามากขึ้น) ถ้าเป้าคือต้นทุนและ latency ให้เลือก model class ที่เล็กกว่า ส่วน <strong>fast mode</strong> เป็น research preview ที่คิดราคา premium ไม่ใช่ฟีเจอร์ GA ที่ช่วยลดต้นทุน</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เพิ่ม effort เพื่อลด latency และค่าใช้จ่าย"</strong> ผิดทิศ effort ที่สูงขึ้นซื้อความละเอียด ไม่ใช่ความเร็ว</p>
+  <p><strong>"ใช้ Opus แล้วลด effort ลงก็ได้ผลเหมือนโมเดลเล็ก"</strong> ยังเป็น class สำหรับ reasoning หนักอยู่ดี เกินความจำเป็นของงานจัดประเภท</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เขียนโมเดล + เหตุผล ของทุก call งานปริมาณสูง งบตึง แต่ต้องคิด → Haiku 4.5 ไม่ใช่ปรับ effort หรือเปิด fast mode</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ใน support agent ตัวอย่าง classifier เพิ่มการเรียก Claude 1 ครั้งต่อทุกคำถาม และงบ latency ของทั้ง request ตึงมาก classifier ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>Opus รุ่นล่าสุด เพื่อให้แยก intent แม่นที่สุด</li>
+    <li>Claude Haiku 4.5</li>
+    <li>โมเดลเดียวกับบทสนทนาหลัก แต่เพิ่ม effort</li>
+    <li>Opus แล้วลด effort ให้ต่ำสุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A ให้ความสามารถเกินงาน C เพิ่ม effort ไม่ได้ลดเวลา และ D ยังเป็น class reasoning หนักที่เกินกว่างานจัดประเภทต้องการ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ระบบจัดหมวดอีเมลเข้าวันละหลายแสนฉบับ ต้องตอบใน 1 วินาทีและคุมต้นทุนต่อฉบับให้ต่ำ ข้อใดเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>Claude Haiku 4.5</li>
+    <li>Opus 4.8 เพราะเป็นรุ่นสำหรับงาน enterprise</li>
+    <li>Sonnet 5 ที่ effort ระดับ xhigh</li>
+    <li>Opus 4.8 เปิด fast mode</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> Opus 4.8 วางไว้สำหรับงาน agentic coding และวิศวกรรมระดับ enterprise effort xhigh ยิ่งทำให้ตอบช้า และ fast mode เป็น research preview ราคา premium ไม่ได้ลดต้นทุน</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. บันทึกว่าทำไมแต่ละ layer ถึงมีอยู่</h3>
+<p>ทุก layer ต้องมีเหตุผลกำกับ พร้อมบอกว่าลองทางที่ถูกกว่าอะไรมาก่อนแล้ว ถ้าไม่มีบันทึกนี้ จะเกิดสองแบบ: ทีมใหม่ลบ layer ที่จำเป็นทิ้งเพราะคิดว่าเกิน หรือสร้าง layer ซ้ำเพราะไม่รู้ว่ามีอยู่แล้ว</p>
+<p>ลำดับที่แนะนำก่อนจะเพิ่ม layer ใหม่:</p>
+<ol class="steps">
+  <li>รีดประสิทธิภาพจาก <strong>prompt</strong> ให้สุดก่อน (prompt engineering)</li>
+  <li>เพิ่ม <strong>tool</strong> หรือทำ <strong>prompt chain</strong></li>
+  <li>ถ้ายังไม่พอ ค่อยเพิ่ม <strong>intent classifier</strong> แยกออกมา</li>
+</ol>
+<p>Classifier คุ้มค่าเมื่อ bot ต้องรับงานที่หลากหลายมาก แต่มันเพิ่ม Claude call อีก 1 ครั้ง ซึ่งเพิ่ม latency ได้</p>
+<p>บันทึกของแต่ละ layer ควรมี 4 ส่วน:</p>
+<div class="table-wrap"><table>
+  <tr><th>หัวข้อ</th><th>ตัวอย่างสำหรับ intent classifier</th></tr>
+  <tr><td>ปัญหาที่แก้</td><td>คำถามหลากหลายเกินกว่า prompt และชุด tool เดียวจะรับไหว</td></tr>
+  <tr><td>ทางเลือกที่ลองก่อน และทำไมไม่พอ</td><td>ปรับ prompt แล้ว และเพิ่ม tool/chain แล้ว แต่ยังเลือก tool ผิดในบางหมวด</td></tr>
+  <tr><td>ต้นทุนที่เพิ่ม</td><td>Claude call เพิ่ม 1 ครั้งต่อคำถาม latency สูงขึ้น</td></tr>
+  <tr><td>เงื่อนไขที่ถอดออกได้</td><td>เมื่อบทสนทนาเดียวรับคำถามได้ครบทุกแบบอีกครั้ง</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>prompt → tool/chain → classifier ทุก layer บันทึก: แก้อะไร, ลองอะไรมาก่อน, เพิ่มต้นทุนเท่าไหร่, ถอดออกได้เมื่อไหร่</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (เรียงลำดับ)</span>
+  <p>ผู้ช่วยตอบคำถามร้านค้าออนไลน์เริ่มตอบผิดหมวดเมื่อคำถามหลากหลายขึ้น เรียงสิ่งที่ควรลองจากก่อนไปหลัง:</p>
+  <ol type="a">
+    <li>แยก intent classifier ออกมาเป็นอีก call</li>
+    <li>ปรับ prompt ให้ชัดขึ้น ใส่ตัวอย่าง</li>
+    <li>เพิ่ม tool หรือแตกงานเป็น prompt chain</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>b → c → a</strong> classifier มาท้ายสุด เพราะเพิ่มทั้ง call และ latency</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. จาก prototype สู่ service ที่ deploy ได้</h3>
+<p>Prototype ของ support agent ตัวอย่างเป็นฟังก์ชัน Python ที่รันใน Streamlit ซึ่งใช้ demo ได้ แต่แชตบอต real-time ต้องเป็น API service เอกสารต้องบอกการเปลี่ยนแปลง 4 ด้าน:</p>
+
+<h3>Serving</h3>
+<ul>
+  <li>ห่อฟังก์ชันหลักด้วย web framework อย่าง <strong>Flask</strong> หรือ <strong>FastAPI</strong></li>
+  <li>Stream คำตอบด้วย <strong>Server-Sent Events</strong></li>
+  <li><strong>Cache</strong> คำตอบเพื่อลด API call ที่ไม่จำเป็น</li>
+  <li><strong>เก็บ context ของบทสนทนา</strong> ไว้ ให้ผู้ใช้ออกไปแล้วกลับมาคุยต่อได้</li>
+</ul>
+
+<h3>Configuration</h3>
+<ul>
+  <li>เขียนทุกขั้นตอนที่ checkout ใหม่ต้องทำ เช่น copy <code>.env.example</code> เป็น <code>.env</code> ถ้าข้ามขั้นนี้ test และ dev server จะพัง</li>
+  <li><code>HTTPS_PROXY</code> ใช้ส่ง traffic ผ่าน proxy ขององค์กร (เรื่อง network/security)</li>
+  <li>กลุ่มตัวแปร <code>ANTHROPIC_BASE_URL</code> ใช้ชี้ไปที่ <strong>LLM gateway</strong> เพื่อติดตามการใช้งานแบบรวมศูนย์ ตั้ง rate limit ตั้งงบ หรือจัดการ authentication</li>
+</ul>
+
+<h3>Error handling</h3>
+<ul>
+  <li>ทุก response ของ Messages API บอกเหตุผลที่หยุด generate ใน field <code>stop_reason</code></li>
+  <li>Tool loop ต้องเช็กค่านี้ <code>end_turn</code> คือจบปกติ ส่วน <code>refusal</code> เป็นอีกค่าที่ service ต้องจัดการแยกให้ชัด</li>
+  <li>แยก <strong>configuration error</strong> ออกจาก <strong>transient failure</strong> เช่น บน Claude Haiku 4.5 ถ้าตั้งทั้ง <code>temperature</code> และ <code>top_p</code> จะได้ 400 กลับมา retry เท่าไหร่ก็ไม่หาย ต้องแก้ config</li>
+</ul>
+<pre><code>resp = client.messages.create(...)
+if resp.stop_reason == "end_turn":
+    return render(resp)
+elif resp.stop_reason == "refusal":
+    return handoff_to_human(resp)   # อย่าให้ตกไปเป็น error ทั่วไป</code></pre>
+
+<h3>Deployment</h3>
+<p>ทดสอบใน development environment ก่อนขึ้น production เสมอ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"อยากคุมงบรวมทุกทีม ตั้ง <code>HTTPS_PROXY</code> ก็พอ"</strong> ไม่ใช่ proxy เป็นเรื่อง network ส่วนการติดตามการใช้งาน limit และงบแบบรวมศูนย์ต้องชี้ <code>ANTHROPIC_BASE_URL</code> ไปที่ LLM gateway</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Serving (Flask/FastAPI, SSE, cache, เก็บ context), Config (<code>.env</code>, <code>HTTPS_PROXY</code>, <code>ANTHROPIC_BASE_URL</code> → gateway), Error (<code>stop_reason</code>, <code>refusal</code>, แยก 400 จาก config ออกจาก error ชั่วคราว), Deploy (dev ก่อน prod)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>CFO อยากเห็นยอดการใช้ Claude ของทุกทีมในที่เดียว ตั้ง rate limit ต่อทีม และตั้งงบรายเดือนได้ สถาปนิกควรแนะนำอะไร?</p>
+  <ol type="A">
+    <li>ตั้ง <code>HTTPS_PROXY</code> ไปที่ proxy ขององค์กร</li>
+    <li>ลด effort ของทุก call</li>
+    <li>ชี้กลุ่มตัวแปร <code>ANTHROPIC_BASE_URL</code> ไปที่ LLM gateway</li>
+    <li>เปิด caching คำตอบทุก service</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> proxy เป็นเรื่องความปลอดภัยของ network การลด effort มีผลแค่ราย call และ caching ลดจำนวน call ได้แต่ไม่ได้ให้การติดตามหรือ limit แบบรวมศูนย์</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/use-case-guides/customer-support-chat">Claude Docs: Customer support chat use case guide</a></li>
+  <li><a href="https://support.claude.com/en/articles/14553240-give-claude-context-claude-md-and-better-prompts">Claude Help Center: Give Claude context: CLAUDE.md and better prompts</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/migration">Claude Docs: Managed Agents migration</a></li>
+  <li><a href="https://code.claude.com/docs/en/mcp-quickstart">Claude Code Docs: MCP quickstart</a></li>
+  <li><a href="https://code.claude.com/docs/en/mcp">Claude Code Docs: MCP</a></li>
+  <li><a href="https://platform.claude.com/docs/en/release-notes/overview">Claude Docs: Release notes</a></li>
+  <li><a href="https://claude.com/blog/claude-models-explained-choosing-the-best-model-for-your-use-case">Claude blog: Claude models explained (แหล่งรอง)</a></li>
+  <li><a href="https://code.claude.com/docs/en/large-codebases">Claude Code Docs: Large codebases</a></li>
+  <li><a href="https://code.claude.com/docs/en/third-party-integrations">Claude Code Docs: Third-party integrations</a></li>
+  <li><a href="https://platform.claude.com/docs/en/models/haiku-4-5/migration-guide">Claude Docs: Haiku 4.5 migration guide</a></li>
+  <li><a href="https://code.claude.com/docs/en/best-practices">Claude Code Docs: Best practices</a></li>
+</ul>
+</section>

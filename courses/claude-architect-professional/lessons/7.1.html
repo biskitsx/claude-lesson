@@ -1,0 +1,231 @@
+<section class="lesson" id="l-7-1">
+<h2>7.1 Claude Code settings: scopes, precedence และ permission rules</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/claude-code-settings-scopes-and-managed-policy-delivery-for-teams">CertSafari 7.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เลือกไฟล์ settings ให้ถูกกับกฎแต่ละแบบ: กฎของทีม กฎส่วนตัว หรือนโยบายที่องค์กรบังคับ</li>
+    <li>ทำนายได้ว่าเมื่อ key เดียวกันถูกตั้งหลาย scope ค่าไหนชนะ และทำไม permission list ถึง merge กัน</li>
+    <li>เขียน rule แบบ allow / ask / deny และทำนายผลเมื่อ deny กว้างกับ allow แคบ match พร้อมกัน</li>
+    <li>ตัดสินได้ว่าข้อตกลงของทีมควรอยู่ใน CLAUDE.md หรือใน settings</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: scope กำหนดว่าใครโดน และมีน้ำหนักแค่ไหน</span>
+  <p>ไฟล์ settings แต่ละไฟล์มี scope ที่บอกว่ากฎในนั้นไปถึงใคร และมีน้ำหนักเท่าไหร่ <strong>managed settings</strong> อยู่บนสุด เหนือทุกอย่างที่นักพัฒนาแก้ได้ ถัดลงมาคือไฟล์ project ที่ commit ไว้ ไฟล์ project ส่วนตัว (local) และไฟล์ของ user</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Settings 4 scope</h3>
+<div class="table-wrap"><table>
+  <tr><th>Scope</th><th>ไฟล์</th><th>มีผลกับใคร</th><th>ใช้กับอะไร</th></tr>
+  <tr><td><strong>Managed</strong></td><td><code>managed-settings.json</code> และแหล่ง managed อื่นๆ</td><td>ทุกคนที่องค์กร deploy ให้</td><td>นโยบายความปลอดภัยและ compliance</td></tr>
+  <tr><td><strong>Shared project</strong></td><td><code>.claude/settings.json</code></td><td>ทุกคนที่ทำงานในโฟลเดอร์นี้ (commit ไว้ให้เพื่อนร่วมทีมได้ด้วย)</td><td>permission ของทีม, hooks, plugins, environment variable ของโปรเจกต์</td></tr>
+  <tr><td><strong>Project local</strong></td><td><code>.claude/settings.local.json</code></td><td>เราคนเดียว ในโปรเจกต์นี้</td><td>override ส่วนตัว หรือลองกฎก่อนจะแชร์</td></tr>
+  <tr><td><strong>User</strong></td><td><code>~/.claude/settings.json</code></td><td>เราคนเดียว ทุกโปรเจกต์บนเครื่องนี้</td><td>ความชอบส่วนตัว เช่น theme, editor mode, default model</td></tr>
+</table></div>
+
+<h3>รายละเอียดที่ต้องรู้ของแต่ละไฟล์</h3>
+<ul>
+  <li><strong>Shared project</strong> คือไฟล์สำคัญที่สุดสำหรับทีม platform การเปลี่ยนแปลงผ่าน <strong>code review</strong> และไปถึงทุก clone เมื่อ pull</li>
+  <li><strong>User</strong> กฎในไฟล์นี้ไม่เคยออกจากเครื่องเรา เพื่อนในทีมไม่ได้รับ</li>
+  <li><strong>Managed</strong> สำหรับนโยบายที่นักพัฒนาแก้ไม่ได้ นักพัฒนาไม่ได้สร้างหรือแก้ไฟล์นี้ มันจึง <strong>ไม่ผ่าน code review ของ repo</strong> เลยไม่ใช่ที่สำหรับข้อตกลงของทีม</li>
+  <li><strong>Project local</strong> เป็นไฟล์ที่ไม่ถูก track เมื่อ Claude Code สร้างไฟล์นี้ใน git repo มันจะเพิ่มไฟล์เข้า global git excludes ให้เอง ถ้าเราสร้างเองด้วยมือ ต้องใส่ใน <code>.gitignore</code> เอง</li>
+  <li>เวลากด <strong>"Yes, and don't ask again"</strong> ใน prompt ของ Bash ระบบจะเขียน allow rule ลงไฟล์ local นี้</li>
+  <li>Allow rule ในไฟล์ local ที่ไม่ถูก track <strong>มีผลโดยไม่ต้องผ่านขั้น workspace trust</strong> (ต่างจากไฟล์ที่ commit ซึ่งต้องผ่าน) ตราบใดที่ไฟล์ยังไม่ถูก track</li>
+</ul>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>กฎของทีมที่ต้องผ่าน review → ไฟล์ project ที่ commit (<code>.claude/settings.json</code>) / override ส่วนตัวที่ต้องอยู่บนเครื่อง → ไฟล์ local / นโยบายองค์กร → managed settings</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"กฎที่ทีมใช้ร่วมกันใส่ใน managed-settings.json จะได้มั่นใจว่าทุกคนได้"</strong> ไม่ใช่ managed settings เป็นนโยบายที่ IT deploy และนักพัฒนาไม่ได้แก้ ข้อตกลงของทีมที่ต้องผ่าน code review ควรอยู่ในไฟล์ project ที่ commit</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Managed = นโยบายองค์กร แก้ไม่ได้ / <code>.claude/settings.json</code> = กฎทีม ผ่าน review / <code>.claude/settings.local.json</code> = ของฉัน เฉพาะ repo นี้ / <code>~/.claude/settings.json</code> = ของฉัน ทุก repo</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่ความต้องการกับไฟล์ settings:</p>
+  <ol>
+    <li>Hook รัน formatter หลังแก้ไฟล์ ที่ทีมตกลงกันใน PR และอยากให้ทุกคนที่ clone ได้</li>
+    <li>ฝ่ายความปลอดภัยต้องการห้ามทุกเครื่องในบริษัทใช้คำสั่งบางตัว โดยนักพัฒนาปิดเองไม่ได้</li>
+    <li>นักพัฒนาคนหนึ่งอยากลอง allow rule ใหม่ใน repo นี้ก่อนเสนอให้ทีม</li>
+    <li>นักพัฒนาอยากใช้ theme มืดและ default model ที่ตัวเองชอบในทุกโปรเจกต์</li>
+  </ol>
+  <p>ตัวเลือก: (a) <code>.claude/settings.json</code> (b) managed settings (c) <code>.claude/settings.local.json</code> (d) <code>~/.claude/settings.json</code></p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-d</strong> ไฟล์ user อยู่บนเครื่องเดียว managed ข้าม code review และนักพัฒนาแก้ไม่ได้ ส่วน local เป็นของส่วนตัวที่ไม่ถูก track มีแค่ไฟล์ project ที่ commit ที่เหมาะกับข้อตกลงของทีม</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม backend อยากให้ทุกคนได้ allow rule ของ <code>Bash(make test)</code> และ config MCP server ของระบบ log ผ่านการรีวิวใน PR ขณะที่นักพัฒนาบางคนมี override ส่วนตัวที่ไม่อยากให้คนอื่นได้ ควรวางยังไง?</p>
+  <ol type="A">
+    <li>commit allow rule และ config MCP ไว้ใน <code>.claude/settings.json</code> ของโปรเจกต์ ส่วน override ส่วนตัวใส่ใน <code>.claude/settings.local.json</code></li>
+    <li>ใส่ทุกอย่างใน <code>~/.claude/settings.json</code> ของแต่ละคน</li>
+    <li>ใส่ทุกอย่างใน managed settings เพื่อให้บังคับทุกคน</li>
+    <li>ใส่ permission rule ใน <code>.mcp.json</code> และ override ส่วนตัวใน <code>~/.claude.json</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B เป็นไฟล์ส่วนตัว ไม่ได้แชร์ C เป็นนโยบายที่ IT deploy ไม่ผ่าน review ของทีม D ผิดเพราะ <code>.mcp.json</code> เก็บแค่ MCP server ไม่ได้เก็บ permission rule และ <code>~/.claude.json</code> เป็นของ user ไม่ใช่ราย project</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ค่าไหนชนะเมื่อ scope ขัดกัน</h3>
+<h3>Key ที่มีค่าเดียว: scope ที่สูงกว่าชนะ</h3>
+<p>สำหรับ key ที่เป็นค่าเดี่ยว เช่น <code>model</code> ค่าจาก scope ที่สูงกว่าชนะไปเลย ลำดับจากสูงไปต่ำ:</p>
+<ol class="steps">
+  <li>Managed settings</li>
+  <li>Flag <code>--settings</code> (มีผลแค่ session นั้น)</li>
+  <li>Project local (<code>.claude/settings.local.json</code>)</li>
+  <li>Shared project (<code>.claude/settings.json</code>)</li>
+  <li>User (<code>~/.claude/settings.json</code>)</li>
+</ol>
+<p><code>--settings</code> ตั้งได้ทุกอย่างที่ไฟล์ user ตั้งได้ แต่ <strong>ตั้ง key ที่เป็น managed ไม่ได้</strong></p>
+
+<h3>Array: merge กัน ไม่ได้แทนที่</h3>
+<p>สำหรับค่าที่เป็น array รวมถึง <strong>permission rules</strong> ข้าม scope ที่ไม่ใช่ managed จะ <strong>merge</strong> รวมกัน ไม่ใช่ scope สูงแทนที่ scope ต่ำ ผลคือ allow rule ใน local <strong>ไม่ได้ลบ</strong> deny rule ใน project ทั้งคู่อยู่ในชุดกฎที่มีผลจริง</p>
+<p>เปรียบง่ายๆ key ค่าเดี่ยวเหมือนตำแหน่งหัวหน้า ใครยศสูงกว่าได้ไป ส่วน array เหมือนรายชื่อแขกงานเลี้ยง ทุกฝ่ายเพิ่มชื่อเข้ามาในรายชื่อเดียวกัน</p>
+
+<h3>ข้อยกเว้น</h3>
+<ul>
+  <li><code>fallbackModel</code> เป็น chain ที่มีลำดับ จึงเอา <strong>ทั้งค่า</strong> จากไฟล์ที่สูงที่สุดที่กำหนดไว้ ไม่ merge</li>
+  <li>ถ้า managed settings กำหนด <code>availableModels</code> ลิสต์นั้นใช้ตามที่เขียนเลย รายการที่ scope ล่างเพิ่มเข้ามาจะถูกเพิกเฉย</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ค่าเดี่ยว: managed &gt; <code>--settings</code> &gt; local &gt; project &gt; user / array (รวม permissions): merge ข้าม scope ที่ไม่ใช่ managed / ยกเว้น <code>fallbackModel</code> (เอาทั้งก้อนจากไฟล์บนสุด) และ <code>availableModels</code> ใน managed (ใช้ตามนั้น)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ไฟล์ <code>.claude/settings.json</code> ของโปรเจกต์มี deny rule <code>Bash(docker push *)</code> นักพัฒนาคนหนึ่งเพิ่ม allow rule <code>Bash(docker push *)</code> ใน <code>.claude/settings.local.json</code> ชุดกฎที่มีผลจริงเป็นยังไง?</p>
+  <ol type="A">
+    <li>ไฟล์ local แทนที่ array ของ project ทั้งหมด เหลือแค่ allow</li>
+    <li>มีทั้ง deny จาก project และ allow จาก local อยู่ในชุดกฎ</li>
+    <li>ไฟล์ project ที่ commit ไว้ชนะ allow จาก local ถูกทิ้ง</li>
+    <li>rule ที่เจาะจงกว่าจะแทนที่ rule ที่กว้างกว่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> permission array merge ข้าม scope ที่ไม่ใช่ managed ไม่มีใครแทนที่ใคร local ไม่ได้ลบ array ของ project ไฟล์ commit ไม่ได้ทิ้งของ local และความเจาะจงไม่ใช่กลไกแทนที่</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เขียน rule แบบ allow, ask, deny</h3>
+<p>Rule หนึ่งตัวคือ <strong>ชื่อ tool</strong> และอาจมี <strong>specifier ในวงเล็บ</strong> ต่อท้าย:</p>
+<div class="table-wrap"><table>
+  <tr><th>Rule</th><th>match อะไร</th></tr>
+  <tr><td><code>Bash</code></td><td>ทุกคำสั่ง Bash</td></tr>
+  <tr><td><code>Bash(npm run build)</code></td><td>คำสั่งนี้คำสั่งเดียวแบบเป๊ะ</td></tr>
+  <tr><td><code>Read(./.env)</code></td><td>ไฟล์ <code>.env</code> นี้</td></tr>
+  <tr><td><code>WebFetch(domain:example.com)</code></td><td>โดเมนนี้โดเมนเดียว</td></tr>
+</table></div>
+<p>Rule หนึ่งตัวระบุได้ <strong>หนึ่ง parameter</strong> ถ้าอยากคุมสอง parameter ต้องเขียนสอง rule</p>
+<p>Rule ใส่ไว้ใน 3 list:</p>
+<ul>
+  <li><code>permissions.allow</code> ใช้ tool ได้เลยโดยไม่ถาม</li>
+  <li><code>permissions.ask</code> ถามทุกครั้ง</li>
+  <li><code>permissions.deny</code> บล็อกเลย</li>
+</ul>
+<pre><code>{
+  "permissions": {
+    "allow": ["Bash(pnpm lint)", "Bash(pnpm test *)"],
+    "deny":  ["Read(./secrets.json)", "Read(./config/*.pem)"]
+  }
+}</code></pre>
+
+<h3>Deny ชนะเสมอ</h3>
+<ul>
+  <li>Allow rule แค่ <strong>ตัด prompt ออก</strong> แต่ไม่เคย override deny</li>
+  <li>Deny ถูกประเมินก่อน allow และ <strong>ความเจาะจง (specificity) ไม่เปลี่ยนลำดับนี้</strong></li>
+  <li>เพราะ rule merge ข้าม scope allow แคบๆ ใน local จึง <strong>เจาะข้อยกเว้น</strong> ออกจาก deny กว้างๆ ของ project ไม่ได้</li>
+</ul>
+
+<h3>ความไม่สมมาตรของ path pattern</h3>
+<div class="table-wrap"><table>
+  <tr><th>Pattern</th><th>อยู่ใน allow</th><th>อยู่ใน deny หรือ ask</th></tr>
+  <tr><td><code>Edit(src/**)</code></td><td>match เฉพาะ <code>src/</code> ใน directory ปัจจุบัน</td><td>match <code>src</code> ที่ความลึกระดับไหนก็ได้</td></tr>
+  <tr><td><code>Edit(**/src/**)</code></td><td>match <code>src</code> ที่ความลึกระดับไหนก็ได้</td><td>match <code>src</code> ที่ความลึกระดับไหนก็ได้</td></tr>
+</table></div>
+<p>ความไม่สมมาตรนี้ออกแบบมาให้ปลอดภัย: deny ครอบคลุมกว้าง ส่วน allow แคบ ถ้าอยาก allow ชื่อ directory นั้นทุกระดับ ต้องเขียน <code>**/</code> นำหน้าเอง</p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>กด "don't ask again" ให้คำสั่ง Bash แล้วการอนุมัตินั้นไปอยู่ที่ไหน อยู่นานแค่ไหน? คำตอบ: ถูกเขียนเป็น <strong>allow rule ในไฟล์ local ของ project</strong> และ <strong>อยู่ถาวร</strong> สำหรับ repo และคำสั่งนั้น ส่วนการอนุมัติ <strong>แก้ไฟล์</strong> อยู่แค่จนจบ session</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใส่ allow <code>Bash(kubectl get pods)</code> แล้วจะได้ข้อยกเว้นจาก deny <code>Bash(kubectl *)</code>"</strong> ไม่ได้ deny บล็อกคำสั่งนั้น ส่วน allow แค่ตัด prompt ซึ่งไม่มีผลเมื่อโดน deny แล้ว</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Rule = Tool(specifier) หนึ่ง parameter ต่อ rule allow ตัด prompt, ask ถามเสมอ, deny บล็อก deny ชนะทุกครั้งไม่ว่า allow จะเจาะจงแค่ไหนหรืออยู่ scope ไหน และระวัง path ใน allow แคบกว่าใน deny</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ไฟล์ project มี deny <code>Bash(git push *)</code> เพื่อนร่วมทีมใส่ allow <code>Bash(git push origin feature-x)</code> ในไฟล์ local แล้วให้ Claude รัน <code>git push origin feature-x</code> จะเกิดอะไร?</p>
+  <ol type="A">
+    <li>รันได้ เพราะ allow เจาะจงกว่า</li>
+    <li>Claude Code ถามผู้ใช้ เพราะกฎขัดกัน</li>
+    <li>ถูกบล็อก ทั้งสอง rule มีผล และ deny ชนะ</li>
+    <li>รันได้ เพราะไฟล์ local อยู่ scope สูงกว่าไฟล์ project</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> allow ที่เจาะจงไม่ได้เจาะข้อยกเว้นจาก deny กฎที่ขัดกันไม่ได้กลายเป็น prompt และแม้ local จะสูงกว่าสำหรับค่าเดี่ยว แต่ permission merge กันและ deny ชนะ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>หัวหน้าฝ่ายความปลอดภัยใส่ deny <code>Bash(terraform *)</code> ไว้ในไฟล์ project นักพัฒนาคนหนึ่งเพิ่ม allow <code>Bash(terraform plan)</code> ใน <code>.claude/settings.local.json</code> ของตัวเอง แล้วสั่งให้ Claude รัน <code>terraform plan</code> ผลคืออะไร และเพราะอะไร?</p>
+  <ol type="A">
+    <li>ถูกบล็อก เพราะ deny ถูกประเมินก่อน allow และความเจาะจงไม่เปลี่ยนลำดับนี้</li>
+    <li>รันได้ เพราะ rule ที่เจาะจงที่สุดชนะ</li>
+    <li>เปลี่ยนเป็น ask เพราะ rule สองตัวที่ merge กันทำให้ต้องยืนยัน</li>
+    <li>รันได้ เพราะไฟล์ local ของผู้ใช้ override deny จาก scope อื่นได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ไม่มีกลไก "เจาะจงสุดชนะ" ไม่มีการ merge ที่เปลี่ยนเป็น ask และไฟล์ local ให้ข้อยกเว้นจาก deny ของ scope อื่นไม่ได้</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. คำแนะนำที่แชร์ (CLAUDE.md) กับการบังคับ (settings)</h3>
+<p>CLAUDE.md มีการซ้อนชั้นคล้ายกับ settings แต่ทำหน้าที่ <strong>แนะนำ</strong> Claude ไม่ได้ <strong>บังคับ</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>ไฟล์</th><th>ขอบเขต</th></tr>
+  <tr><td><code>CLAUDE.md</code> ของ project (หรือ <code>.claude/CLAUDE.md</code>)</td><td>แชร์กับทีมผ่าน source control</td></tr>
+  <tr><td><code>~/.claude/CLAUDE.md</code></td><td>ความชอบส่วนตัว ทุกโปรเจกต์</td></tr>
+  <tr><td><code>CLAUDE.local.md</code></td><td>โน้ตส่วนตัว เฉพาะโปรเจกต์นี้</td></tr>
+  <tr><td>Managed policy CLAUDE.md ที่ path นโยบายของ OS (เช่น <code>/etc/claude-code/CLAUDE.md</code> บน Linux)</td><td>ทั้งองค์กร โหลดทุก session และ exclude ไม่ได้</td></tr>
+</table></div>
+
+<p>หัวใจของหัวข้อนี้: <strong>คำสั่ง (instruction) ไม่ใช่การควบคุม (control)</strong> Claude อาจทำตาม CLAUDE.md หรือไม่ก็ได้ และถ้ามีคำสั่งขัดกัน ผลอาจออกไปทางไหนก็ได้ ซึ่งยอมรับได้สำหรับเรื่อง style แต่ยอมรับไม่ได้สำหรับเรื่องความปลอดภัย</p>
+
+<div class="table-wrap"><table>
+  <tr><th>เรื่องที่ต้องการ</th><th>ตั้งไว้ที่</th></tr>
+  <tr><td>บล็อก tool, คำสั่ง หรือ path ไฟล์บางตัว</td><td>Managed settings: <code>permissions.deny</code></td></tr>
+  <tr><td>บังคับ sandbox isolation</td><td>Managed settings: <code>sandbox.enabled</code></td></tr>
+  <tr><td>วิธี login และจำกัดองค์กร</td><td>Managed settings: <code>forceLoginMethod</code>, <code>forceLoginOrgUUID</code></td></tr>
+  <tr><td>แนวทาง code style และคุณภาพ</td><td>Managed CLAUDE.md</td></tr>
+  <tr><td>คำแนะนำพฤติกรรมของ Claude</td><td>Managed CLAUDE.md</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เขียนใน CLAUDE.md ว่า 'ห้ามอ่านไฟล์ secret' ก็กันได้แล้ว"</strong> ไม่ได้ CLAUDE.md เป็นคำแนะนำ การเขียนซ้ำให้ดังขึ้นในหลายชั้นก็ยังไม่ใช่การบังคับ ต้องใช้ deny rule ใน settings</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อยาก "แนะนำ" ใช้ CLAUDE.md อยาก "บังคับ" ใช้ settings ถ้าเป็นนโยบายความปลอดภัยขององค์กรที่ห้ามใครปิด ใช้ deny rule ใน managed settings</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>CISO สั่งว่า Claude Code บนทุกเครื่องของบริษัทต้องไม่อ่านไฟล์ <code>.env</code> ได้เลย และนักพัฒนาต้องปิดกฎนี้เองไม่ได้ ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>เพิ่มบรรทัด "ห้ามอ่านไฟล์ .env" ใน CLAUDE.md ของทุก repo</li>
+    <li>ใส่ <code>Read(./.env)</code> ใน <code>permissions.deny</code> ของ managed settings</li>
+    <li>เขียนคำสั่งเดียวกันทั้งใน managed CLAUDE.md และ <code>~/.claude/CLAUDE.md</code> เพื่อให้หนักแน่นขึ้น</li>
+    <li>ใส่ deny rule ใน <code>.claude/settings.local.json</code> ของแต่ละคน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A และ C เป็นคำแนะนำที่ Claude อาจไม่ทำตาม เขียนหลายชั้นก็ไม่กลายเป็นการบังคับ D นักพัฒนาแก้เองได้ มีแค่ deny rule ใน managed settings ที่บล็อกทุกครั้งและ override ไม่ได้</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/settings">Claude Code Docs: Settings</a></li>
+  <li><a href="https://code.claude.com/docs/en/permissions">Claude Code Docs: Permissions</a></li>
+  <li><a href="https://code.claude.com/docs/en/memory">Claude Code Docs: Memory (CLAUDE.md)</a></li>
+  <li><a href="https://code.claude.com/docs/en/admin-setup">Claude Code Docs: Admin setup</a></li>
+</ul>
+</section>

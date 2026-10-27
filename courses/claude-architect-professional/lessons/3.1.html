@@ -1,0 +1,304 @@
+<section class="lesson" id="l-3-1">
+<h2>3.1 Capability bloat in agent tool configurations</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/capability-bloat-why-too-many-tools-degrade-an-agent">CertSafari 3.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่า tool ที่มากเกินกระทบ context, attention และความแม่นในการเลือก tool อย่างไร</li>
+    <li>ชี้ tool ที่ซ้ำซ้อน ไม่ได้ใช้ อธิบายไม่ชัด หรือ MCP server ที่ต่อเกินมา จาก config และ transcript ได้</li>
+    <li>รวม tool ที่ทับกันให้เป็น tool ระดับงาน (task-level) และตั้ง namespace ให้ตัวที่เหลือ</li>
+    <li>จำกัด tool ของแต่ละ agent/subagent ตามบทบาทด้วย <code>tools</code>, <code>disallowedTools</code>, <code>mcpServers</code> และ permission mode</li>
+    <li>เลือกระหว่าง consolidation, scoping, tool search, prompt caching และ context editing ตามต้นตอของปัญหา</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: tool เยอะ ≠ เก่งขึ้น</span>
+  <p><strong>Capability bloat</strong> คือ agent มี tool มากกว่าที่งานต้องใช้ ไม่ว่าจะเป็น tool ที่ทับกัน ไม่เคยถูกเรียก อธิบายคลุมเครือ หรือมาจาก MCP server ที่ไม่เคยใช้ ทุก definition กิน context และเป็นตัวเลือกอีกหนึ่งตัวที่ Claude ต้องตัดทิ้ง ผลคือ agent <strong>เลือก tool แม่นน้อยลง</strong> ไม่ใช่เก่งขึ้น</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. tool ที่มากเกินทำให้ agent เสียอะไร</h3>
+<p>นึกภาพช่างซ่อมที่แบกกล่องเครื่องมือ 200 ชิ้นขึ้นบันได ทุกครั้งที่จะขันน็อตต้องคุ้ยหาไขควงตัวที่ใช่ แถมกล่องหนักจนเหลือแรงน้อยลง agent ก็เป็นแบบนั้น ต้นทุนมี 3 ด้าน:</p>
+<ul>
+  <li><strong>Context</strong>: ชื่อ description และ input schema ของทุก tool อยู่ใน context <em>ทุกรอบ</em> ก่อนจะได้อ่านคำขอของผู้ใช้ด้วยซ้ำ tool ราว <strong>50 ตัว</strong> อาจกินราว <strong>10–20K token</strong> และ setup หลาย server (GitHub, Slack, Sentry, Grafana, Splunk) อาจกินราว <strong>55K token</strong> ก่อนเริ่มงานจริง</li>
+  <li><strong>Attention</strong>: definitions ใช้พื้นที่เดียวกับไฟล์ tool result และการคิด context ทำตัวเหมือน "งบความสนใจ" token ส่วนเกินทำให้ recall และคุณภาพการคิดลดลง แม้ tool นั้นแทบไม่ถูกใช้ ใน agent ที่รันนาน definitions ยังต้องแย่งที่กับ <code>tool_result</code> ที่สะสมขึ้นเรื่อยๆ จน agent อาจหมดที่ก่อนงานเสร็จ</li>
+  <li><strong>ความแม่นในการเลือก</strong>: ลดลงเมื่อโหลด tool พร้อมกันราว <strong>30–50 ตัว</strong> ขึ้นไป และ tool ที่ทับกันทำให้เลือกผิดได้ <em>ทุกขนาด</em>: เลือก tool ผิด ใช้ tool ถูกแต่ parameter ผิด หรืออ้อมโลก</li>
+</ul>
+<p>การเรียกผิดไม่ได้แค่เปลืองรอบ แต่ยังใส่ผลลัพธ์ที่ชวนเข้าใจผิดเข้ามาใน context และบางครั้งทำสิ่งที่ไม่ควรทำ (เช่น ลบหรือส่งข้อความ) bloat จึงเป็น <strong>เรื่องความปลอดภัย</strong> ด้วย ไม่ใช่แค่เรื่องประสิทธิภาพ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ทุก tool จ่ายค่า context ทุกรอบ แย่งความสนใจ และทำให้เลือกผิดง่ายขึ้นเมื่อเกิน ~30–50 ตัวหรือเมื่อทับกัน การเรียกผิดอาจกลายเป็นการกระทำที่ไม่ต้องการ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>agent ฝ่ายการเงินมี tool อยู่ 28 ตัว ทีมจะต่อ MCP server ใหม่ที่เพิ่มอีก 30 ตัว "เผื่อได้ใช้" ผลต่อการเลือก tool น่าจะเป็นอย่างไร?</p>
+  <ol type="A">
+    <li>แม่นน้อยลง เพราะ tool ที่ไม่เกี่ยวยังกิน context และเพิ่มตัวเลือกให้แย่งกัน</li>
+    <li>แม่นขึ้น เพราะมีตัวเลือกมากขึ้น</li>
+    <li>เท่าเดิม เพราะ tool ที่ไม่ถูกเรียกไม่มีต้นทุน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> รวมแล้วเกือบ 60 ตัว เกินช่วงที่ความแม่นเริ่มตก และ definitions ทุกตัวอยู่ใน context ไม่ว่าจะถูกเรียกหรือไม่</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>agent DevOps ที่ต่อ MCP server 4 ตัว ทำงานสั้นๆ ได้ดี แต่พอสืบ incident ยาวๆ ที่เรียก tool หลายสิบครั้ง กลับ context เต็มก่อนสรุปได้ สาเหตุหลักคือ?</p>
+  <ol type="A">
+    <li>MCP server ทั้ง 4 ตัวใช้ connection ร่วมกัน จึงตันเมื่อเรียกถี่</li>
+    <li>เมื่องานยาว ระบบสลับไปใช้โมเดลรุ่นเล็กที่ window เล็กกว่าเอง</li>
+    <li>tool definitions อยู่ใน context ทุกรอบ และแย่งพื้นที่กับ <code>tool_result</code> ที่สะสมขึ้นเรื่อยๆ</li>
+    <li>context window ไม่นับ tool definitions</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> definitions ใช้ window เดียวกับ tool result ยิ่งงานยาว result ยิ่งสะสม จนพื้นที่ไม่พอ D ผิดเพราะ definitions นับเสมอ ส่วน A และ B ไม่ใช่พฤติกรรมที่มีอยู่จริง</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. วินิจฉัย bloat จาก config</h3>
+<p>คำถามหลักที่ต้องถามกับทุกรายการ: <strong>"ถ้าเอาตัวนี้ออก อะไรจะพัง?"</strong> ถ้าตอบไม่ได้ ก็น่าจะไม่จำเป็น ปัญหาที่เจอบ่อยมี 4 แบบ:</p>
+<ul>
+  <li><strong>Tool ทับกัน</strong>: เช่น tool แบบ list กับแบบ search ของ resource เดียวกัน หรือ get-by-ID กับ list ที่ถูกเรียกคู่กันเสมอ</li>
+  <li><strong>Tool ที่ไม่ได้ใช้</strong>: ไม่เคยถูกเรียกในงานจริง บ่อยครั้งเป็นทั้ง MCP server ที่ต่อไว้ "เผื่อ"</li>
+  <li><strong>Description คลุมเครือ</strong>: Claude แยกไม่ออกว่าตัวไหนทำอะไร หรือใช้ parameter ผิดซ้ำๆ</li>
+  <li><strong>MCP server ที่ต่อเกินมา</strong>: มาจากไฟล์ของโปรเจกต์ user settings plugin หรือ connector ขององค์กร โดยที่เราไม่ได้ตั้งใจ</li>
+</ul>
+<p>หลักฐานดีกว่าการนั่งอ่าน config: เก็บจำนวนการเรียก tool, token และ error ต่องาน และอ่าน tool call ดิบใน transcript ไม่ใช่สรุปที่ agent เล่าเอง</p>
+<div class="table-wrap"><table>
+  <tr><th>สิ่งที่เห็นใน transcript</th><th>น่าจะเป็น</th><th>แก้ด้วยอะไรก่อน</th></tr>
+  <tr><td>tool 3 ตัวเดิมถูกเรียกเรียงกันทุกครั้ง</td><td>แบ่ง tool ละเอียดเกินไป</td><td>รวมเป็น tool เดียวระดับงาน</td></tr>
+  <tr><td>error parameter ไม่ถูกต้องบ่อย</td><td>description หรือ schema ไม่ชัด</td><td>เขียน description ใหม่ ใส่ตัวอย่าง</td></tr>
+  <tr><td>สลับไปมาระหว่าง tool 2 ตัวที่คล้ายกัน</td><td>หน้าที่ทับกันหรือคลุมเครือ</td><td>รวม หรือตั้ง namespace ให้เส้นแบ่งชัด</td></tr>
+  <tr><td>tool ของ server หนึ่งไม่เคยโผล่ใน transcript</td><td>ความสามารถที่ไม่ได้ใช้</td><td>ตัดการเชื่อมต่อ หรือ deny tool ของมัน</td></tr>
+</table></div>
+
+<h3>MCP server มาจากไหนบ้าง</h3>
+<p>ใน Agent SDK ถ้าตั้ง <code>strict_mcp_config</code> เป็น true ระบบจะใช้แค่ server ที่ระบุใน <code>mcp_servers</code> และไม่สนใจ <code>.mcp.json</code> ของโปรเจกต์ user settings server จาก plugin และ connector ของ claude.ai ดังนั้นถ้าเห็น server ที่ไม่ได้ระบุไว้แต่โผล่มา แปลว่ามาจากช่องทางใดช่องทางหนึ่งในนี้</p>
+<pre><code>options = ClaudeAgentOptions(
+    mcp_servers={"jira": jira_cfg, "github": gh_cfg},
+    strict_mcp_config=True,   # ใช้แค่ 2 server นี้ ไม่ดึงจากแหล่งอื่น
+)</code></pre>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถาม "เอาออกแล้วอะไรพัง" กับทุก tool ดูหลักฐานจาก transcript และ metric แล้วจับอาการเข้ากับวิธีแก้: เรียกเป็นชุด → รวม, parameter ผิด → แก้ description, สลับไปมา → รวม/namespace, ไม่เคยใช้ → ตัดออก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่สิ่งที่เห็นใน transcript กับวิธีแก้แรก:</p>
+  <ol>
+    <li><code>get_order</code>, <code>get_shipment</code>, <code>get_refund_status</code> ถูกเรียกเรียงกันทุกครั้งที่ลูกค้าถามสถานะ</li>
+    <li>tool ของ server <code>analytics</code> ไม่เคยโผล่ใน transcript 3 เดือน</li>
+    <li>agent ส่ง <code>date</code> ผิดรูปแบบให้ <code>create_booking</code> ซ้ำๆ</li>
+    <li>agent สลับไปมาระหว่าง <code>find_user</code> กับ <code>lookup_member</code></li>
+  </ol>
+  <p>A = เขียน description/schema ใหม่ พร้อมตัวอย่าง · B = รวมเป็น tool เดียว · C = รวม หรือ namespace ให้เส้นแบ่งชัด · D = ตัดการเชื่อมต่อ หรือ deny tool</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-D, 3-A, 4-C</strong> แต่ละอาการชี้ไปที่ปัญหาคนละแบบ จึงแก้คนละทาง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. รวม tool และตั้ง namespace</h3>
+<p><strong>Consolidation</strong>: ออกแบบ tool ตาม <em>งาน</em> ไม่ใช่ห่อ API endpoint ทีละตัวแบบหนึ่งต่อหนึ่ง ถ้าห่อ endpoint ตรงๆ agent ต้องเรียกต่อกันเองและอ่านผลระหว่างทางทุกตัว แต่ tool ระดับงานทำหลายขั้นข้างในแล้วคืนเฉพาะสิ่งที่ต้องใช้</p>
+<div class="table-wrap"><table>
+  <tr><th>tool ระดับ endpoint</th><th>tool ระดับงาน</th></tr>
+  <tr><td><code>list_users</code>, <code>list_events</code>, <code>create_event</code></td><td><code>schedule_event</code> (หาเวลาว่างแล้วจองให้)</td></tr>
+  <tr><td><code>read_logs</code></td><td><code>search_logs</code> (คืนเฉพาะบรรทัดที่เกี่ยวข้อง)</td></tr>
+  <tr><td><code>get_customer_by_id</code>, <code>list_transactions</code>, <code>list_notes</code></td><td><code>get_customer_context</code></td></tr>
+  <tr><td><code>list_contacts</code></td><td><code>search_contacts</code> หรือ <code>message_contact</code></td></tr>
+</table></div>
+<p>ได้ 2 อย่าง: definitions น้อยลง (ช่วยให้อยู่ต่ำกว่าช่วง 30–50) และ agent ต้องคิดน้อยลง tool แต่ละตัวควรมีหน้าที่ชัดเจนหนึ่งเดียว และแบ่งงานแบบที่คนที่มีทรัพยากรเดียวกันจะแบ่ง</p>
+
+<h3>Namespacing</h3>
+<p>tool ที่เหลือให้ตั้งชื่อนำหน้าตาม <strong>service</strong> (เช่น <code>asana_search</code>, <code>jira_search</code>) และตาม <strong>resource</strong> ภายใน service (เช่น <code>asana_projects_search</code>, <code>asana_users_search</code>) การวางแบบ prefix หรือ suffix มีผลต่อคะแนน eval จริง และ <strong>ผลต่างกันไปตามโมเดล</strong> ให้ตัดสินจากการทดสอบกับ setup ของเราเอง ไม่ใช่ความเคยชินหรือค่า default ของ client</p>
+
+<div class="box key"><span class="tag">ลองใช้กับงานตัวเอง</span>
+  <p>เลือก agent ที่เคยสร้างหรือรีวิว หา tool 2 ตัวที่แทบจะถูกเรียกคู่กันเสมอ แล้วลองตั้งชื่อ tool ระดับงานตัวเดียวที่ทำแทนได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ออกแบบ tool ตามงาน ไม่ใช่ตาม endpoint ตัวที่เหลือตั้ง namespace ตาม service และ resource ส่วน prefix หรือ suffix ให้วัดจาก eval ของเราเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ทีมแพลตฟอร์มเถียงกันว่าจะตั้งชื่อ <code>github_issues_search</code> (prefix) หรือ <code>search_issues_github</code> (suffix) ดี ควรตัดสินอย่างไร?</p>
+  <ol type="A">
+    <li>เลือกแบบที่ทำให้ชื่อสั้นที่สุด เพราะชื่อสั้นช่วยประหยัด token ได้มาก</li>
+    <li>ให้ทีมโหวตครั้งเดียว แล้วใช้แบบนั้นกับทุกโมเดลตลอดไป</li>
+    <li>ไม่ต้องสนใจ ตำแหน่งไม่มีผลต่อการเลือก tool</li>
+    <li>รัน tool-use eval ของตัวเองกับโมเดลที่ใช้จริง เพราะผลต่างกันไปตามโมเดล</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ตำแหน่งของ namespace มีผลจริงและต่างกันตามโมเดล จึงต้องวัดเอง C ผิดเพราะมีผลจริง A ผิดเพราะชื่อที่สั้นลงประหยัดได้น้อยมาก B ผิดเพราะผลเปลี่ยนเมื่อเปลี่ยนโมเดล</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. จำกัด tool ตามบทบาทของแต่ละ agent</h3>
+<h3>field <code>tools</code> ของ subagent</h3>
+<p>ใน <code>AgentDefinition</code> ของ subagent field <code>tools</code> กำหนดว่าตัวนั้นใช้ tool อะไรได้บ้าง <strong>ถ้าไม่ใส่ subagent จะได้ทุก tool ที่เปิดให้ subagent ใช้</strong> ไม่ใช่ได้ชุดย่อยของ parent โดยอัตโนมัติ และโน้ตใน CLAUDE.md หรือ permission mode ของ parent ก็ไม่ได้เปลี่ยนเรื่องนี้</p>
+<pre><code>agents: {
+  "doc-auditor": {
+    description: "ตรวจเอกสารโดยไม่แก้ไข",
+    prompt: "คุณคือผู้ตรวจเอกสาร ...",
+    tools: ["Read", "Grep", "Glob"],   // อ่านและค้นได้อย่างเดียว ไม่ว่า parent จะมีอะไร
+    model: "sonnet"                    // override รุ่นเฉพาะ subagent นี้
+  }
+}</code></pre>
+
+<h3><code>disallowedTools</code> และ <code>mcpServers</code></h3>
+<ul>
+  <li><code>disallowedTools</code> รับ pattern ของ MCP ได้: <code>mcp__server</code> หรือ <code>mcp__server__*</code> ตัด tool ทุกตัวของ server นั้น ส่วน <code>mcp__*</code> ตัด MCP tool ทุกตัวจากทุก server ตัวอย่าง <code>mcp__legacy__*</code> ตัด server เก่าออกจาก agent ตัวเดียว ขณะที่ agent อื่นยังใช้ได้</li>
+  <li><code>mcpServers</code> ในนิยาม agent ระบุ server <strong>เพียงชุดเดียว</strong> ที่ agent ตัวนั้นได้ ส่วน server ที่ไม่มี agent ไหนต้องใช้ ควรตัดการเชื่อมต่อทิ้งไปเลย</li>
+</ul>
+
+<h3>อนุมัติ (approve) ≠ จำกัด (scope)</h3>
+<p><code>allowedTools</code> แค่ <strong>อนุมัติล่วงหน้า</strong> ให้ tool ที่ระบุรันได้โดยไม่ต้องถาม แต่ <strong>ไม่ได้ปิด</strong> tool อื่น tool ที่ไม่อยู่ในรายการยังมีอยู่และถูกเรียกได้ แค่ไปตกที่ permission mode แทน ในโหมด <code>default</code> การเรียกที่ต้องขออนุมัติและไม่ตรง allow rule จะไปที่ callback <code>canUseTool</code> ซึ่งในงาน headless (เช่น CI) ไม่มีใครมาตอบ</p>
+<p>ถ้าต้องการพื้นผิวแบบปิดสำหรับ headless ให้ใช้ allowlist คู่กับ <code>permissionMode: "dontAsk"</code>: tool ในรายการรันได้ ส่วนอะไรที่ปกติจะต้องถาม จะถูก <strong>ปฏิเสธทันที</strong> โดยไม่เรียก <code>canUseTool</code></p>
+<pre><code>const options = {
+  allowedTools: ["Read", "Glob", "Grep"],
+  permissionMode: "dontAsk",   // อะไรที่ต้องถาม = ปฏิเสธ
+};</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>การตั้งค่า</th><th>ผลต่อ tool ที่ไม่อยู่ใน allowlist</th></tr>
+  <tr><td><code>default</code></td><td>ส่งไปถาม <code>canUseTool</code></td></tr>
+  <tr><td><code>dontAsk</code></td><td>ถูกปฏิเสธ (ปิดพื้นผิว)</td></tr>
+  <tr><td><code>bypassPermissions</code></td><td>รันได้โดยไม่ถาม (ยกเว้น action ที่ไม่มีโหมดไหนอนุมัติอัตโนมัติ) ถ้าใช้คู่กับ denylist แล้วลืมใส่ตัวไหน ตัวนั้นรันได้เลย = fail open</td></tr>
+  <tr><td><code>acceptEdits</code></td><td>อนุมัติการแก้ไฟล์และการทำงานกับ filesystem อัตโนมัติ ไม่เหมาะกับ agent อ่านอย่างเดียว</td></tr>
+  <tr><td><code>allowedTools: ["*"]</code></td><td>ไม่ได้ลดพื้นผิวลงเลย</td></tr>
+  <tr><td><code>plan</code></td><td>เป็นโหมดระดับเซสชัน ใช้จำกัด subagent ตัวเดียวแบบเลือกเจาะจงไม่ได้</td></tr>
+</table></div>
+
+<h3>Skills ก็เป็นพื้นผิวเหมือนกัน</h3>
+<p>Skill คือโฟลเดอร์ <code>skills/&lt;name&gt;/</code> ที่มี <code>SKILL.md</code> โดย frontmatter มี <code>name</code>, <code>description</code> และ <code>when_to_use</code> (ไม่บังคับ) ตอนเริ่มเซสชันจะโหลดแค่รายการสั้นๆ ของแต่ละ Skill คำสั่งเต็มโหลดเมื่อถูกเรียก ไม่ว่าจะโดย Claude (เมื่อ description ตรง) หรือผู้ใช้พิมพ์ <code>/name</code></p>
+<ul>
+  <li>ทุก Skill เพิ่มรายการหนึ่งบรรทัดใน listing และใน Claude Code ข้อความ description + <code>when_to_use</code> รวมกันจะถูกตัดที่ <strong>1,536 ตัวอักษร</strong> (คนละเรื่องกับเพดาน 1,024 ตัวอักษรของ field <code>description</code> ใน frontmatter ฝั่ง API ที่เรียนในบท 2.5)</li>
+  <li>Skill ที่มีผลข้างเคียง (เช่น deploy, ส่งอีเมล) และควรให้คนเป็นผู้สั่ง ให้ใส่ <code>disable-model-invocation: true</code> Claude จะไม่โหลดเองและไม่ preload ให้ subagent จะรันก็ต่อเมื่อผู้ใช้พิมพ์ <code>/name</code></li>
+</ul>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>มีแค่ <strong>การตั้งค่า</strong> ที่ลดพื้นผิวได้จริง: ตัด server, pattern ใน <code>disallowedTools</code>, <code>tools</code> ที่แคบลง, <code>mcpServers</code> ในนิยาม agent, <code>dontAsk</code> คู่ allowlist และ <code>disable-model-invocation</code> บน Skill ส่วนโน้ตใน CLAUDE.md ที่ขอให้ "อย่าใช้ tool นี้" ไม่ได้เอา definition ออก tool ยังโหลดอยู่และถูกเรียกได้</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใส่ tool ใน allowedTools แล้ว agent ใช้ได้แค่นั้น"</strong> ผิด มันแค่อนุมัติล่วงหน้า ต้องปิดด้วย <code>dontAsk</code> หรือบล็อกด้วย <code>disallowedTools</code></p>
+  <p><strong>"subagent ได้ชุดย่อยของ tool ของ parent เอง"</strong> ผิด ถ้าไม่มี field <code>tools</code> จะได้ทุก tool ที่เปิดให้ subagent ต้องจำกัดในนิยามของมันเอง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>จำกัดด้วย config ไม่ใช่ด้วยคำขอร้อง: <code>tools</code> ต่อ subagent, <code>disallowedTools</code> pattern, <code>mcpServers</code>, allowlist + <code>dontAsk</code> และ <code>disable-model-invocation</code> สำหรับ Skill ที่มีผลข้างเคียง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>job ใน pipeline ตั้ง <code>allowedTools: ["Read", "Glob", "Grep"]</code> ไว้อย่างเดียว ไม่ได้ตั้งอะไรอื่น ระหว่างรัน Claude พยายามเรียก <code>Write</code> จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>ไม่ได้อนุมัติล่วงหน้า จึงตกไปที่ permission mode และ <code>canUseTool</code> ซึ่งใน pipeline ไม่มีใครตอบ</li>
+    <li>ถูกบล็อกทันที เพราะไม่อยู่ใน allowedTools</li>
+    <li>pipeline เปลี่ยนไปใช้ <code>bypassPermissions</code> ให้อัตโนมัติเมื่อไม่มีคนตอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> allowedTools ไม่ได้ปิด tool อื่น การเรียกที่ไม่อยู่ในรายการจะไปตามเส้นทาง permission mode ปกติ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เติมคำ)</span>
+  <p>lead agent มี <code>Write</code>, <code>Edit</code>, <code>Bash</code> แต่ subagent "test-planner" ต้องอ่านโค้ดได้อย่างเดียว ต้องใส่ <code>["Read", "Grep", "Glob"]</code> ที่ field ไหนในนิยามของ subagent?</p>
+  <ol type="A">
+    <li><code>mcpServers</code></li>
+    <li><code>allowedTools</code></li>
+    <li><code>disallowedTools</code></li>
+    <li><code>tools</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>tools</code> คือรายการ tool ที่ subagent ใช้ได้ A ใช้เลือก server B แค่อนุมัติล่วงหน้า C จะกลายเป็นตัด tool อ่านทิ้งแทน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>bot ตรวจ license ของ dependency รันใน CI แบบ headless ต้องอ่านไฟล์ได้อย่างเดียว ห้ามแก้ไฟล์ ห้ามรัน shell และห้ามค้างรอการยืนยัน ตั้งค่าแบบไหน?</p>
+  <ol type="A">
+    <li><code>allowedTools: ["Read", "Glob", "Grep"]</code> อย่างเดียว ปล่อย permission mode เป็น default</li>
+    <li>ไม่ตั้งค่าอะไรเลย แต่เขียนใน system prompt ว่า "ห้ามแก้ไฟล์และห้ามรัน shell"</li>
+    <li><code>allowedTools: ["Read", "Glob", "Grep"]</code> + <code>permissionMode: "dontAsk"</code></li>
+    <li><code>disallowedTools: ["mcp__*"]</code> อย่างเดียว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> allowlist + dontAsk ทำให้ตัวที่ระบุรันได้และที่เหลือถูกปฏิเสธโดยไม่ถาม A ตกไปที่ canUseTool ซึ่งไม่มีคนตอบ B เป็นแค่คำขอ ไม่ใช่การบังคับ D ตัดแค่ MCP tool ส่วน Edit, Write, Bash ยังอยู่ครบ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>lead agent ด้าน data engineering มีสิทธิ์กว้าง แต่ subagent "schema-reviewer" ต้องอ่านและค้นได้อย่างเดียว วิธีไหนบังคับได้จริง?</p>
+  <ol type="A">
+    <li>ไม่ต้องทำอะไร subagent ได้ชุดย่อยของ parent อยู่แล้ว</li>
+    <li>ตั้ง <code>model: "haiku"</code> ให้ subagent เพราะรุ่นเล็กไม่มีสิทธิ์เขียนไฟล์</li>
+    <li>ใส่ <code>tools: ["Read", "Glob", "Grep"]</code> ในนิยามของ subagent</li>
+    <li>ให้ lead agent ตรวจผลหลัง subagent ทำเสร็จ แล้ว revert ถ้าพบการแก้ไฟล์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> subagent ไม่ได้ชุดย่อยอัตโนมัติ (A) รุ่นของโมเดลไม่เกี่ยวกับสิทธิ์ใช้ tool (B) และการตามแก้ทีหลังไม่ใช่การป้องกัน เพราะการแก้เกิดขึ้นไปแล้ว (D)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (เลือก 3 ข้อ)</span>
+  <p>ทีมอยากลดพื้นผิว tool ของ agent ซัพพอร์ต ข้อไหนลดได้จริง?</p>
+  <ol type="A">
+    <li>เพิ่มบรรทัดใน CLAUDE.md ว่า "หลีกเลี่ยง tool ของ server billing"</li>
+    <li>ใส่ <code>disable-model-invocation: true</code> ให้ Skill <code>refund-customer</code> ที่โอนเงินคืนจริง</li>
+    <li>เปลี่ยนชื่อ tool ของ billing ให้ขึ้นต้นด้วย <code>zz_</code> จะได้อยู่ท้ายรายการ</li>
+    <li>ตัดการเชื่อมต่อ MCP server <code>marketing</code> ที่ไม่เคยถูกใช้</li>
+    <li>เพิ่ม <code>max_tokens</code> ให้ agent มีที่คิดมากขึ้น</li>
+    <li>ใส่ <code>disallowedTools: ["mcp__oldcrm__*"]</code> ให้ agent ตัวนี้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B, D, F</strong> ทั้งสามเป็นการตั้งค่าที่ตัดหรือปิดความสามารถจริง A เป็นแค่คำแนะนำ tool ยังโหลดอยู่ C แค่เปลี่ยนชื่อ จำนวน tool เท่าเดิม E เกี่ยวกับความยาว output ไม่ได้เอา tool ออก</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. เลือกวิธีแก้ให้ตรงต้นตอ</h3>
+<p>การรวม การตั้ง namespace และการ scope <strong>เปลี่ยนชุดของ tool</strong> ส่วนเทคนิคด้าน context <strong>ไม่แตะชุด tool</strong> แต่เปลี่ยนว่า token ไปอยู่ตรงไหน</p>
+<div class="table-wrap"><table>
+  <tr><th>ต้นตอ</th><th>วิธีแก้</th><th>ผล</th></tr>
+  <tr><td>tool ทับกันหรือคลุมเครือ</td><td>รวม + namespace</td><td>ตัวเลือกน้อยลงและชัดขึ้น</td></tr>
+  <tr><td>บทบาทหนึ่งถือ tool ของอีกบทบาท</td><td>scope ด้วย <code>tools</code>, <code>disallowedTools</code>, <code>mcpServers</code></td><td>แต่ละ agent ได้แค่ของตัวเอง</td></tr>
+  <tr><td>ชุด tool ใหญ่ (20+) แต่แต่ละรอบใช้ไม่กี่ตัว</td><td>Tool search</td><td>definitions โหลดเมื่อถูกค้นเท่านั้น</td></tr>
+  <tr><td>ชุด tool ใหญ่คงที่ ใช้ข้าม request จำนวนมาก</td><td>Prompt caching</td><td>ถูกลง แต่จำนวน token เท่าเดิม</td></tr>
+  <tr><td><code>tool_result</code> เก่าค้างเยอะ</td><td>Context editing</td><td>ตัดผลเก่าที่หมดประโยชน์</td></tr>
+  <tr><td>เรียก tool เล็กๆ ต่อกันเป็นสายที่รวมเป็น script ได้</td><td>Programmatic tool calling</td><td>ผลระหว่างทางไม่เข้าประวัติ</td></tr>
+</table></div>
+<ul>
+  <li><strong>Programmatic tool calling</strong>: แทนที่จะไป-กลับ 5 รอบ Claude เขียน script เดียวที่เรียกทั้ง 5 ฟังก์ชันใน sandbox ได้กลับมาแค่ผลสุดท้าย เหมาะกับงาน batch ซ้ำๆ แต่ไม่ช่วยเรื่องชุด tool ที่ใหญ่เกิน</li>
+  <li><strong>Tool search</strong>: เก็บ definitions ไว้นอก context จนกว่า Claude จะค้นหา เสียหนึ่งรอบเพื่อ lookup แต่ประหยัด context พื้นฐานได้มาก เหมาะกับ catalogue ใหญ่ที่แต่ละคำขอใช้ไม่กี่ตัว <strong>แต่ไม่แก้ tool ที่ทับกัน</strong> เพราะการค้นอาจคืนทั้งสองตัวที่ชวนสับสนมาพร้อมกัน</li>
+  <li><strong>Prompt caching</strong>: ลดราคาของ definitions ที่ส่งซ้ำ แต่ไม่ลดพื้นที่ใน context และไม่ลดผลต่อการเลือก tool ใช้แก้ปัญหาเรื่องเงิน ไม่ใช่เรื่องความแม่นหรือพื้นที่</li>
+</ul>
+<h3>ลำดับที่แนะนำสำหรับ agent ที่มีปริมาณงานสูง</h3>
+<ol class="steps">
+  <li>รวมและ scope ก่อน เพราะ tool ที่ถูกเอาออกไม่ต้องเสียค่า defer, cache หรือ trim อะไรเลย</li>
+  <li>cache definitions ตั้งแต่เนิ่นๆ</li>
+  <li>เพิ่ม tool search เมื่อชุด tool เกินราว 20 ตัว หรือ context พื้นฐานเริ่มเห็นผล</li>
+  <li>เพิ่ม context editing เมื่อบทสนทนายาว</li>
+</ol>
+<p><strong>ตัวอย่างเคส</strong>: agent HR มี tool 10 ตัว definitions คงที่ แต่เรียก <code>find_employee</code> แทน <code>search_staff</code> ผิดบ่อย tool search ไม่ช่วยเพราะ tool มีน้อยอยู่แล้ว ปัญหาคือการทับกัน ต้องรวมหรือตั้ง namespace และเขียน description ให้คมขึ้น</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Tool search แก้ปัญหาเลือกผิดระหว่าง tool ที่คล้ายกัน"</strong> ไม่ใช่ มันแค่ลด definitions ที่โหลด การทับกันต้องแก้ด้วยการรวมและ namespace</p>
+  <p><strong>"Prompt caching แก้ context bloat"</strong> ไม่ใช่ ลดแค่ราคา definitions ยังกินพื้นที่และความสนใจเท่าเดิม</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ตัดและรวมก่อนเสมอ แล้วค่อยใช้เทคนิคด้าน context ให้ตรงต้นตอ: เยอะแต่ใช้น้อย → tool search, แพง → caching, ผลเก่าค้าง → context editing, เรียกเป็นสาย → programmatic, ทับกัน → รวม/namespace</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับวิธีแก้:</p>
+  <ol>
+    <li>catalogue 80 tool แต่ละคำขอใช้แค่ 2–3 ตัว</li>
+    <li>tool <code>get_invoice</code> กับ <code>fetch_bill</code> หน้าที่ปนกัน agent เลือกสลับไปมา</li>
+    <li>agent ประมวลผลรายการ 50 ชิ้น โดยเรียก tool เล็กๆ ต่อกันชิ้นละ 4 ครั้ง</li>
+    <li>ชุด tool 30 ตัวคงที่ ใช้หลายหมื่น request ต่อวัน ปัญหาหลักคือค่าใช้จ่าย</li>
+    <li>เซสชันยาวมี tool result เก่าหลายร้อยรายการที่ไม่เกี่ยวแล้ว</li>
+  </ol>
+  <p>A = Prompt caching · B = Tool search · C = Context editing · D = รวม + namespace · E = Programmatic tool calling</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-D, 3-E, 4-A, 5-C</strong> แต่ละเทคนิคแก้แรงกดดันคนละแหล่ง และมีแค่การรวม/namespace ที่แก้การทับกันได้</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool">Claude Docs: Tool search tool</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/tool-search">Claude Agent SDK: Tool search</a></li>
+  <li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic Engineering: Effective context engineering for AI agents</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/manage-tool-context">Claude Docs: Manage tool context</a></li>
+  <li><a href="https://www.anthropic.com/engineering/writing-tools-for-agents">Anthropic Engineering: Writing tools for agents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/python">Claude Agent SDK: Python reference</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/subagents">Claude Agent SDK: Subagents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/permissions">Claude Agent SDK: Permissions</a></li>
+  <li><a href="https://code.claude.com/docs/en/skills">Claude Code: Skills</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">Claude Agent SDK: Agent loop</a></li>
+</ul>
+</section>

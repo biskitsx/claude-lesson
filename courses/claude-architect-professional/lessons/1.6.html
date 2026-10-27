@@ -1,0 +1,300 @@
+<section class="lesson" id="l-1-6">
+<h2>1.6 Business value pillars สำหรับ Claude solution</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/business-value-pillars-for-claude-solutions-cost-and-efficiency">CertSafari 1.6</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เขียน business case บน 5 pillars (efficiency, transformation, productivity, cost, performance SLAs) โดยผูกแต่ละ pillar กับตัวเลขที่ sponsor ติดตามอยู่แล้ว</li>
+    <li>บอก lever หลักและ headline metric ของแต่ละ pillar และบอกได้ว่า design decision แต่ละข้อขยับ pillar ไหน</li>
+    <li>เลือก model class และ configuration ที่ผ่าน latency SLA ด้วยต้นทุนที่ยั่งยืน และอธิบายได้ว่าทำไม fast mode, batch และการยัด context ก้อนใหญ่ถึงไม่ผ่านโจทย์นั้น</li>
+    <li>แยก productivity ออกจาก transformation ได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ทุกการตัดสินใจต้องชี้ไปที่ pillar และ metric</span>
+  <p><strong>Business value pillars</strong> คือผลลัพธ์ 5 ด้านที่ใช้ตัดสินว่า Claude solution คุ้มค่าไหม ทุก architectural decision ต้องตอบได้ว่า <strong>ขยับ pillar ไหน และตัวเลขอะไรพิสูจน์ว่าขยับจริง</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Five pillars คือโครงของ business case</h3>
+<p>คนที่อนุมัติงบ (sponsor) ไม่ได้ซื้อสถาปัตยกรรม เขาซื้อ <strong>ผลลัพธ์</strong> สถาปนิกจึงต้องแปลงงานออกแบบให้เป็นภาษา 5 ด้านนี้:</p>
+<ul>
+  <li><strong>Cost</strong>: ผลลัพธ์หนึ่งชิ้นมีต้นทุนเท่าไหร่</li>
+  <li><strong>Efficiency</strong>: งานหนึ่งหน่วยใช้ทรัพยากรไปเท่าไหร่</li>
+  <li><strong>Performance SLAs</strong>: latency และ availability ที่ระบบต้องรักษาให้ได้</li>
+  <li><strong>Productivity</strong>: งานที่เสร็จและใช้ได้จริงต่อ run หรือต่อ person-hour</li>
+  <li><strong>Transformation</strong>: งานที่เมื่อก่อนทำไม่ได้เลย</li>
+</ul>
+<p>ทุก pillar ต้องจบที่ <strong>ตัวเลขที่ sponsor มีอยู่แล้ว</strong> เช่น ระบบสรุปเอกสารอาจผูก 4 pillar กับ 4 ตัวเลข: ต้นทุนต่อสรุปที่เสร็จ, p95 response time, จำนวนสรุปที่ analyst รับไปใช้โดยไม่ต้องแก้ต่อสัปดาห์ และรายงานประเภทใหม่ที่ไม่เคยทำได้มาก่อน</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Pillar</th><th>Headline metric</th><th>Lever หลัก</th></tr>
+  <tr><td>Cost</td><td>ต้นทุนต่อ task ที่สำเร็จ</td><td>เลือกโมเดลและ effort จากต้นทุนต่อ task หลังเก็บ free wins แล้ว</td></tr>
+  <tr><td>Efficiency</td><td>สัดส่วน input ที่อ่านจาก cache; token ต่อ task</td><td>Prompt caching, ตัด token ส่วนเกิน, batch สำหรับงานที่รอได้</td></tr>
+  <tr><td>Performance SLAs</td><td>Response time (ms) เช่น p95, time to first token, uptime (%)</td><td>Model class, effort, ความยาว output, streaming</td></tr>
+  <tr><td>Productivity</td><td>Output ที่เสร็จและใช้ได้ต่อ run หรือต่อ person-hour; task completion rate</td><td>โมเดลและ loop ที่พางานไปจนเป็นชิ้นงานเสร็จ</td></tr>
+  <tr><td>Transformation</td><td>Output หรือ workflow ใหม่ที่กระบวนการเดิมทำไม่ได้</td><td>เลือกโมเดลตาม capability ในงานที่เครื่องมือปัจจุบันล้มเหลว</td></tr>
+</table></div>
+
+<h3>อะไรที่ไม่ใช่ value metric</h3>
+<ul>
+  <li><strong>ขนาด context window, token throughput, rate limits</strong> เป็นคุณสมบัติของ platform ไม่ใช่ผลลัพธ์ทางธุรกิจ</li>
+  <li><strong>จำนวน prompt template ที่เขียน, จำนวน tool ที่ integrate</strong> เป็นชิ้นงานระหว่างทางของ implementation ไม่ใช่ value ที่ส่งมอบ</li>
+  <li><strong>คะแนนความพอใจของ developer หลัง launch</strong> วัดความรู้สึกของทีมที่สร้าง ไม่ใช่สิ่งที่ส่งมอบ และมาช้าเกินไปสำหรับการตัดสินใจลงทุน</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>5 pillars = cost, efficiency, performance SLAs, productivity, transformation แต่ละอันต้องมีตัวเลขที่ sponsor ใช้อยู่แล้ว สเปกโมเดลและจำนวนงานที่ทีมทำไม่นับเป็น value</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>ระบบ Claude ช่วยร่างอีเมลตอบลูกค้าสำหรับธนาคาร จับคู่ pillar กับตัวเลขที่เหมาะสม:</p>
+  <ol>
+    <li>Cost</li>
+    <li>Efficiency</li>
+    <li>Performance SLAs</li>
+    <li>Productivity</li>
+    <li>Transformation</li>
+  </ol>
+  <ol type="A">
+    <li>จำนวนอีเมลที่เจ้าหน้าที่กดส่งได้โดยไม่แก้ ต่อชั่วโมงทำงาน</li>
+    <li>ค่าใช้จ่ายรวมหารด้วยจำนวนอีเมลที่ส่งออกไปจริง</li>
+    <li>เปิดบริการตอบลูกค้าเป็นภาษาท้องถิ่น 12 ภาษา ซึ่งทีมเดิมไม่มีคนทำได้</li>
+    <li>p95 เวลาร่างเสร็จ และ uptime ของระบบ</li>
+    <li>สัดส่วน input ที่อ่านจาก cache และ token ต่ออีเมล</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-E, 3-D, 4-A, 5-C</strong> ข้อ C เป็น transformation เพราะต่อให้เพิ่มคนในกระบวนการเดิม ก็ยังทำไม่ได้ถ้าไม่มีคนพูดภาษาเหล่านั้น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>คุณต้องเขียน business case ขอทุนผู้บริหารก่อนเริ่มโปรเจกต์ โครงไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>Cost, efficiency, performance SLAs, productivity และ transformation โดยแต่ละข้อผูกกับตัวเลขที่ผู้บริหารติดตามอยู่แล้ว</li>
+    <li>จำนวน prompt template และ integration ที่ทีมจะสร้าง</li>
+    <li>ขนาด context window, throughput และ rate limit ของโมเดลที่เลือก</li>
+    <li>ผลสำรวจความพอใจของทีมพัฒนาหลังเปิดใช้งาน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> C เป็นสเปกของ platform B เป็นกิจกรรมระหว่างทาง D เป็นสัญญาณรองที่ได้มาหลัง launch ใช้ตัดสินใจลงทุนล่วงหน้าไม่ได้</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Cost: คิดราคาที่ผลลัพธ์ และเก็บของฟรีก่อน</h3>
+<p>ตัวเลขหลักคือ <strong>ต้นทุนต่อ outcome ไม่ใช่ราคาต่อ token</strong> สูตรคือ <strong>ค่าใช้จ่ายทั้งหมด ÷ จำนวน task ที่สำเร็จ</strong> ใน business case เขียนเป็น "บาทต่อ ticket ที่แก้ได้" หรือ "บาทต่อสรุปที่ถูกรับไปใช้"</p>
+<p>โมเดลที่ราคา token แพงกว่าอาจชนะได้ ถ้ามันใช้ turn และ thinking น้อยกว่าในการทำงานให้เสร็จ เหมือนจ้างช่างฝีมือดีค่าแรงแพงกว่า แต่ซ่อมเสร็จในรอบเดียว ไม่ต้องเรียกมาซ้ำ</p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>บิลค่า agent สูงเกิน ควรเสนออะไรก่อน? คำตอบคือ <strong>เปิด prompt caching และตัด token ที่ไม่จำเป็น</strong> ก่อนจะไปพูดถึงอะไรที่ต้องแลกกับคุณภาพ</p>
+</div>
+
+<div class="table-wrap"><table>
+  <tr><th>Free wins (ลดเงินโดยคุณภาพไม่ลด)</th><th>Trade-off จริง (แลกเงินกับความฉลาด)</th></tr>
+  <tr><td>Prompt caching</td><td>การเลือกโมเดล</td></tr>
+  <tr><td>Token hygiene (ตัด token ส่วนเกิน)</td><td>Effort</td></tr>
+  <tr><td>Prompt audit</td><td>เพดานความยาว output</td></tr>
+  <tr><td>Batch สำหรับงานที่รอได้</td><td>Session budget และ elapsed-time clock</td></tr>
+  <tr><td></td><td>สถาปัตยกรรมหลายโมเดล</td></tr>
+</table></div>
+<p>แผนที่ดีเริ่มจาก free wins แล้วรายงานผลก่อน ถ้ายังไม่ถึงเป้า ค่อยเสนอ trade-off พร้อมบอกว่าจะเสียคุณภาพตรงไหน การเปิดแผนด้วย "ลดโมเดลลง" เท่ากับทิ้งเงินที่ประหยัดได้ฟรี และโยนความเสี่ยงด้านคุณภาพที่ไม่จำเป็นให้ sponsor</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"วัดต้นทุนจากโมเดลที่ราคา token ถูกที่สุด"</strong> ไม่ใช่ headline metric คือต้นทุนต่อ task ที่สำเร็จ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Cost = spend ÷ งานที่สำเร็จ เก็บ caching, token hygiene, prompt audit และ batch ก่อน แล้วค่อยเสนอการแลกคุณภาพพร้อมบอกราคาที่ต้องจ่าย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>Agent จองตั๋วเครื่องบินเทียบ 2 โมเดล: โมเดล X ราคา token ถูกกว่า Y ครึ่งหนึ่ง แต่ Y มักจองสำเร็จในรอบเดียวและจองสำเร็จบ่อยกว่า ควรเทียบด้วยตัวเลขไหน?</p>
+  <ol type="A">
+    <li>ราคาต่อล้าน token ของแต่ละโมเดล</li>
+    <li>ค่าใช้จ่ายรวมต่อเดือนของแต่ละโมเดล</li>
+    <li>ค่าเฉลี่ยราคา token ถ่วงน้ำหนักตาม traffic</li>
+    <li>ค่าใช้จ่ายรวมหารด้วยจำนวนการจองที่สำเร็จ ของแต่ละโมเดล</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ต้องหารด้วยงานที่สำเร็จจึงเป็นต้นทุนต่อ outcome ราคาต่อ token (A, C) ไม่บอกว่างานเสร็จกี่ชิ้น และยอดรวม (B) ไม่ได้หารด้วยผลลัพธ์</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Efficiency: caching คือรายการแรก</h3>
+<p><strong>Efficiency</strong> คือทรัพยากรที่ใช้ต่องานหนึ่งหน่วย เช่น token ที่จ่ายราคาเต็ม การคำนวณซ้ำ หรือการรอ synchronous call ที่ไม่จำเป็น มันทับซ้อนกับ cost แต่ไม่ใช่เรื่องเดียวกัน ระบบอาจ efficient มากแต่ยังแพงได้ ถ้างานนั้นต้องใช้ frontier model</p>
+<p><strong>Prompt caching</strong> เป็น lever ใหญ่ที่สุดสำหรับ agent loop เพราะทุก turn ต้องส่งบทสนทนาที่ยาวขึ้นเรื่อยๆ ซ้ำ งาน 40 turn ส่ง turn แรกซ้ำ 40 ครั้ง ต้นทุนจึงโตประมาณ <strong>กำลังสองของจำนวน turn</strong> ถ้าไม่มี cache</p>
+<ul>
+  <li>Metric ที่จับต้องได้คือ <strong>cache-read share</strong> (สัดส่วน input ที่อ่านจาก cache)</li>
+  <li>จากการวัด traffic จริงหนึ่งวันของ Anthropic เอง agent loop ค่า median อ่าน input จาก cache <strong>84%</strong></li>
+  <li>loop ที่ต่ำกว่าราว <strong>80%</strong> น่าจะมีจุดที่ทำ cache แตกอยู่</li>
+  <li>เมื่อคิดราคา benchmark run ราวกับปิด caching งานยาวๆ (coding task ใน SWE-bench Pro และ agent คัดแยกบั๊ก) แพงขึ้น <strong>3.1–7.3 เท่า</strong></li>
+  <li>Anthropic ย้ำว่าเป็นตัวเลขภายในและบอกแค่ทิศทาง ทีมควรวัดของตัวเอง</li>
+</ul>
+
+<h3>Batch: รายการที่สอง แต่ไม่ใช่ของฟรีสำหรับทุกงาน</h3>
+<p><strong>Message Batches API</strong> คิดราคาทุก usage ที่ <strong>50%</strong> ของราคาปกติ batch ส่วนใหญ่เสร็จภายใน 1 ชั่วโมง และมีเพดาน 24 ชั่วโมง เหมาะกับ nightly evaluation, สร้างเนื้อหาจำนวนมาก, งานวิเคราะห์หลังบ้าน แต่ <strong>ไม่เหมาะกับงานที่มีคนรออยู่</strong> เพราะ batch แลก latency กับส่วนลด</p>
+<p>ระวังตัวเลขหลอกตา: ถ้าทีมรายงานว่า "จำนวน API call ลดลง 30%" นั่นเป็นแค่ input measure ต้องถามต่อว่า cache-read share เป็นเท่าไหร่ ต้นทุนต่อ task ที่สำเร็จเปลี่ยนไหม และจำนวน output ที่ใช้ได้ยังเท่าเดิมหรือเปล่า</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Batch ลด 50% ฟรีๆ ควรใส่ในทุกแผน efficiency"</strong> ไม่ใช่ batch แลก latency ใช้ได้แค่กับงานที่ไม่ต้องตอบทันที</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>วัด efficiency ด้วย cache-read share (median 84%, ต่ำกว่า ~80% น่าสงสัย) และ token ต่อ task ใช้ batch ลด 50% เฉพาะงานที่รอได้ถึง 24 ชั่วโมง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>แผนลดต้นทุนเสนอย้าย 4 งานไป Message Batches API งานไหนต้องถอดออกจากแผน?</p>
+  <ol type="A">
+    <li>สร้างคำอธิบายสินค้าใหม่ทั้งแคตตาล็อกทุกสิ้นเดือน</li>
+    <li>วิเคราะห์ feedback ลูกค้ารายสัปดาห์ให้ทีม product</li>
+    <li>ชุด regression eval ที่รันทุกคืน</li>
+    <li>ผู้ช่วยกรอกแบบฟอร์มในแอปมือถือที่ต้องตอบภายใน p95 1.5 วินาที</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> batch อาจใช้เวลาถึง 24 ชั่วโมง จึงไม่มีทางผ่าน SLA แบบ interactive อีก 3 งานไม่มีใครรอผลทันที ใช้ batch ได้</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Performance SLAs: latency และ availability ที่ต้องทำได้จริง</h3>
+<p>SLA คือคำมั่น ไม่ใช่ความหวัง สถาปนิกต้องแปลงสัญญาของ product เป็นเป้าเชิงปฏิบัติการ เช่น "95% ของ response ต้องเสร็จใน 200 ms" และ uptime เป็นเปอร์เซ็นต์ ถ้าระบบ stream คำตอบ <strong>time to first token (TTFT)</strong> ต้องวัดแยก เพราะผู้ใช้ตัดสินความเร็วจากตอนที่ตัวหนังสือเริ่มขึ้น</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Lever</th><th>ผลต่อความเร็ว</th><th>ข้อควรรู้</th></tr>
+  <tr><td>Model class</td><td>lever ตรงที่สุด และไปทางเดียวกับต้นทุน</td><td>Haiku class ออกแบบมาสำหรับงานความถี่สูงที่ latency และต้นทุนสำคัญ</td></tr>
+  <tr><td><code>effort</code></td><td>ตัวควบคุมหลักภายในโมเดลเดียว effort ต่ำ = ตอบเร็วและใช้น้อยลง</td><td>แลกกับความสามารถที่ลดลงบ้าง</td></tr>
+  <tr><td>Token input/output น้อยลง</td><td>ทุก response เร็วขึ้น</td><td></td></tr>
+  <tr><td>Streaming</td><td>ผู้ใช้รู้สึกว่าเร็วขึ้น</td><td>ไม่ได้ลดเวลาสร้างคำตอบทั้งหมด</td></tr>
+  <tr><td>Thinking</td><td>ไม่ใช่ lever ทั่วไป</td><td>หลายโมเดลปัจจุบันมี adaptive thinking ที่เปิดตลอด effort คือตัวควบคุมที่เอกสารระบุ</td></tr>
+  <tr><td>Fast mode (บน Opus)</td><td>ความเร็ว output สูงขึ้นถึง 2.5 เท่า</td><td>ราคาพรีเมียม ทำให้สอบตก pillar cost สำหรับ traffic ปริมาณมาก</td></tr>
+  <tr><td>โหลด knowledge base ทั้งก้อนทุก request</td><td>ช้าลง</td><td>input token บวม ทั้งช้าและแพง</td></tr>
+</table></div>
+
+<p>ตัวอย่างงานสรุป feedback สั้นๆ ที่ต้องการความเร็ว: เลือกโมเดลเร็วสุด แล้วตั้ง effort ต่ำ</p>
+<pre><code>reply = client.messages.create(
+    model="claude-haiku-5-5",
+    max_tokens=512,
+    output_config={"effort": "low"},
+    messages=[{"role": "user", "content": "สรุปความเห็นนี้ใน 2 ประโยค: ..."}],
+)</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>โมเดล</th><th>ราคาต่อ MTok (input / output)</th></tr>
+  <tr><td>Claude Haiku 5.5 (prompt ไม่เกิน 100,000 token)</td><td>$0.10 / $0.50</td></tr>
+  <tr><td>Claude Sonnet 5.5</td><td>$2 / $10</td></tr>
+  <tr><td>Claude Opus 5.5</td><td>$4 / $20</td></tr>
+  <tr><td>Claude Fable 5.1</td><td>$10 / $50</td></tr>
+</table></div>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>เมื่อโจทย์ให้ทั้ง latency และต้นทุนต่อ ticket ที่ยั่งยืน คำตอบคือ <strong>model class ที่เร็วและถูกที่สุด</strong> แล้วค่อยจูน effort ตัวเลือกที่ซื้อความเร็วด้วยเงินพรีเมียม (fast mode) หรือด้วย token เพิ่ม (โหลด context เต็ม) ผ่าน pillar หนึ่งแต่พังอีก pillar</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Fast mode บนโมเดลระดับบนสุดคือคำตอบของ SLA เข้มๆ สำหรับ traffic ปริมาณมาก"</strong> ไม่ใช่ มันเร็วจริงแต่แพงเกินจนตก pillar cost</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>SLA เขียนเป็น p95, TTFT, uptime เลือก model class ก่อน แล้วจูน <code>effort</code> ใช้ streaming ช่วยความรู้สึก หลีกเลี่ยง fast mode และ full-context สำหรับงานปริมาณมาก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>คุณอยากลดทั้ง latency และต้นทุนของ request โดยยังใช้โมเดลเดิม ต้องตั้งค่าอะไรใน <code>output_config</code>?</p>
+  <ol type="A">
+    <li><code>effort</code></li>
+    <li><code>speed</code></li>
+    <li><code>temperature</code></li>
+    <li><code>thinking</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> <code>effort</code> คือตัวควบคุมความเร็วและต้นทุนภายในโมเดลที่เอกสารระบุ ระดับ low เร็วและถูกสุด <code>speed</code> คือ fast mode ที่คิดราคาพรีเมียม <code>temperature</code> ไม่ใช่ตัวคุมความเร็ว และ thinking ปิดแบบทั่วไปไม่ได้เพราะหลายโมเดลคิดแบบ adaptive ตลอด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>บริษัทขนส่งต้องการแชตบอตตอบ "พัสดุอยู่ไหน" หลายล้านครั้งต่อเดือน เป้าคือตอบต่ำกว่า 1 วินาทีและต้นทุนต่อคำถามต่ำ ควรเริ่มจากอะไร?</p>
+  <ol type="A">
+    <li>Opus 5.5 เปิด fast mode</li>
+    <li>Fable 5.1 แล้วโหลดฐานข้อมูลคำถามทั้งหมดเข้า context ทุก request เพราะ context ใหญ่พอ</li>
+    <li>Sonnet 5.5 แล้วปิด thinking</li>
+    <li>Haiku 5.5 แล้วจูน effort</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> class ที่เร็วและถูกที่สุดตอบทั้ง latency และ cost A ซื้อความเร็วด้วยราคาพรีเมียมบนโมเดลที่แพงอยู่แล้ว B ช้าและแพงทั้งจากโมเดลและ token ที่บวม C การปิด thinking ไม่ใช่ lever ที่เอกสารแนะนำ</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Productivity: นับงานที่เสร็จ ไม่ใช่ token</h3>
+<p><strong>Productivity</strong> นับงานที่เสร็จ ใช้ได้ และผ่านการตรวจ ต่อ agent run หรือต่อ person-hour ส่วน token, call และ turn เป็นแค่ input ตัวอย่าง: agent ที่ใช้ 1 ล้าน token แล้วได้ pull request ที่ถูกต้องพร้อม merge 1 ชิ้น ดีกว่า agent ที่ใช้ 1 แสน token แล้วได้ร่างครึ่งๆ กลางๆ ที่ต้องเขียนใหม่</p>
+<ul>
+  <li>หน่วยนับคือ deliverable: ticket ที่ปิดได้, สรุปที่ถูกรับไปใช้, งานวิเคราะห์ที่ไปจบเป็นเอกสาร สเปรดชีต หรือ deck ที่เสร็จ</li>
+  <li><strong>Task completion rate</strong> เป็นสัญญาณทางอ้อมจากผู้ใช้ ว่างานใช้ได้เลยโดยไม่ต้องทำซ้ำไหม</li>
+  <li><strong>ต่อ person-hour</strong>: analyst ปิดงานได้กี่ชิ้นเมื่อให้ Claude ร่างแล้ว analyst ตรวจ เทียบกับเขียนเองทั้งหมด</li>
+  <li>โมเดลที่ฉลาดกว่ามักใช้ turn และ thinking น้อยกว่า จึงอาจเพิ่ม productivity ได้แม้ตัวเลข token ดูแย่กว่า</li>
+</ul>
+<p>Agentic system มักแลก latency และต้นทุนกับผลงานที่ดีขึ้น การเพิ่ม agent loop จึงคุ้มก็ต่อเมื่อ <strong>เพิ่มงานที่เสร็จมากพอจะจ่ายค่า turn ที่เพิ่ม</strong> ถ้า call เดียวที่ออกแบบดีให้งานที่เสร็จอยู่แล้ว multi-step agent ก็แค่เพิ่ม spend โดยไม่เพิ่ม deliverable</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Productivity = ชิ้นงานที่ใช้ได้ต่อ run หรือต่อชั่วโมงคน agent ที่ซับซ้อนขึ้นต้องพิสูจน์ว่าได้งานเพิ่มคุ้มกับเวลาและเงินที่เพิ่ม</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีมแปลเอกสารใช้ call เดียวแปลคู่มือ ผู้ตรวจรับไปใช้ได้ราว 88% มีคนเสนอเปลี่ยนเป็น agent หลายขั้น (แปล → ตรวจศัพท์ → ขัดเกลา) ควรใช้อะไรตัดสินว่าคุ้มด้าน productivity?</p>
+  <ol type="A">
+    <li>agent ใช้ token รวมน้อยกว่าหรือไม่</li>
+    <li>agent ใช้จำนวน turn มากกว่าหรือไม่ ซึ่งแปลว่างานละเอียดกว่า</li>
+    <li>การเป็น agent ทำให้โปรเจกต์นับเป็น transformation หรือไม่</li>
+    <li>จำนวนเอกสารที่ผู้ตรวจรับไปใช้ได้ต่อ run หรือต่อชั่วโมงผู้ตรวจ เพิ่มขึ้นมากพอจะคุ้มกับ latency และต้นทุนที่เพิ่มหรือไม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> productivity วัดที่งานที่ถูกรับไปใช้ token และ turn เป็น input ไม่ใช่ผลลัพธ์ และการเป็น agent ไม่ได้ทำให้กลายเป็น transformation</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Transformation: งานที่เมื่อก่อนทำไม่ได้</h3>
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ทีมกฎหมายให้ paralegal อ่านและติดแท็กสัญญาหลายพันฉบับต่อเดือน ผู้บริหารวางแผนให้โมเดลติดแท็กแทน แล้วให้ paralegal ดูแค่เคสผิดปกติและไปใช้เวลาเจรจาเงื่อนไข ผู้บริหารกำลังอ้าง pillar ไหน? คำตอบคือ <strong>Transformation</strong> เพราะ workflow และบทบาทของคนถูกจัดใหม่รอบความสามารถใหม่</p>
+</div>
+<ul>
+  <li><strong>Productivity</strong> = กระบวนการเดิม ได้งานเสร็จมากขึ้น</li>
+  <li><strong>Transformation</strong> = ความสามารถใหม่ที่เปลี่ยนรูปร่างของกระบวนการ บทบาทคนย้ายไปทำงานอื่น หรือองค์กรผลิตสิ่งที่ไม่เคยทำได้ เช่น ตรวจสัญญา <em>ทุกฉบับ</em> แทนการสุ่มตรวจ</li>
+</ul>
+<div class="box key"><span class="tag">คำถามทดสอบ</span>
+  <p><strong>"ถ้าเพิ่มคนหรือเวลาให้กระบวนการเดิม จะได้ผลลัพธ์นี้ไหม?"</strong> ถ้าไม่ได้ = transformation ถ้าเป็น workflow เดิมที่เร็วขึ้นด้วยบทบาทเดิม = productivity ถ้าชั่วโมงที่คิดเงินต่อรายการลดลง = cost ถ้าอ้างคำมั่นเรื่อง turnaround = performance SLA</p>
+</div>
+<p>Frontier model class เหมาะกับงาน agent ระยะยาวและปัญหาที่ AI ยังทำไม่ได้อย่างน่าเชื่อถือมาก่อน และเศรษฐศาสตร์ก็เปลี่ยนได้ด้วย agent ที่เคยแพงเกินกว่าจะรัน อาจรันได้ในสเกลใหญ่ จาก pilot กลายเป็น workflow ถาวร</p>
+
+<h3>วัด transformation อย่างไรเมื่อไม่มี baseline</h3>
+<p>เพราะไม่มีตัวเลขเดิมให้เทียบ ต้องสร้างหลักฐานเอง: ทำ <strong>evaluation set ที่ดึงจาก production</strong> ใส่งานยากที่เครื่องมือปัจจุบันทำไม่ได้ และ <strong>กำหนด success criteria ไว้ล่วงหน้า</strong> แล้วรายงาน <strong>pass rate</strong> บนงานที่กระบวนการเดิมทำไม่ได้เลย นั่นคือ metric ของ transformation</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"พนักงานทำงานเดิมเสร็จเร็วขึ้น = transformation"</strong> ไม่ใช่ นั่นคือ productivity</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Transformation คือ workflow หรือ output ใหม่ที่เพิ่มคนก็ทำไม่ได้ พิสูจน์ด้วย eval set จาก production ที่มีงานยากและเกณฑ์กำหนดล่วงหน้า แล้วรายงาน pass rate</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทีม compliance เสนอให้ Claude ตรวจรายการธุรกรรม <em>ทุกรายการ</em> แทนการสุ่มตรวจ 2% แบบเดิม ผู้บริหารขอหลักฐานด้าน transformation ควรเสนออะไร?</p>
+  <ol type="A">
+    <li>ผลสำรวจความพอใจของทีม compliance หลังใช้ระบบ 3 เดือน</li>
+    <li>p95 เวลาที่ใช้ตรวจต่อรายการ</li>
+    <li>ชั่วโมงงานของเจ้าหน้าที่ต่อรายการที่ลดลง</li>
+    <li>Eval set จากธุรกรรมจริง ที่รวมเคสยากซึ่งเครื่องมือเดิมจับไม่ได้ กำหนดเกณฑ์ผ่านไว้ก่อน แล้วรายงาน pass rate</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A วัดความรู้สึกไม่ใช่ผลลัพธ์ B เป็น SLA C เป็นหลักฐานด้าน productivity หรือ cost</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>โรงพยาบาลปรับขั้นตอนรับผู้ป่วยนอก ให้ Claude สรุปประวัติและคัดกรองล่วงหน้า พยาบาลคัดกรองจึงเปลี่ยนไปดูแลเฉพาะเคสเสี่ยงสูงและให้คำปรึกษา การเปลี่ยนนี้อยู่ใน pillar ไหน?</p>
+  <ol type="A">
+    <li>Transformation</li>
+    <li>Cost</li>
+    <li>Productivity</li>
+    <li>Performance SLAs</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> workflow และบทบาทของคนถูกออกแบบใหม่ ไม่ใช่แค่ทำขั้นตอนเดิมเร็วขึ้น (productivity) ไม่ได้ตั้งเป้าลดต้นทุนเป็นหลัก (cost) และไม่ได้พูดถึงตัวเลข SLA</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Develop tests (evaluation)</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Optimizing for cost and intelligence</a></li>
+  <li><a href="https://claude.com/blog/claude-models-explained-choosing-the-best-model-for-your-use-case">Claude blog: Claude models explained</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/batch-processing">Batch processing</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency">Reduce latency</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Choosing a model</a></li>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://claude.com/blog/agent-capabilities-api">Claude blog: Agent capabilities API</a></li>
+</ul>
+</section>

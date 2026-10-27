@@ -1,0 +1,254 @@
+<section class="lesson" id="l-3-8">
+<h2>3.8 Progressive discovery vs. monolithic context: tool search and when to use it</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/tool-search-vs-loading-every-tool-definition-up-front">CertSafari 3.8</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่าการโหลด tool definition ทั้งหมดตั้งแต่แรก (monolithic) เสียอะไรบ้าง ทั้ง token และความแม่นในการเลือก tool</li>
+    <li>เปิดใช้ tool search ใน API ได้ และส่ง request รอบถัดไปให้ถูกกติกา</li>
+    <li>ตั้งค่า <code>ENABLE_TOOL_SEARCH</code> ใน Agent SDK ได้ทั้ง 5 แบบ และรู้ว่าแต่ละค่าทำอะไร</li>
+    <li>เลือกได้ระหว่างโหลดทั้งหมด, tool search, ผสมกับ non-deferred, prompt caching หรือ Agent Skills</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เก็บแค่ "ป้ายบอกทาง" ไว้ใน context</span>
+  <p><strong>Progressive discovery</strong> คือเก็บแค่ทางเข้าเบาๆ ไว้ใน context เช่น tool สำหรับค้นหา หรือชื่อกับคำอธิบายของ Skill แล้วค่อยโหลดของเต็มเมื่อ request นั้นต้องใช้จริง ตรงข้ามกับ <strong>monolithic</strong> ที่ยัดทุกอย่างเข้าไปทุก request เหมือนแบกคู่มือทุกเล่มติดตัวไปทุกที่ แทนที่จะพกแค่สารบัญ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ราคาของการโหลด tool ทั้งก้อน</h3>
+<ul>
+  <li>ตั้งค่าหลาย MCP server พร้อมกัน (เช่น GitHub, Slack, Sentry, Grafana, Splunk) อาจกิน <strong>ราว 55k token</strong> ไปกับนิยาม tool ก่อนจะเริ่มทำงานอะไรเลย เอกสาร Agent SDK ประเมินว่า tool 50 ตัวใช้ราว <strong>10–20K token</strong></li>
+  <li>ความแม่นในการเลือก tool <strong>เริ่มตกเมื่อโหลดพร้อมกันราว 30–50 ตัว</strong> การเพิ่ม server ใหม่จึงทำให้ agent เลือก tool ผิดได้ ทั้งที่ไม่มี tool ตัวไหนถูกแก้เลย</li>
+  <li><strong>Context rot</strong>: ยิ่ง token เยอะ ความแม่นและ recall ยิ่งลด context window ที่ใหญ่ขึ้นแค่ให้ <em>ที่</em> มากขึ้น แต่ไม่ได้แก้ปัญหาเลือก tool ผิด</li>
+</ul>
+<p>นึกภาพพนักงานใหม่ที่ถูกยื่นเมนูเครื่องมือ 200 อย่างให้ดูพร้อมกัน ต่อให้โต๊ะใหญ่พอวางได้หมด ก็ยังหยิบผิดอยู่ดี</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>โหลด tool เยอะ = เสีย token ก่อนเริ่มงาน และเลือก tool ผิดมากขึ้นตั้งแต่ราว 30–50 ตัว window ใหญ่ขึ้นไม่ช่วยเรื่องหลัง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>Agent DevOps ต่อ 6 MCP server รวมนิยาม tool ราว 60k token ตั้งแต่เพิ่ม server ล่าสุด agent เริ่มเรียก tool ผิดตัวบ่อย หัวหน้าทีมเสนอให้ย้ายไปใช้โมเดลที่ context window ใหญ่ขึ้น ข้อเสนอนี้แก้ปัญหาไหม?</p>
+  <ol type="A">
+    <li>แก้ได้ เพราะ tool ทั้งหมดจะมีที่อยู่ใน context เหลือเฟือ</li>
+    <li>ไม่แก้ เพราะ tool ชุดใหญ่ชุดเดิมยังถูกโหลดพร้อมกัน ความแม่นในการเลือกจึงยังตกเหมือนเดิม</li>
+    <li>แก้ได้บางส่วน เพราะ window ใหญ่ทำให้ context rot หายไป</li>
+    <li>ไม่แก้ เพราะโมเดลที่ window ใหญ่ไม่รองรับ MCP</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ปัญหาคือจำนวน tool ที่โมเดลต้องเลือกพร้อมกัน ไม่ใช่ที่ว่าง window ใหญ่ขึ้นไม่ได้ลดจำนวน tool และไม่ได้ทำให้ context rot หาย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ตามแนวทางของ Anthropic ความแม่นในการเลือก tool มักเริ่มตกเมื่อโหลด tool พร้อมกันประมาณกี่ตัว?</p>
+  <ol type="A">
+    <li>30–50 ตัว</li>
+    <li>5–10 ตัว</li>
+    <li>200–300 ตัว</li>
+    <li>มากกว่า 10,000 ตัว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ราว 30–50 ตัวคือช่วงที่การเลือกเริ่มพลาด ส่วน 10,000 คือเพดานจำนวน tool ที่ SDK รองรับในแค็ตตาล็อก</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Tool search ทำงานยังไง</h3>
+<p>Tool search ใน API แทนแค็ตตาล็อกทั้งก้อนด้วยขั้นค้นหา ปกติลดพื้นที่ของนิยาม tool ได้ <strong>มากกว่า 85%</strong> เพราะโหลดเฉพาะ 3–5 tool ที่ request นั้นต้องใช้</p>
+<div class="table-wrap"><table>
+  <tr><th>Variant</th><th>Claude เขียนอะไร</th></tr>
+  <tr><td><code>tool_search_tool_regex_20251119</code></td><td>regex pattern</td></tr>
+  <tr><td><code>tool_search_tool_bm25_20251119</code></td><td>query เป็นภาษาธรรมชาติ</td></tr>
+</table></div>
+<p>ทั้งสองแบบค้นจาก <strong>ชื่อ tool, คำอธิบาย, ชื่อ argument และคำอธิบาย argument</strong></p>
+
+<h3>เปิดใช้งาน</h3>
+<p>ใส่ variant ของ search tool ลงใน <code>tools</code> แล้วตั้ง <code>defer_loading: true</code> ให้ tool ที่ไม่อยากให้เข้า context ตั้งแต่แรก</p>
+<pre><code>"tools": [
+  {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+  {"name": "get_ticket", "description": "...", "input_schema": {...}},
+  {"name": "export_audit_log", "description": "...", "input_schema": {...},
+   "defer_loading": true}
+]</code></pre>
+
+<h3>เกิดอะไรขึ้นระหว่างรัน</h3>
+<ol class="steps">
+  <li>ตอนแรก context มีแค่ search tool กับ tool ที่ไม่ได้ defer</li>
+  <li>Claude เรียก search ซึ่ง <strong>รันฝั่ง server</strong> แล้วคืนผลเป็น block <code>tool_reference</code> (ค่าเริ่มต้น 5 รายการ ปรับ <code>limit</code> ได้ตั้งแต่ 1 ถึง 10,000)</li>
+  <li>API ขยาย reference เหล่านั้นเป็นนิยามเต็มให้เอง</li>
+  <li>Claude เรียก tool ที่เพิ่งค้นเจอ แล้วโค้ดของเรารันและส่งผลกลับ</li>
+</ol>
+
+<h3>กติกาของบทสนทนา</h3>
+<ul>
+  <li>ส่ง content ของ assistant กลับไป <strong>แบบไม่แก้</strong> รวมถึง block <code>server_tool_use</code> และ <code>tool_search_tool_result</code></li>
+  <li><strong>ห้ามส่ง <code>tool_result</code> ให้ ID ที่ขึ้นต้นด้วย <code>srvtoolu_</code></strong> เพราะเป็น server tool API จะปฏิเสธ</li>
+  <li>tool ที่ค้นเจอแล้วเรียก ให้ส่ง <code>tool_result</code> ปกติ</li>
+  <li>ถ้าค้นไม่เจอ จะได้ array <code>tool_references</code> ว่าง ไม่ใช่ error</li>
+  <li>tool ที่ค้นเจอแล้วยังใช้ได้ใน turn ต่อๆ ไป</li>
+  <li>tool ที่ defer ไม่อยู่ใน prefix ของ system prompt ดังนั้น <strong>prompt caching ยังทำงานได้ปกติ</strong></li>
+  <li>ต้องมี tool ที่ไม่ defer อย่างน้อยหนึ่งตัว (ปกติคือ search tool) และ <strong>ห้าม defer ตัว search tool เอง</strong></li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ค้นเจอแล้ว ก็ตัด tool ที่ defer ออกจาก <code>tools</code> ใน request ถัดไปได้"</strong> ไม่ได้ tool ที่ defer ยังต้องส่งไปใน array <code>tools</code> ทุก request <code>defer_loading</code> คุมแค่ว่าอะไรเข้า context ไม่ได้คุมว่าอะไรถูกส่งไป</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เพิ่ม search tool + <code>defer_loading: true</code> ให้หาง search รันฝั่ง server คืน <code>tool_reference</code> ส่ง content เดิมกลับไม่แก้ ไม่ตอบ <code>srvtoolu_</code> และส่ง <code>tools</code> ครบทุกครั้ง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>property ไหนใน tool definition ที่ทำให้ tool นั้นไม่เข้า context จนกว่าจะถูกค้นเจอ?</p>
+  <ol type="A">
+    <li><code>cache_control</code></li>
+    <li><code>defer_loading</code></li>
+    <li><code>strict</code></li>
+    <li><code>lazy_load</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>cache_control</code> เกี่ยวกับ prompt caching, <code>strict</code> เกี่ยวกับการบังคับ schema ส่วน <code>lazy_load</code> ไม่มีอยู่จริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ใน turn ที่แล้ว Claude เรียก tool search (ID <code>srvtoolu_01A</code>) ค้นเจอ <code>refund_payment</code> แล้วเรียก <code>refund_payment</code> (ID <code>toolu_01B</code>) โค้ดของคุณรัน refund เสร็จแล้ว request ถัดไปต้องทำยังไง?</p>
+  <ol type="A">
+    <li>ส่ง <code>tool_result</code> ทั้งให้ <code>srvtoolu_01A</code> และ <code>toolu_01B</code></li>
+    <li>ส่ง content ของ assistant กลับแบบไม่แก้, ส่ง <code>tool_result</code> ให้ <code>toolu_01B</code> เท่านั้น และส่ง <code>tools</code> ครบรวม tool ที่ defer</li>
+    <li>ตัด block <code>server_tool_use</code> ออกเพื่อประหยัด token แล้วส่ง <code>tool_result</code> ให้ <code>toolu_01B</code></li>
+    <li>ส่ง <code>tools</code> เหลือแค่ search tool กับ <code>refund_payment</code> เพราะตัวอื่นไม่ได้ใช้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A ผิดเพราะ API ปฏิเสธ result ของ <code>srvtoolu_</code> C ผิดเพราะต้องส่ง content เดิมครบ D ผิดเพราะต้องส่ง tool ที่ defer ไว้ทุกครั้ง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ENABLE_TOOL_SEARCH ใน Agent SDK</h3>
+<p>ใน Agent SDK ตั้งผ่าน option <code>env</code>:</p>
+<pre><code>options = ClaudeAgentOptions(
+    env={"ENABLE_TOOL_SEARCH": "auto:5"},   # เปิดเมื่อนิยามที่ defer ได้ถึง 5% ของ window
+)</code></pre>
+<div class="table-wrap"><table>
+  <tr><th>ค่า</th><th>พฤติกรรม</th></tr>
+  <tr><td>(ไม่ตั้ง)</td><td>เปิด search และ defer นิยาม แต่จะถอยไปโหลดทั้งหมดตั้งแต่แรกถ้าใช้โมเดลรุ่นเก่า, ตั้ง <code>ANTHROPIC_BASE_URL</code> ที่ไม่ใช่ first-party หรือใช้ Microsoft Foundry บน Azure</td></tr>
+  <tr><td><code>true</code></td><td>บังคับเปิด search แม้ base URL ไม่ใช่ first-party ถ้า proxy ไม่รองรับ <code>tool_reference</code> request จะล้ม</td></tr>
+  <tr><td><code>auto</code></td><td>เปิดเฉพาะเมื่อนิยามที่ defer ได้รวมแล้วถึง <strong>10% ของ context window</strong> ถ้าไม่ถึงก็โหลดทั้งหมดตั้งแต่แรก</td></tr>
+  <tr><td><code>auto:N</code></td><td>เหมือน <code>auto</code> แต่กำหนดเกณฑ์เอง เช่น <code>auto:5</code> = 5%</td></tr>
+  <tr><td><code>false</code></td><td>ปิด โหลดนิยามทั้งหมดทุก turn</td></tr>
+</table></div>
+<ul>
+  <li>บน <strong>Opus 4.5, Sonnet 4.5, Haiku 4.5 และรุ่นหลังจากนั้น</strong> search เปิดเป็นค่าเริ่มต้น</li>
+  <li>SDK รองรับแค็ตตาล็อกได้ถึง <strong>10,000 tool</strong> และคืน <strong>5 อันดับแรก</strong> ต่อการค้นหนึ่งครั้งเป็นค่าเริ่มต้น</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง <code>auto</code> แล้วจะ defer ให้เสมอ"</strong> ไม่ใช่ ถ้านิยามรวมยังไม่ถึงเกณฑ์ (10% หรือ N%) ทุก tool จะถูกโหลดตั้งแต่แรกเหมือนปิด search</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ไม่ตั้ง = เปิดแต่ถอยได้, <code>true</code> = บังคับเปิด (เสี่ยงพังบน proxy), <code>auto</code>/<code>auto:N</code> = เปิดเมื่อถึงเกณฑ์, <code>false</code> = ปิด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับค่า <code>ENABLE_TOOL_SEARCH</code> (ไม่ตั้ง / <code>true</code> / <code>auto</code> / <code>auto:3</code> / <code>false</code>):</p>
+  <ol>
+    <li>ทีมใช้ LLM gateway ภายในเป็น base URL และยืนยันแล้วว่า gateway ส่งต่อ <code>tool_reference</code> ได้ อยากให้ search ทำงานแน่ๆ</li>
+    <li>อยากให้ search เปิดก็ต่อเมื่อนิยามที่ defer ได้ใหญ่ถึง 3% ของ window</li>
+    <li>อยากให้โหลดทุก tool ทุก turn เสมอเพื่อ debug</li>
+    <li>ใช้ API ของ Anthropic ตรงกับ Sonnet 4.5 และพอใจกับพฤติกรรมมาตรฐาน</li>
+    <li>อยากให้ search ทำงานเมื่อนิยามถึงเกณฑ์มาตรฐาน 10%</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-true, 2-auto:3, 3-false, 4-ไม่ตั้ง, 5-auto</strong> ข้อ 1 ต้องบังคับเพราะ base URL ไม่ใช่ first-party (ค่าเริ่มต้นจะถอยไปโหลดทั้งหมด) และใช้ได้เพราะ gateway รองรับ <code>tool_reference</code></p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เลือกกลยุทธ์ให้ตรงกับชุด tool</h3>
+<p>Tool search แลก <strong>latency เพิ่มหนึ่งรอบค้นหา</strong> กับ context พื้นฐานที่เล็กลง โดยทั่วไปคุ้มเมื่อมีราว <strong>20 tool ขึ้นไป และส่วนใหญ่ไม่ได้ใช้ใน turn นั้นๆ</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>สถานการณ์</th><th>กลยุทธ์</th></tr>
+  <tr><td>tool ไม่กี่ตัว และใช้เกือบทุกตัวในเกือบทุก request</td><td>โหลดทั้งหมดตั้งแต่แรก</td></tr>
+  <tr><td>ราว 20+ tool ส่วนใหญ่ว่างในแต่ละ turn</td><td>tool search + <code>defer_loading</code> กับหางยาว</td></tr>
+  <tr><td>แค็ตตาล็อกใหญ่ แต่มีไม่กี่ตัวที่ใช้หนัก</td><td>tool search โดยเก็บ 3–5 ตัวที่ใช้บ่อยสุดไว้แบบไม่ defer</td></tr>
+  <tr><td>ชุด tool ใหญ่ที่คงที่ ใช้ซ้ำใน request จำนวนมาก</td><td>prompt caching (ใช้เดี่ยวๆ หรือคู่กับ search)</td></tr>
+</table></div>
+<ul>
+  <li><strong>Prompt caching</strong> ลด <em>ค่าใช้จ่าย</em> ของนิยามที่ส่งซ้ำ แต่ <strong>token ยังอยู่ใน context ครบ</strong> จึงไม่แก้เรื่องเลือก tool ผิดหรือ context rot</li>
+  <li><strong>นั่งย่อคำอธิบาย tool ด้วยมือ</strong> ช่วยได้น้อย และอาจทำให้ search จับคู่แย่ลง เพราะ search ใช้คำอธิบายเป็นข้อมูลค้น</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิด prompt caching แล้วปัญหา context บวมก็หาย"</strong> ไม่ใช่ caching ทำให้ถูกลง แต่นิยามยังกินที่และยังทำให้เลือก tool พลาดเท่าเดิม</p>
+  <p><strong>"Defer ทุกตัวดีที่สุดเสมอ"</strong> ไม่ใช่ tool ที่ใช้ตลอดควรโหลดไว้ ไม่อย่างนั้นต้องเสียรอบค้นหาทุกครั้งโดยไม่ได้อะไร</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ชุดเล็กใช้บ่อย = โหลดหมด, 20+ ตัวที่ส่วนใหญ่ว่าง = search, แค็ตตาล็อกใหญ่มีตัวเด่น = search + เก็บตัวเด่นไว้, ชุดใหญ่คงที่ = caching (ลดเงิน ไม่ลด token)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่ชุด tool กับกลยุทธ์ (a) โหลดทั้งหมด (b) search + defer หางยาว (c) search + เก็บตัวที่ใช้หนักไว้แบบไม่ defer (d) prompt caching:</p>
+  <ol>
+    <li>บอตร้านกาแฟมี 5 tool (เมนู, สั่ง, ชำระเงิน, สถานะ, ยกเลิก) ใช้ครบแทบทุกออเดอร์</li>
+    <li>ผู้ช่วยฝ่ายขายมี 45 tool ใน CRM แต่ละคำขอใช้แค่ 1–2 ตัว ไม่มีตัวไหนเด่นเป็นพิเศษ</li>
+    <li>แพลตฟอร์มคลาวด์มี 500 tool แต่ 90% ของคำขอใช้ <code>list_instances</code>, <code>get_logs</code>, <code>restart_service</code></li>
+    <li>ระบบ batch ส่ง request หลายแสนครั้งด้วยชุด tool ใหญ่ชุดเดิมทุกครั้ง อยากลดค่าใช้จ่ายจากนิยามที่ซ้ำ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-d</strong> ข้อ 4 เป้าหมายคือลดค่าใช้จ่ายจากส่วนที่ซ้ำ ซึ่งเป็นงานของ caching (จะใช้คู่กับ search ด้วยก็ได้)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>แอปจดบันทึกสุขภาพมี tool 8 ตัว นิยามรวมราว 1,500 token และเกือบทุก request ใช้หลายตัวในนี้ ควรตั้งค่ายังไง?</p>
+  <ol type="A">
+    <li>โหลดทั้ง 8 ตัวตั้งแต่แรก</li>
+    <li>เปิด tool search และ defer ทั้ง 8 ตัว</li>
+    <li>เปิด tool search แบบ regex และ defer 5 ตัว</li>
+    <li>ย้าย tool ทั้งหมดไปเป็น Agent Skills</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ไม่มีปัญหา context ให้แก้ การเพิ่มรอบค้นหามีแต่เพิ่ม latency</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>Agent ปฏิบัติการต่อ MCP server 5 ตัว รวมนิยามราว 55k token และเริ่มเลือก tool ผิด ข้อไหนแก้ตรงจุดที่สุด?</p>
+  <ol type="A">
+    <li>เปิด tool search ให้นิยามส่วนใหญ่ถูก defer</li>
+    <li>ย้ายไปโมเดลที่มี context window ใหญ่กว่า</li>
+    <li>ให้ทีมเขียนคำอธิบาย tool ใหม่ให้สั้นลงครึ่งหนึ่ง</li>
+    <li>เปิด prompt caching กับ tools ทั้งหมด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> เป็นทางเดียวที่เอานิยามออกจาก context จริง B, C และ D ยังทิ้ง tool ชุดใหญ่ไว้ใน context เท่าเดิม (C ยังอาจทำให้ search แย่ลงอีก)</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Agent Skills และการโหลดแบบผสม</h3>
+<p>Tool search defer <em>schema ของ tool</em> แต่ <strong>Agent Skills</strong> defer <em>ความรู้วิธีทำงาน</em> เช่น workflow, schema ของข้อมูล, สคริปต์ โหลดเป็น 3 ระดับ:</p>
+<ol class="steps">
+  <li><strong>Metadata</strong> (ชื่อ + คำอธิบาย) โหลดตอนเริ่ม ราว <strong>100 token ต่อ Skill</strong></li>
+  <li><strong>เนื้อหา SKILL.md</strong> โหลดเมื่อ Skill ถูก trigger</li>
+  <li><strong>ไฟล์ที่แนบมา</strong> โหลดเมื่อ Claude อ่านไฟล์นั้นจริง และถ้าเป็นสคริปต์ จะมีแค่ <em>output</em> ที่เข้า context ไม่ใช่ตัวโค้ด</li>
+</ol>
+<ul>
+  <li>Skills ต้องมี <strong>code execution environment</strong> ส่วน tool search ต้องใช้โมเดลที่รองรับ (<strong>Claude Opus 4.1 และรุ่นก่อนหน้าไม่รองรับ</strong>)</li>
+  <li><strong>แบบผสม:</strong> Claude Code โหลด <code>CLAUDE.md</code> ไว้ตั้งแต่แรก แล้วใช้ <code>glob</code> กับ <code>grep</code> หาไฟล์อื่นตอนต้องใช้ การสำรวจแบบนี้ช้ากว่าการมีข้อมูลเตรียมไว้ และอาจเปลือง context ไปกับทางตัน</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tool search = defer schema, Skills = defer ขั้นตอน/ความรู้ (100 token ต่อ Skill ตอนเริ่ม) ของที่ใช้ตลอดโหลดไว้ ของที่เหลือค่อยหา</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>Agent ฝ่ายบัญชีมีขั้นตอนปิดงบเฉพาะกรณีราว 80 แบบ (แต่ละแบบมีขั้นตอนหลายหน้าและสคริปต์ประกอบ) แต่ละคำขอใช้แค่ 1–2 แบบ ตอนนี้ใส่ทุกขั้นตอนไว้ใน system prompt จนบวม ควรทำยังไง?</p>
+  <ol type="A">
+    <li>แพ็กแต่ละขั้นตอนเป็น Agent Skill</li>
+    <li>เปิด tool search แล้วใส่ <code>defer_loading</code></li>
+    <li>เปิด prompt caching กับ system prompt</li>
+    <li>ย้ายไปโมเดลที่ window ใหญ่กว่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> สิ่งที่บวมคือ "วิธีทำงาน" ไม่ใช่ schema ของ tool Skills โหลดแค่ metadata ไว้ก่อนแล้วค่อยดึงเนื้อหาเมื่อใช้ ส่วน C กับ D ยังทิ้ง token ไว้ใน context ครบ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool">Claude Docs: Tool search tool</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/tool-search">Claude Agent SDK: Tool search</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/context-windows">Claude Docs: Context windows</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/manage-tool-context">Claude Docs: Manage tool context</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Claude Docs: Agent Skills overview</a></li>
+  <li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic Engineering: Effective context engineering for AI agents</a></li>
+</ul>
+</section>

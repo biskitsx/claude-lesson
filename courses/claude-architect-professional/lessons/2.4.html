@@ -1,0 +1,268 @@
+<section class="lesson" id="l-2-4">
+<h2>2.4 Context window budgeting: what counts and how to measure it</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/context-window-budgeting-what-counts-and-how-to-measure-it">CertSafari 2.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>นับทุกส่วนของ request รวมเป็นยอดเดียว และรู้ว่าส่วนไหนนับใน context window บ้าง</li>
+    <li>ทำนายได้ว่า API จะทำอะไรเมื่อ <em>input อย่างเดียว</em> เกิน window กับเมื่อ <em>input + max_tokens</em> เกิน window</li>
+    <li>อธิบายได้ว่า thinking block จากรอบก่อนๆ กระทบ context และค่าใช้จ่ายอย่างไร ซึ่งต่างกันตามรุ่นโมเดล</li>
+    <li>วัด context ได้ทั้งก่อนส่ง (token counting) และหลังได้ผล (usage)</li>
+    <li>จับคู่ต้นทุนของ agent ที่ใช้ tool เยอะ กับเทคนิคที่ลดต้นทุนนั้นได้ตรงจุด</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: งบก้อนเดียว ใช้ร่วมกันทุกอย่าง</span>
+  <p><strong>Context window</strong> คือจำนวน token สูงสุดที่โมเดลรับได้ในหนึ่ง request ให้คิดว่าเป็น <strong>งบประมาณก้อนเดียว</strong> ที่ system prompt, tool definitions, ประวัติข้อความ (รวม tool result) และ output ของรอบนี้ (รวม thinking) ต้องหารกันใช้ Caching ทำให้ token ที่ cache ไว้ <em>ถูกลง</em> แต่ <em>ยังกินพื้นที่</em> ใน window เท่าเดิม</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. อะไรบ้างที่อยู่ใน window</h3>
+<p>เปรียบเหมือนกระเป๋าเดินทางใบเดียวที่มีน้ำหนักจำกัด ของทุกชิ้นนับน้ำหนักหมด ไม่ว่าจะซื้อมาแพงหรือได้ส่วนลด (cache) ก็หนักเท่ากัน</p>
+<div class="table-wrap"><table>
+  <tr><th>ส่วนของ request</th><th>นับไหม</th><th>หมายเหตุ</th></tr>
+  <tr><td>System prompt</td><td>นับ</td><td>ส่งไปทุก request</td></tr>
+  <tr><td>Tool definitions</td><td>นับ</td><td>อยู่ในทุกรอบ แม้รอบนั้นจะไม่ได้เรียก tool เลย</td></tr>
+  <tr><td>Messages (รวม tool result, รูปภาพ, เอกสาร)</td><td>นับ</td><td>โตขึ้นทุกรอบ เพราะรอบก่อนๆ ถูกส่งไปเต็มๆ</td></tr>
+  <tr><td>Output รวม extended thinking</td><td>นับ</td><td>ถูกจำกัดด้วย <code>max_tokens</code> สูงสุด 128k ในรุ่นที่มี window 1M</td></tr>
+  <tr><td>Cached prefix (<code>cache_read_input_tokens</code>, <code>cache_creation_input_tokens</code>)</td><td>นับ</td><td>cache เปลี่ยนแค่ราคา ไม่ได้เปลี่ยนว่านับหรือไม่</td></tr>
+</table></div>
+
+<h3>ขนาด window ของแต่ละรุ่น</h3>
+<ul>
+  <li><strong>Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1</strong> และอีกหลายรุ่น: window <strong>1M token</strong> output สูงสุด <strong>128k ต่อ request</strong></li>
+  <li><strong>Sonnet 4.5</strong> (deprecated แล้ว): window <strong>200k</strong></li>
+  <li>รุ่น 1M ใช้ window เต็มได้เป็นค่าเริ่มต้นในราคามาตรฐาน ยกเว้น <strong>Haiku 5.5</strong> ที่คิดราคาสูงขึ้นเมื่อ prompt เกิน 100,000 token</li>
+  <li>ใหญ่ไม่ได้แปลว่าดีเสมอ ความแม่นและการดึงข้อมูลกลับมาใช้ (recall) แย่ลงเมื่อ context ยาวขึ้น (ดูบท 5.2) จึงควรวางงบให้ต่ำกว่าเพดานไว้เยอะๆ</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ส่วนที่ cache ไว้แล้วไม่นับใน context window"</strong> ผิด caching เปลี่ยนแค่ราคา token ยังนั่งอยู่ใน window ครบทุกตัว</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ทุกอย่างนับ: system, tools (แม้ไม่ได้เรียก), ประวัติทั้งหมด, output และ thinking รวมถึงส่วนที่ cache ไว้ window 1M ไม่ได้แปลว่าควรใช้ให้เต็ม</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>agent วิเคราะห์สัญญา cache system prompt + tool catalogue ไว้ 25,000 token รอบถัดมา usage แสดง <code>cache_read_input_tokens</code> = 25,000 และ <code>input_tokens</code> = 3,000 โดยรอบนี้ไม่มีการเรียก tool เลย input ของรอบนี้ใช้ context window ไปเท่าไร?</p>
+  <ol type="A">
+    <li>5,500 เพราะส่วนที่ cache นับแค่ 10% ตามราคา hit</li>
+    <li>3,000 + system prompt เท่านั้น เพราะไม่ได้เรียก tool รอบนี้ tool definitions จึงไม่นับ</li>
+    <li>25,000 เพราะ <code>input_tokens</code> เป็นส่วนหนึ่งของ cache read อยู่แล้ว</li>
+    <li>28,000</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ทั้งส่วน cache และไม่ cache นับใน window เต็มจำนวน (ราคาถูกลงไม่ได้แปลว่ากินที่น้อยลง) สองช่องนี้แยกกัน ไม่ซ้อนกัน และ tool definitions นับทุกรอบแม้ไม่มีการเรียก tool</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ชนเพดานแล้วเกิดอะไรขึ้น</h3>
+<p>มี 2 กรณีที่ต้องแยกให้ออก:</p>
+<div class="table-wrap"><table>
+  <tr><th>กรณี</th><th>ผลลัพธ์</th></tr>
+  <tr><td><strong>Input อย่างเดียวก็เกิน window แล้ว</strong></td><td>ทุกรุ่นตอบ <code>400 invalid_request_error</code> (ข้อความทำนอง "prompt is too long") ไม่เริ่ม generate เลย</td></tr>
+  <tr><td><strong>Input พอดี แต่ input + <code>max_tokens</code> เกิน</strong> บน Claude 4.5 ขึ้นไป</td><td>รับ request ปกติ ถ้า generate จนชนเพดานจริง จะหยุดพร้อม <code>stop_reason: "model_context_window_exceeded"</code></td></tr>
+  <tr><td>กรณีเดียวกันบนรุ่นก่อน 4.5</td><td>ได้ validation error เว้นแต่จะ opt-in ด้วย beta header <code>model-context-window-exceeded-2025-08-26</code></td></tr>
+</table></div>
+<p>อีกเรื่องที่ต้องจำ: <strong>API เปล่าๆ ไม่เคยทิ้งรอบเก่าให้เรา</strong> และไม่ขยาย window ชั่วคราวให้ด้วย แอปแชตอย่าง claude.ai อาจตัดประวัติเก่าแบบเข้าก่อนออกก่อน (FIFO) ให้ แต่ถ้าเรียก API ตรง ประวัติทุกรอบจะถูกส่งไปเต็มๆ แอปของเราต้องจัดการการโตของ context เอง</p>
+<p>และต้อง <strong>เช็ก <code>stop_reason</code> ทุกครั้ง</strong> ถ้าโค้ดไม่สนใจค่านี้ คำตอบที่ถูกตัดกลางคันจะดูเหมือนคำตอบที่จบสมบูรณ์</p>
+<pre><code>resp = client.messages.create(...)
+if resp.stop_reason == "model_context_window_exceeded":
+    # คำตอบไม่ครบ: ย่อประวัติ/ตัด tool result เก่า แล้วลองใหม่
+    ...
+elif resp.stop_reason == "max_tokens":
+    # ชน max_tokens ที่เราตั้งเอง
+    ...</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ถ้า input + max_tokens เกิน window ก็โดน 400 เหมือน input ใหญ่เกิน"</strong> ไม่ใช่ บนรุ่นใหม่ เฉพาะ input ที่ใหญ่เกินเท่านั้นที่ถูกปฏิเสธล่วงหน้า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Input เกิน = 400 ทันที. Input พอดีแต่บวก max_tokens เกิน = รุ่น 4.5+ รับ แล้วหยุดด้วย <code>model_context_window_exceeded</code> ถ้าชนจริง API ไม่ตัดประวัติให้ ต้องเช็ก stop_reason เอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>บน Sonnet 5.5 คุณส่ง input ขนาด 900k token พร้อม <code>max_tokens</code> = 128k (รวมเกิน 1M) จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>โดน 400 ทันทีก่อนเริ่ม generate</li>
+    <li>API ลด <code>max_tokens</code> ให้เหลือ 100k เองแล้วจบด้วย <code>end_turn</code></li>
+    <li>รับ request ถ้า output ยาวจนชนเพดานจะหยุดด้วย <code>model_context_window_exceeded</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> input 900k ยังอยู่ใน window รุ่น 4.5 ขึ้นไปรับ request และหยุดเมื่อชนเพดานจริงเท่านั้น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>สตาร์ทอัปเคยต้นแบบผู้ช่วยด้วยการคุยใน claude.ai แล้วย้ายมาเขียนแอปที่เรียก Messages API ตรง โดยเชื่อว่าบทสนทนายาวๆ จะถูกตัดรอบเก่าออกให้เองเหมือนเดิม จริงๆ แล้วเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>ทุกรอบก่อนหน้าถูกส่งไปเต็มๆ แอปต้องจัดการการโตของ context เอง</li>
+    <li>SDK จะตัดประวัติให้เองถ้าตั้ง <code>max_tokens</code> ไว้ต่ำ</li>
+    <li>API ตัดรอบเก่าแบบ FIFO เหมือน claude.ai</li>
+    <li>รอบที่ cache ไว้แล้วไม่ทำให้ window โตขึ้น จึงไม่ต้องห่วงเรื่องนี้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> การตัดประวัติเป็นพฤติกรรมของแอปแชต ไม่ใช่ของ API (C) <code>max_tokens</code> คุมแค่ความยาว output ไม่ได้ตัด input (B) และส่วนที่ cache ก็ยังนับใน window (D) การจัดการ context เป็นหน้าที่ของแอปเรา</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบสรุปเอกสารบน Opus 5.5 ส่ง input ที่ยังอยู่ใน window แต่ input + <code>max_tokens</code> เกิน window คาดว่าจะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>ได้ 400 ก่อนเริ่ม generate</li>
+    <li>request เข้าคิวรอจนกว่าจะมี window ว่างพอ</li>
+    <li>ต้องใส่ beta header ก่อนเสมอ ไม่งั้นได้ validation error</li>
+    <li>รับ request และถ้าชนเพดานระหว่าง generate จะหยุดด้วย <code>model_context_window_exceeded</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> 400 ล่วงหน้าเกิดเฉพาะเมื่อ input อย่างเดียวเกิน (A) ไม่มีระบบคิวแบบ B และ beta header จำเป็นแค่กับรุ่นก่อน 4.5 ไม่ใช่ Opus 5.5 (C)</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Thinking token ข้ามรอบ</h3>
+<p>Thinking นับใน <code>max_tokens</code> คิดเงินเป็น output และนับใน rate limit ด้วย ถ้าใช้ adaptive thinking ปริมาณจะแตกต่างกันไปทุก request คำถามสำคัญคือ thinking block ของรอบ <em>ก่อนๆ</em> ที่เราส่งกลับไปพร้อมประวัติ เกิดอะไรขึ้นกับมัน?</p>
+<div class="table-wrap"><table>
+  <tr><th>รุ่น</th><th>thinking block รอบก่อน</th><th>ผลต่อ window/บิล</th></tr>
+  <tr><td>Opus 4.5 ขึ้นไป, Sonnet 4.6 ขึ้นไป, Haiku 5.5, Fable, Mythos</td><td><strong>เก็บไว้</strong> เป็นค่าเริ่มต้น</td><td>นับใน window และคิดเงินเป็น input ใน request ถัดๆ ไป</td></tr>
+  <tr><td>Opus/Sonnet รุ่นก่อนหน้านั้น, Haiku ถึง 4.5</td><td><strong>ถูกตัดทิ้ง</strong> อัตโนมัติเมื่อส่งกลับไป</td><td>ไม่นับ และเราไม่ต้องตัดเอง</td></tr>
+</table></div>
+<p><strong>จ่ายสองต่อ</strong>: บนรุ่นที่เก็บ thinking ไว้ block หนึ่งถูกคิดเงินเป็น output ตอนที่สร้าง แล้วถูกคิดเงินเป็น input <em>อีกทุกครั้ง</em> ที่ส่งกลับไปในรอบถัดๆ ไป ในเซสชันยาวๆ (เช่น 40 รอบ) ยอดนี้พอกพูนเร็วมาก ฟีเจอร์ <strong>thinking block clearing</strong> (อยู่ในบท context editing) ปรับค่าเริ่มต้นนี้ได้ทั้งสองทาง</p>
+
+<h3>กฎตอนใช้ tool</h3>
+<p>เมื่อส่ง tool result กลับไป <strong>ต้องแนบ thinking block ของ assistant turn นั้นไปด้วยแบบครบ ไม่แก้ไข และมี signature</strong> นี่เป็นกรณีเดียวที่บังคับให้ส่ง thinking กลับ API จะตรวจ signature และ error ถ้า block ถูกแก้ พอจบรอบ tool แล้วเริ่ม user turn ใหม่ block นั้นไม่จำเป็นต้องอยู่ใน context อีก</p>
+
+<h3>Context awareness</h3>
+<ul>
+  <li><strong>รุ่นที่มี</strong>: Sonnet 5, Sonnet 4.6, Sonnet 4.5, Haiku 4.5 API จะใส่ขนาด window ทั้งหมดไว้ใน tag <code>&lt;budget:token_budget&gt;</code> และส่งคำเตือนว่าเหลือพื้นที่เท่าไรหลังการเรียก tool แต่ละครั้ง</li>
+  <li><strong>รุ่นที่ไม่มี</strong>: Opus 4.7 ขึ้นไป, Sonnet 5.5, Haiku 5.5, Fable, Mythos ถ้าต้องการให้โมเดลรู้งบ ให้ตั้งงบชัดๆ ผ่าน <strong>task budgets</strong> (beta)</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>รุ่นใหม่เก็บ thinking เก่าไว้ = กิน window และโดนคิดเงินเป็น input ซ้ำทุกรอบ รุ่นเก่าตัดทิ้งให้เอง ตอนส่ง tool result ต้องแนบ thinking block เดิมแบบไม่แก้ไขพร้อม signature เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมย้าย agent จาก Sonnet 4.5 ไปเป็น Opus 5.5 โดยไม่แก้โค้ด client ส่ง thinking block กลับไปกับประวัติทุกรอบเหมือนเดิม แล้วพบว่า input token ต่อรอบโตเร็วกว่าเดิมมาก สาเหตุน่าจะเป็นอะไร?</p>
+  <ol type="A">
+    <li>thinking เก่าถูกคิดเงินเป็น output ซ้ำทุกรอบ</li>
+    <li>Opus 5.5 ใส่ tool definitions ซ้ำเพิ่มอีกหนึ่งชุดในประวัติทุกรอบ</li>
+    <li>รุ่นใหม่เก็บ thinking block รอบก่อนไว้เป็นค่าเริ่มต้น จึงนับใน window และคิดเป็น input ซ้ำ ขณะที่รุ่นเดิมตัดทิ้งให้</li>
+    <li>signature ของ thinking block มีขนาดใหญ่กว่าตัว thinking หลายเท่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Opus 4.5 ขึ้นไปเก็บ thinking เก่า ส่วน Sonnet 4.5 อยู่ในกลุ่มที่ถูกตัดทิ้ง (Sonnet ที่เก็บต้อง 4.6 ขึ้นไป) A ผิดเพราะ thinking เก่าถูกคิดเป็น input ไม่ใช่ output ส่วน B และ D ไม่มีพฤติกรรมแบบนั้น</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. วัด token ก่อนและหลัง request</h3>
+<ul>
+  <li><strong>ก่อนส่ง</strong>: ใช้ token counting endpoint ซึ่งรับ input โครงสร้างเดียวกับ Messages request (system, tools, รูป, PDF) แล้วคืนจำนวน input token โดยไม่รันโมเดล</li>
+  <li><strong>หลังส่ง</strong>: ดูจาก <code>usage</code> ใน response ซึ่งเป็นตัวเลขจริง</li>
+</ul>
+<pre><code>import anthropic
+
+client = anthropic.Anthropic()
+count = client.messages.count_tokens(
+    model="claude-opus-5-5",
+    system="คุณคือผู้ช่วยตอบคำถามเรื่องภาษี",
+    messages=[{"role": "user", "content": "สวัสดี"}],
+)
+print(count.input_tokens)   # เช่น 21</code></pre>
+
+<div class="box key"><span class="tag">ข้อเท็จจริงสำคัญ</span>
+  <p>เมื่อใช้ caching input จะแตกเป็น 3 ช่อง: <code>input_tokens</code>, <code>cache_read_input_tokens</code>, <code>cache_creation_input_tokens</code> <strong>ทั้งสามนับใน window</strong> dashboard ที่รวมแค่ <code>input_tokens</code> จะรายงานต่ำกว่าจริงมาก</p>
+</div>
+<pre><code>u = resp.usage
+total_input = (u.input_tokens
+               + u.cache_read_input_tokens
+               + u.cache_creation_input_tokens)</code></pre>
+
+<h3>ข้อจำกัดของการนับล่วงหน้า</h3>
+<ul>
+  <li>ตอบ <code>invalid_request_error</code> ถ้า request มี <strong>server tool</strong> (เช่น web search, code execution), <strong>MCP connector</strong> หรือรูป/เอกสารที่อ้างผ่าน <strong>URL หรือ file source</strong> ให้ส่งรูปและ PDF แบบ base64 แทน ส่วน request ที่ใช้ server tool ให้อ่าน <code>usage</code> จาก response จริง</li>
+  <li>เป็นค่าประมาณที่ <strong>ไม่มี logic ของ caching</strong> ใส่ <code>cache_control</code> ได้แต่ไม่มีผลอะไร</li>
+  <li>ใช้ tokenizer ของรุ่นที่ระบุ Fable และ Mythos ใช้ tokenizer ที่มากับ Opus 4.7 ซึ่งได้จำนวน token มากกว่ารุ่นก่อน 4.7 ราว <strong>30%</strong> ข้อความเดียวกันจึงนับไม่เท่ากัน ควรนับเทียบทั้งสองรุ่นก่อนย้าย</li>
+  <li>ใช้ฟรี แต่จำกัดจำนวน request ต่อนาทีตาม usage tier (เช่น <strong>5,000 RPM</strong> ที่ tier Start)</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"count_tokens ใช้ได้กับทุก request"</strong> ไม่ใช่ server tool, MCP connector และรูป/เอกสารแบบ URL หรือ file source ใช้ไม่ได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ก่อนส่งใช้ <code>count_tokens</code> (ไม่รองรับ server tool/MCP/URL source ไม่รู้เรื่อง cache) หลังส่งใช้ <code>usage</code> และรวมทั้ง 3 ช่อง input เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (เติมคำ)</span>
+  <p>อยากรู้จำนวน input token ของ request ก่อนส่งจริง โดยไม่ให้โมเดลรัน ต้องเรียก <code>client.messages.____(...)</code></p>
+  <ol type="A">
+    <li><code>create</code></li>
+    <li><code>preview</code></li>
+    <li><code>count_tokens</code></li>
+    <li><code>measure_input</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>create</code> คือการส่ง request จริงซึ่งรันโมเดลและเสียเงิน อีกสองชื่อไม่มีอยู่จริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>agent ช่วยเขียนโค้ดใช้ code execution (server tool) และ cache system prompt ไว้ ทีม FinOps อยากบันทึกจำนวน input token จริงของทุก request วิธีไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>ประมาณจากจำนวนตัวอักษรหาร 4 แล้วบวกขนาด system prompt</li>
+    <li>อ่าน <code>usage.input_tokens</code> จาก response อย่างเดียว</li>
+    <li>เรียก <code>count_tokens</code> แค่ครั้งแรกของเซสชัน แล้วคูณด้วยจำนวนรอบ</li>
+    <li>อ่าน <code>usage</code> จาก response แล้วรวม <code>input_tokens</code> + <code>cache_read_input_tokens</code> + <code>cache_creation_input_tokens</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ตัวเลขจริงอยู่ใน usage และต้องรวมทั้ง 3 ช่อง B ขาดส่วนที่ cache ไป A เป็นการเดา และ C ใช้ไม่ได้ทั้งเพราะ count_tokens ไม่รองรับ server tool และเพราะประวัติโตขึ้นทุกรอบ</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ลดต้นทุนจาก tool ใน context</h3>
+<p>ใน agent ส่วนใหญ่ของ window ถูกใช้ไปกับ tool: definitions ถูกส่งทุก request และการเรียกแต่ละครั้งเพิ่ม <code>tool_result</code> เข้าไปในประวัติ ต้องดูว่าแรงกดดันมาจากไหน แล้วเลือกเทคนิคให้ตรง</p>
+<div class="table-wrap"><table>
+  <tr><th>เทคนิค</th><th>ลดอะไร</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Tool search</strong></td><td>definitions ที่โหลดไว้ล่วงหน้า</td><td>มี tool 20+ ตัว แต่แต่ละรอบใช้ไม่กี่ตัว</td></tr>
+  <tr><td><strong>Programmatic tool calling</strong></td><td>tool_result ไป-กลับระหว่างทาง</td><td>การเรียกต่อกันเป็นสายที่รวมเป็น script เดียวได้</td></tr>
+  <tr><td><strong>Prompt caching</strong></td><td>ราคาของ definitions ที่ส่งซ้ำ (พื้นที่ใน window เท่าเดิม)</td><td>ชุด tool คงที่ ใช้ข้าม request จำนวนมาก</td></tr>
+  <tr><td><strong>Context editing</strong></td><td>tool_result เก่าในประวัติ</td><td>บทสนทนายาวที่ผลช่วงต้นไม่สำคัญแล้ว</td></tr>
+</table></div>
+<ul>
+  <li><strong>Tool search</strong>: ส่งไปแค่ tool ชื่อ tool_search ตัวเดียว Claude ค้นหา tool อื่นเมื่อต้องใช้ แลกกับ latency เพิ่มหนึ่งรอบ</li>
+  <li><strong>Programmatic tool calling</strong>: Claude เขียนโค้ดหนึ่งก้อนที่เรียก tool เล็กๆ หลายตัวต่อกันใน sandbox ผลระหว่างทางไม่ย้อนกลับเข้าบทสนทนา ได้กลับมาแค่ผลสุดท้าย</li>
+  <li><strong>Prompt caching</strong>: definitions ที่ส่งซ้ำถูกลง แต่ยังกินพื้นที่</li>
+</ul>
+<p><strong>สิ่งที่ไม่ช่วย</strong>: ย้ายไปรุ่น 1M, เพิ่ม <code>max_tokens</code> หรือย่อชื่อ tool พวกนี้ไม่ลดภาระ definitions ไม่ลดรอบไป-กลับ และไม่ลดราคาที่จ่ายซ้ำ window ที่ใหญ่ขึ้นแต่เต็มไปด้วย tool ชุดเดิมก็ยังเจอ context rot (คุณภาพตกเมื่อ context ยาว)</p>
+<p><strong>ทางแก้เชิงโครงสร้าง</strong>: โยนงานสำรวจที่ verbose ไปให้ subagent ที่มี window ของตัวเอง แล้วส่งกลับมาแค่ผลที่ย่อแล้ว (ดูบท 1.4)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Definitions เยอะ → tool search. เรียกต่อกันเป็นสาย → programmatic tool calling. Definitions ซ้ำแพง → caching (ไม่คืนพื้นที่). ผลเก่าค้าง → context editing. Window ใหญ่ขึ้นไม่ใช่คำตอบ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่เทคนิคกับแรงกดดันที่มันลด:</p>
+  <ol>
+    <li>Tool search</li>
+    <li>Programmatic tool calling</li>
+    <li>Prompt caching</li>
+    <li>Context editing</li>
+  </ol>
+  <p>A = ผลระหว่างทางจากการเรียก tool ต่อกันเป็นสาย · B = schema ที่ถูกโหลดล่วงหน้าทุก request · C = tool_result เก่าที่ค้างในประวัติ · D = ราคาของ definitions ที่ส่งซ้ำ (พื้นที่ไม่ลด)</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-A, 3-D, 4-C</strong> caching เป็นตัวเดียวที่ลดแค่ราคา ไม่คืนพื้นที่ใน window</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (เลือก 3 ข้อ)</span>
+  <p>agent ฝ่ายปฏิบัติการมี tool 60 ตัว ปัญหาคือ (1) schema ที่ไม่ได้ใช้ถูกโหลดทุก request (2) เรียก tool เล็กๆ ต่อกันหลายครั้ง ผลระหว่างทางค้างอยู่ในประวัติ (3) definitions ชุดเดิมถูกคิดราคาเต็มทุก request ข้อไหนแก้ได้ตรงจุด?</p>
+  <ol type="A">
+    <li>ย้ายไปรุ่น 1M โดยไม่แตะชุด tool</li>
+    <li>เปิด prompt caching ให้ definitions</li>
+    <li>เขียนใน system prompt ว่า "ใช้ tool ให้น้อยที่สุด"</li>
+    <li>ใช้ tool search</li>
+    <li>ส่ง tool definitions ซ้ำสองชุดเพื่อให้ cache hit ง่ายขึ้น</li>
+    <li>ใช้ programmatic tool calling</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B, D, F</strong> แต่ละข้อแก้ปัญหาหนึ่งข้อ: tool search → (1), programmatic → (2), caching → (3) ข้อ A แค่เพิ่มที่ว่างแต่ไม่ลดต้นเหตุ C ไม่ได้เอา definitions ออกจาก context E ยิ่งเพิ่ม token เป็นสองเท่า</p></details>
+</div>
+
+<p>ภาคต่อ (Part 2) จะพูดถึง compaction, context editing และ trade-off ของ caching ในเซสชันยาว</p>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/context-windows">Claude Docs: Context windows</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/token-counting">Claude Docs: Token counting</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/manage-tool-context">Claude Docs: Manage tool context</a></li>
+</ul>
+</section>

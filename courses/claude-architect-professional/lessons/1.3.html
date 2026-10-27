@@ -1,0 +1,256 @@
+<section class="lesson" id="l-1-3">
+<h2>1.3 Workflow, agent and augmented LLM patterns for Claude</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/augmented-llm-workflows-or-agents-choosing-the-base-pattern">CertSafari 1.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่า augmented LLM คือหน่วยพื้นฐานที่ทุก pattern เอามาต่อกัน</li>
+    <li>แยก workflow กับ agent ด้วยคำถามเดียว: ใครเป็นคนตัดสินขั้นต่อไป</li>
+    <li>เริ่มจากการเรียกครั้งเดียวที่จูนดีแล้ว และเพิ่มความซับซ้อนเมื่อวัดได้ว่าไม่พอ</li>
+    <li>เลือกระหว่าง prompt chaining, routing, parallelization (sectioning / voting) และ orchestrator-workers</li>
+    <li>รู้ว่าเมื่อไหร่ evaluator-optimizer คุ้ม และเมื่อไหร่ควรใช้ programmatic gate แทน</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ใครคุมขั้นต่อไป</span>
+  <p>ใน <strong>workflow</strong> โค้ดของเรากำหนดเส้นทางไว้ตายตัว ใน <strong>agent</strong> โมเดลเลือก action ถัดไปเองตอนรัน โดยดูจากผลของ tool</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Augmented LLM: อิฐก้อนพื้นฐาน</h3>
+<p>ทุก pattern ในบทนี้สร้างจากหน่วยเดียวกัน คือ <strong>การเรียกโมเดลหนึ่งครั้งที่เสริมด้วย retrieval, tools และ memory</strong> ตัวโมเดลเป็นคนเขียน search query เอง เลือก tool เอง และตัดสินว่าข้อมูลไหนควรเก็บไว้ pattern ต่างๆ แค่เอาอิฐพวกนี้มาเรียงต่อกัน ไม่ได้มาแทนที่มัน</p>
+<p>หลักการเสริมความสามารถ:</p>
+<ul>
+  <li><strong>ตรงกับ use case</strong>: ผู้ช่วยซัพพอร์ตต้องการ tool ค้นคำสั่งซื้อ ไม่ใช่ web crawler</li>
+  <li><strong>Interface ชัดและมีเอกสารดี</strong>: ชื่อ tool คำอธิบาย และ parameter ต้องอ่านแล้วรู้ว่าใช้ตอนไหน</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Augmented LLM = LLM + retrieval + tools + memory ที่โมเดลใช้เองได้ ให้เฉพาะความสามารถที่งานต้องใช้ พร้อม interface ที่ชัด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมทำผู้ช่วยตอบคำถามเรื่องสวัสดิการพนักงาน ต้องอ้างอิงคู่มือสวัสดิการ 300 หน้าที่อัปเดตทุกปี วิธีไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>ไม่ต้องเสริมอะไร ปล่อยให้ pattern workflow จัดการเอง</li>
+    <li>ให้โค้ดค้นคู่มือด้วยคำถามผู้ใช้ตรงๆ แล้วแปะผลลง prompt ทุกครั้ง</li>
+    <li>ต่อทุก tool ที่บริษัทมีเข้าไป เผื่อได้ใช้</li>
+    <li>ให้โมเดลมี tool ค้นคู่มือที่มีคำอธิบายชัดเจน แล้วให้โมเดลเขียน query เอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A: pattern ไม่ได้ให้ความสามารถเสริมมาเอง B: ตัดโอกาสที่โมเดลจะเขียน query ที่ดีกว่าเอง C: ไม่ได้เลือกให้ตรงกับ use case</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Workflow กับ agent: ใครตัดสินขั้นต่อไป</h3>
+<p>การมี tool หรือการเรียก LLM หลายครั้ง <strong>ไม่ได้ทำให้ระบบเป็น agent</strong> สิ่งที่ตัดสินคือใครเลือกขั้นถัดไป</p>
+<p>Agent loop ของ Agent SDK: Claude ขอ tool → SDK รัน tool → ผลกลับไปให้ Claude → วนจน Claude ตอบโดยไม่มี tool call เพื่อให้ agent ยังอยู่ในการควบคุม ต้องมี stopping condition เช่นจำนวนรอบสูงสุด</p>
+<div class="table-wrap"><table>
+  <tr><th>คุณสมบัติ</th><th>Workflow</th><th>Agent</th></tr>
+  <tr><td>ใครตัดสินขั้นต่อไป</td><td>เส้นทางที่โค้ดกำหนดไว้</td><td>โมเดล ตอนรัน ตามผลของ tool</td></tr>
+  <tr><td>ความคาดเดาได้</td><td>สูง สำหรับงานที่นิยามชัด</td><td>ต่ำกว่า จำนวน turn แปรผัน</td></tr>
+  <tr><td>ต้นทุนและความเสี่ยง</td><td>จำกัดอยู่ที่จำนวนครั้งที่เราเขียนไว้</td><td>สูงกว่า และ error อาจสะสมทบต้น (compounding)</td></tr>
+  <tr><td>ชนะเมื่อ</td><td>รู้ขั้นตอนล่วงหน้า</td><td>ปัญหาปลายเปิดที่ขั้นตอนเดาไม่ได้</td></tr>
+</table></div>
+<p>ตัวอย่าง agent: งานแก้บั๊กที่รันเทสต์ อ่านไฟล์ แก้ แล้วรันเทสต์ใหม่จนผ่าน หรือโจทย์แบบ SWE-bench ที่ต้องแก้หลายไฟล์ ตัวอย่าง workflow: ดึงข้อมูลใบแจ้งหนี้ → ตรวจ → ร่างอีเมล ตามลำดับเดิมทุกครั้ง</p>
+<p><strong>ลองเดา:</strong> ระบบเรียก LLM 3 ครั้งและมี tool ค้นหา เป็น agent หรือไม่? ยังตอบไม่ได้จนกว่าจะรู้ว่า <em>ใคร</em> เลือกขั้นต่อไป ถ้าโค้ดเรียง 3 ครั้งไว้แล้วก็เป็น workflow</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>นับ tool หรือนับจำนวนครั้งที่เรียก LLM ไม่ได้ช่วยตัดสิน ให้ดูว่าเส้นทางอยู่ในโค้ดหรืออยู่ในมือโมเดล</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ระบบรับใบสมัครงาน: LLM ดึงข้อมูลจาก resume → LLM เทียบกับ requirement โดยเรียก tool ดูตำแหน่งงาน → LLM ร่างอีเมลตอบ ทุกใบผ่าน 3 ขั้นนี้ตามลำดับเดิม และมีเพดาน 5 รอบต่อขั้น ระบบนี้คืออะไร?</p>
+  <ol type="A">
+    <li>Agent เพราะเรียก LLM 3 ครั้ง</li>
+    <li>Agent เพราะมีการใช้ tool</li>
+    <li>Agent ที่คาดเดาได้ เพราะมีเพดานจำนวนรอบ</li>
+    <li>Workflow เพราะลำดับขั้นถูกโค้ดกำหนดไว้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> จำนวนครั้งที่เรียก การมี tool หรือการมี stopping condition ไม่มีข้อไหนทำให้เส้นทางกลายเป็นทางเลือกของโมเดล</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เริ่มง่ายๆ แล้วเพิ่มความซับซ้อนเมื่อคุ้ม</h3>
+<ol class="steps">
+  <li>เริ่มจาก <strong>การเรียกครั้งเดียวที่ปรับดีแล้ว</strong> (มี retrieval และตัวอย่างใน prompt)</li>
+  <li>เพิ่ม <strong>workflow</strong> เมื่อวัดได้ว่าการเรียกครั้งเดียวไม่พอ ในงานที่นิยามชัด</li>
+  <li>ใช้ <strong>agent</strong> เมื่องานต้องการความยืดหยุ่นและให้โมเดลตัดสินเอง</li>
+</ol>
+<p>ระวัง framework: บางตัวซ่อน prompt และ response จริงจนดีบักยาก หลาย pattern เขียนได้ในไม่กี่บรรทัดบน API ตรงๆ</p>
+<p><strong>ลองกับงานตัวเอง:</strong> นึกถึงฟีเจอร์ LLM หลายขั้นที่เคยเห็น แล้วถามว่าต้องวัดอะไร ถึงจะรู้ว่าแค่เรียกครั้งเดียวพร้อม retrieval ก็พอแล้ว</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Agent เก่งกว่า workflow ดังนั้นตั้ง default เป็น agent ไปเลย"</strong> ไม่ใช่ agent แลก latency และค่าใช้จ่ายกับประสิทธิภาพ workflow ให้ความคาดเดาได้ และหลายครั้งเรียกครั้งเดียวก็พอ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เรียกครั้งเดียว → workflow → agent ขยับเมื่อมีตัวเลขยืนยัน ไม่ใช่เพราะดูทันสมัย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับการออกแบบ (A = เรียกครั้งเดียวที่ปรับดีแล้ว, B = Workflow, C = Agent):</p>
+  <ol>
+    <li>โปรเจกต์ใหม่ ยังไม่มีข้อมูลว่าวิธีไหนพอ</li>
+    <li>งานนิยามชัด แต่วัดแล้วว่าการเรียกครั้งเดียวคุณภาพไม่ถึงเป้า</li>
+    <li>งานต้องยืดหยุ่นและให้โมเดลตัดสินขั้นตอนเอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-A, 2-B, 3-C</strong> การเรียกครั้งเดียวคือ default แล้วค่อยขยับตามหลักฐาน</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Prompt chaining และ routing</h3>
+<p>คำถามช่วยเลือก pattern: ขั้นตอนตายตัวไหม? input แบ่งเป็นหมวดชัดๆ ได้ไหม? งานแยกทำขนานได้ไหม? รู้งานย่อยก่อนเห็น input ไหม? มีเกณฑ์วัดคุณภาพชัดไหม?</p>
+<div class="table-wrap"><table>
+  <tr><th>ถ้างาน…</th><th>ใช้</th></tr>
+  <tr><td>แบ่งเป็นงานย่อยต่อกันเป็นลำดับตายตัว</td><td>Prompt chaining</td></tr>
+  <tr><td>input แบ่งเป็นหมวดที่ต่างกันชัด</td><td>Routing</td></tr>
+  <tr><td>มีชิ้นงานอิสระ หรือต้องลองหลายครั้ง</td><td>Parallelization (sectioning หรือ voting)</td></tr>
+  <tr><td>งานย่อยขึ้นกับ input แต่ละตัว</td><td>Orchestrator-workers</td></tr>
+  <tr><td>มีเกณฑ์ประเมินชัด และดีขึ้นเมื่อได้ feedback</td><td>Evaluator-optimizer</td></tr>
+</table></div>
+
+<h3>Prompt chaining</h3>
+<p>แต่ละการเรียกรับ output ของขั้นก่อนไปทำต่อ แลก latency กับความแม่น ระหว่างขั้นใส่ <strong>programmatic gate</strong> ได้ เช่น จำกัดความยาว ตรวจ schema ตรวจว่ามี field ที่ต้องมีครบ chain ที่ชัดเจนยังช่วยให้ log และส่องผลระหว่างทางได้ง่าย</p>
+<pre><code>copy = llm("เขียนคำโฆษณาสินค้า", brief)
+for lang in ["th", "en", "ja"]:
+    text = llm(f"แปลเป็น {lang}", copy)
+    if len(text) &gt; 60:                      # gate ด้วยโค้ด ไม่ใช่ LLM
+        text = llm("ย่อให้ไม่เกิน 60 ตัวอักษร", text)</code></pre>
+
+<h3>Routing</h3>
+<p>จัดหมวดก่อน แล้วส่งไป prompt, ชุด tool หรือ process ที่เฉพาะทางสำหรับหมวดนั้น ใช้ส่งคำถามง่ายไปโมเดลที่ถูกกว่าได้ด้วย</p>
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>Routing ดีได้แค่เท่ากับหมวดหมู่ของมัน ก่อนเลือก routing ให้ยืนยันว่าหมวดนิยามชัด และการจัดหมวดเชื่อถือได้</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"มีการตรวจคุณภาพ = ต้องเป็น evaluator-optimizer"</strong> ไม่ใช่ การตรวจตามกฎ (เช่น ความยาว) ใช้ programmatic gate ระหว่างขั้นของ chain ส่วน evaluator-optimizer เหมาะกับเกณฑ์ที่ LLM วิจารณ์ได้และดีขึ้นเมื่อวนแก้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ขั้นตายตัวต่อกัน = chaining (+ gate ด้วยโค้ด) · หมวดชัดแยกทาง = routing</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับ pattern (A = Chaining + code gate, B = Routing, C = Orchestrator-workers, D = Evaluator-optimizer):</p>
+  <ol>
+    <li>คำถามลูกค้าธนาคาร แบ่งเป็น บัตรเครดิต / สินเชื่อ / แจ้งทุจริต แต่ละหมวดมี prompt ที่จูนไว้</li>
+    <li>เขียนสคริปต์วิดีโอ แล้วตัดให้ยาวไม่เกิน 90 วินาทีตามกฎตายตัว</li>
+    <li>แปลบทกวี แล้วให้ LLM อีกตัววิจารณ์จังหวะและน้ำเสียงจนผ่าน</li>
+    <li>คำขอแก้ระบบที่ไม่รู้ว่าจะกระทบไฟล์ไหนจนกว่าจะอ่านคำขอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-A, 3-D, 4-C</strong> กฎความยาวเป็นการตรวจตายตัว ใช้โค้ด ส่วนน้ำเสียงต้องใช้วิจารณญาณ จึงเป็น evaluator</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีมการตลาดต้องการ: เขียนชื่อแคมเปญ → แปลเป็น 3 ภาษาที่กำหนดไว้แล้ว → ทุกภาษาต้องยาวไม่เกินช่องบนแอป ควรใช้ pattern ไหน?</p>
+  <ol type="A">
+    <li>Evaluator-optimizer ให้ LLM ตรวจความยาว</li>
+    <li>Routing แยกตามภาษา</li>
+    <li>Orchestrator-workers ให้ LLM ตัวกลางเลือกภาษา</li>
+    <li>Prompt chaining พร้อม programmatic gate ตรวจความยาว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ไม่มีการจัดหมวด (ไม่ใช่ B) ภาษารู้อยู่แล้ว (ไม่ใช่ C) และการตรวจความยาวเป็นกฎตายตัว ไม่ต้องใช้วิจารณญาณ (ไม่ใช่ A)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ระบบแจ้งปัญหา IT ภายในรับเรื่อง 3 แบบ: ขอสิทธิ์ระบบ, อุปกรณ์เสีย, ลืมรหัสผ่าน แต่ละแบบมี prompt ที่จูนแยกไว้ ควรใช้?</p>
+  <ol type="A">
+    <li>Parallelization ส่งทุกเรื่องเข้า 3 prompt พร้อมกัน แล้วเลือกตัวที่เสร็จก่อน</li>
+    <li>Orchestrator-workers</li>
+    <li>Chaining: ส่งทุกเรื่องผ่านทั้ง 3 prompt ตามลำดับ</li>
+    <li>Routing: เรียก LLM จัดหมวดก่อน แล้วส่งเข้า prompt ของหมวดนั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A เปลืองและไม่มีเหตุผลในการเลือก C ทำให้ทุกเรื่องผ่านทุก prompt B เกินจำเป็นสำหรับหมวดที่ตายตัว</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Parallelization และ orchestrator-workers: งานย่อยรู้ก่อน vs เกิดตอนรัน</h3>
+<p><strong>Parallelization</strong> มี 2 แบบ:</p>
+<ul>
+  <li><strong>Sectioning</strong>: งานย่อย <em>คนละอย่าง</em> ที่อิสระต่อกัน รันพร้อมกันแล้วรวมผล เช่น ตัวหนึ่งตรวจช่องโหว่ในโค้ด อีกตัวตรวจปัญหา license แล้วรวมเป็นรายงานเดียว guardrail ก็เป็นตัวอย่างคลาสสิก: ตัวหนึ่งตอบผู้ใช้ อีกตัวคัดกรองว่าคำถามไม่เหมาะสมหรือเปล่า</li>
+  <li><strong>Voting</strong>: งาน <em>เดียวกัน</em> รันหลายครั้งเพื่อให้ได้ผลหลากหลาย เช่น ให้หลาย prompt รีวิวโค้ดชุดเดียวกันหาช่องโหว่ ถ้าตัวไหนเจอก็ flag</li>
+</ul>
+<p><strong>Orchestrator-workers</strong>: LLM ตัวกลางตัดสินงานย่อยตอนรันจาก input นั้นๆ จุดต่างจาก sectioning คืองานย่อย <strong>ไม่ได้ถูกกำหนดไว้ก่อน</strong> เลี่ยงใช้เมื่อ latency สำคัญมาก งานง่าย หรืองานย่อยคาดเดาได้</p>
+<pre><code>async def investigate(question):
+    angles = await lead.plan_angles(question)          # หัวหน้าคิดงานย่อยจาก input นี้
+    results = await asyncio.gather(
+        *[worker(a) for a in angles])                  # ลูกทีมทำพร้อมกัน
+    return await lead.combine(results)                 # หัวหน้ารวมผล</code></pre>
+<p>บรรทัดที่ทำให้นี่เป็น orchestrator-workers คือบรรทัดแรก: รายการงานย่อยถูกสร้างตอนรันสำหรับแต่ละคำถาม ถ้ารายการนี้เป็นค่าคงที่ ก็จะกลายเป็น sectioning</p>
+<p><strong>ลองเดา:</strong> prompt รีวิว 5 ตัวที่กำหนดไว้แล้วรันพร้อมกัน เป็น pattern ไหน? คำตอบคือ sectioning ไม่ใช่ orchestrator-workers เพราะงานย่อยตายตัว</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"งานที่มีหลายงานย่อยต้องใช้ orchestrator-workers"</strong> ไม่ใช่ ถ้ารู้งานย่อยล่วงหน้า ใช้ parallelization แบบ sectioning ที่ง่ายกว่า</p>
+  <p><strong>"รันการตรวจ 2 แบบที่ต่างกันพร้อมกัน = voting"</strong> ไม่ใช่ นั่นคือ sectioning voting คือทำงานเดียวกันซ้ำ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>งานต่างกัน รู้ก่อน = sectioning · งานเดียวกันซ้ำ = voting · งานย่อยเกิดตอนรัน = orchestrator-workers</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ในโค้ด <code>investigate</code> ด้านบน ถ้าจะเปลี่ยนให้กลายเป็น sectioning ต้องเปลี่ยนบรรทัดไหน?</p>
+  <ol type="A">
+    <li><code>lead.combine(results)</code></li>
+    <li><code>asyncio.gather(...)</code></li>
+    <li><code>worker(a)</code></li>
+    <li><code>lead.plan_angles(question)</code> ให้เป็นรายการงานย่อยคงที่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> การคิดงานย่อยตอนรันคือหัวใจของ orchestrator-workers <code>combine</code> แค่รวมผล ส่วน <code>gather</code> กับ <code>worker</code> ทำงานโดยไม่ได้เลือกว่าจะทำอะไร</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทุกครั้งที่ระบบสร้างสัญญาเช่า จะมี LLM ตัวหนึ่งตรวจข้อกฎหมายที่ขัดกับกฎหมายผู้บริโภค และอีกตัวตรวจว่าตัวเลขค่าเช่าตรงกับใบเสนอราคา รันพร้อมกันแล้วรวมผล เป็น pattern ไหน?</p>
+  <ol type="A">
+    <li>Prompt chaining</li>
+    <li>Parallelization แบบ voting</li>
+    <li>Evaluator-optimizer</li>
+    <li>Parallelization แบบ sectioning</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> สองงานต่างกันและอิสระต่อกัน voting คือทำงานเดิมซ้ำ ไม่มีการวิจารณ์วนแก้ (ไม่ใช่ C) และไม่ได้ส่ง output ต่อกัน (ไม่ใช่ A)</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Evaluator-optimizer loop</h3>
+<p>การเรียกหนึ่งสร้างงาน อีกการเรียกวิจารณ์เทียบเกณฑ์ แล้ววนจนผ่าน เหมือนนักเขียนกับบรรณาธิการ</p>
+<p>เงื่อนไขที่ทำให้คุ้ม:</p>
+<ul>
+  <li>มีเกณฑ์ประเมินที่ชัด</li>
+  <li>การแก้ตาม feedback ทำให้ผลดีขึ้นอย่างวัดได้</li>
+  <li>ถ้าคนให้ feedback แล้วงานดีขึ้นจริง และ LLM ให้ feedback แบบเดียวกันได้ ก็เป็นสัญญาณที่ดี</li>
+</ul>
+<p>ตัวอย่างที่เหมาะ: แปลวรรณกรรมที่ต้องการความละเอียดของภาษา, การค้นหาซับซ้อนที่ evaluator ตัดสินว่าต้องค้นอีกรอบไหม</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ชนิดการตรวจ</th><th>ใช้อะไร</th><th>ตัวอย่าง</th></tr>
+  <tr><td>ตามกฎ ตรวจด้วยโค้ดได้</td><td>Programmatic gate</td><td>JSON valid ไหม, ชื่อไม่เกิน 60 ตัวอักษร</td></tr>
+  <tr><td>ต้องใช้วิจารณญาณ</td><td>LLM evaluator</td><td>น้ำเสียง ความละเอียดอ่อน ความครบถ้วน</td></tr>
+</table></div>
+<p><strong>ลองเดา:</strong> ชื่อบทความต้องเป็น JSON ที่ valid และยาวไม่เกิน 60 ตัวอักษร ใช้อะไรตรวจ? ใช้โค้ด ไม่ใช่ LLM evaluator</p>
+<p>ทุกรอบเพิ่มจำนวนการเรียก จึงต้องมีเงื่อนไขผ่านเพื่อหยุด ถ้าคะแนนเริ่มแบนราบ เช่น loop แปล 4 รอบแต่ดีขึ้นแค่ถึงรอบที่ 2 แปลว่าการวนไม่ได้เพิ่มคุณค่าแล้ว ให้ตั้งเพดานรอบ หรือทำเกณฑ์ให้คมขึ้น</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ใช้ evaluator-optimizer เมื่อเกณฑ์ชัดและ feedback ทำให้ดีขึ้นจริง กฎตายตัวใช้ gate ด้วยโค้ด และต้องมีจุดหยุดเสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ทีมทดลอง evaluator-optimizer กับการเขียนบทสรุปรายงานการเงิน ผลการทดลองข้อไหนบอกว่า pattern นี้ <strong>ไม่</strong> เหมาะ?</p>
+  <ol type="A">
+    <li>นักวิเคราะห์เขียนเกณฑ์ผ่าน/ไม่ผ่านได้ชัดเจน</li>
+    <li>LLM เขียนคำวิจารณ์ได้ใกล้เคียงกับที่นักวิเคราะห์เขียน</li>
+    <li>ผู้ตรวจที่เป็นคนเห็นด้วยกับคำวิจารณ์ของ LLM ส่วนใหญ่</li>
+    <li>แม้นักวิเคราะห์จะให้ feedback ละเอียด ร่างรอบถัดไปก็ไม่ได้ดีขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ถ้า feedback ไม่ทำให้งานดีขึ้น การวนก็มีแต่ต้นทุน ข้ออื่นเป็นสัญญาณว่าเหมาะ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">Agent SDK: Agent loop</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices">Claude docs: Prompting best practices</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/increase-consistency">Claude docs: Increase consistency</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/use-case-guides/ticket-routing">Claude docs: Ticket routing</a></li>
+  <li><a href="https://platform.claude.com/cookbook/patterns-agents-orchestrator-workers">Claude cookbook: Orchestrator-workers</a></li>
+  <li><a href="https://platform.claude.com/cookbook/patterns-agents-evaluator-optimizer">Claude cookbook: Evaluator-optimizer</a></li>
+</ul>
+</section>

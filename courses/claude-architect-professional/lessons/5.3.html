@@ -1,0 +1,267 @@
+<section class="lesson" id="l-5-3">
+<h2>5.3 Human approval checkpoints ใน Claude Code และ Agent SDK</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/human-approval-checkpoints-in-claude-code">CertSafari 5.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่าทำไมต้องวางจุดอนุมัติไว้ที่ action เสี่ยง ไม่ใช่ทุก action (approval fatigue)</li>
+    <li>เลือก permission mode ทั้ง 6 แบบให้เหมาะกับงาน และรู้ว่าจุดอนุมัติไหนรอดทุก mode</li>
+    <li>ไล่ลำดับการตัดสินสิทธิ์ใน SDK: hooks → deny → ask → mode → allow → <code>canUseTool</code> และทำนายผลได้</li>
+    <li>เขียน <code>canUseTool</code> ที่ส่งการเรียก tool ไปให้คนตัดสิน รวมถึงแก้ input ก่อนอนุมัติ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: วางคนไว้ตรงที่เสี่ยง</span>
+  <p>Agent บางครั้งทำสิ่งที่ผู้ใช้ไม่ได้ตั้งใจ เช่น ลบ remote branch หรือรัน migration ใส่ production เป้าหมายคือให้คนตรวจ <strong>action ที่เสี่ยง</strong> ไม่ใช่ทุก action เพราะถ้าถามทุกครั้ง คนจะกดอนุมัติตามความเคยชิน ข้อมูลที่บทเรียนอ้างถึงคือผู้ใช้ Claude Code <strong>กดอนุมัติ permission prompt ถึง 93%</strong></p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ทำไม agent ต้องมีจุดอนุมัติโดยคน</h3>
+<p>ลองนึกถึงสัญญาณกันขโมยรถที่ดังทุกครั้งที่มีแมวเดินผ่าน ไม่นานทั้งซอยก็เลิกสนใจ ถึงวันที่มีโจรจริงก็ไม่มีใครหันไปดู permission prompt ก็เหมือนกัน ถ้าเด้งถามทุกการอ่านไฟล์ คนจะกด "อนุมัติ" แบบไม่อ่าน และพลาดตัวที่สำคัญจริง</p>
+<p>หลักการออกแบบจึงเป็น: ปล่อยงานประจำ (อ่าน, แก้ไฟล์ในขอบเขตที่ตรวจแล้ว) ให้ผ่านไป แล้วเก็บ <strong>ความสนใจของคน</strong> ไว้ให้ action ที่ย้อนกลับยากหรือกระทบระบบภายนอก เช่น push, deploy, ลบข้อมูล, โอนเงิน</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ถามทุกอย่าง = ไม่มีใครอ่านจริง ปล่อยงานประจำผ่าน แล้วให้คนดูเฉพาะจุดเสี่ยง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมหนึ่งตั้งให้ agent ถามอนุมัติทุก tool call รวมถึงการอ่านไฟล์ หลังผ่านไปสองสัปดาห์ น่าจะเกิดอะไร และควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>ปลอดภัยที่สุดแล้ว ไม่ต้องแก้</li>
+    <li>คนเริ่มกดอนุมัติแบบไม่อ่าน ควรปล่อยการอ่านและการแก้ไฟล์ประจำให้ผ่าน แล้วถามเฉพาะ action เสี่ยง</li>
+    <li>ควรเปลี่ยนเป็น bypassPermissions ทั้งหมดเพื่อความเร็ว</li>
+    <li>ควรเพิ่มคนอนุมัติเป็นสองคนต่อทุก call</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> approval fatigue ทำให้ด่านทุกด่านไร้ความหมาย C ตัดคนออกหมดแม้กับ action เสี่ยง D ยิ่งทำให้ล้า</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Permission modes: คนต้องตรวจมากแค่ไหน</h3>
+<p>ใน Claude Code CLI สลับ mode ด้วย <strong>Shift+Tab</strong> ส่วนใน Agent SDK ตั้งผ่าน option <code>permissionMode</code></p>
+<div class="table-wrap"><table>
+  <tr><th>Mode</th><th>อะไรรันได้เลยโดยไม่ถาม</th><th>เหมาะกับ</th></tr>
+  <tr><td><code>default</code></td><td>แค่การอ่าน</td><td>งาน sensitive ที่อยากดูเองทุก action</td></tr>
+  <tr><td><code>acceptEdits</code></td><td>การอ่าน, การแก้ไฟล์ และคำสั่ง filesystem ทั่วไป (เช่น <code>mkdir</code>, <code>touch</code>, <code>mv</code>, <code>cp</code>) อย่างอื่นยังถาม</td><td>วนแก้โค้ดที่ตรวจทิศทางแล้ว</td></tr>
+  <tr><td><code>plan</code></td><td>การอ่าน (และคำสั่งที่ classifier อนุมัติ ถ้ามี auto mode) แต่ <strong>ไม่แตะ source file</strong> จนกว่าคนจะอนุมัติแผน</td><td>อยากเห็นแผนก่อนลงมือ</td></tr>
+  <tr><td><code>auto</code></td><td>ทุกอย่าง โดยมี classifier เบื้องหลังตรวจคำสั่ง shell และ network request ว่าตรงกับสิ่งที่ผู้ใช้ขอหรือไม่</td><td>งานยาวที่อยากลดการถาม แต่ยังมีตัวตรวจแทนคน (ไม่ได้ตัดคนออกทั้งหมด)</td></tr>
+  <tr><td><code>dontAsk</code></td><td>การอ่านไฟล์ใน working directory และ tool ที่อนุมัติไว้ล่วงหน้า <strong>อะไรที่จะต้องถาม จะถูกปฏิเสธทันที</strong> และไม่เรียก <code>canUseTool</code></td><td>CI ที่ไม่มีคนเฝ้าและต้องล็อกแน่น</td></tr>
+  <tr><td><code>bypassPermissions</code></td><td>เกือบทุกอย่าง ยกเว้น action ที่ไม่มี mode ไหนอนุมัติอัตโนมัติ</td><td>เฉพาะใน container หรือ VM ที่แยกขาดเท่านั้น</td></tr>
+</table></div>
+<p>การรันแบบ headless ด้วย <code>--dangerously-skip-permissions</code> จะ <strong>ปฏิเสธ</strong> call ส่วนน้อยที่ยังต้องถาม (เพราะไม่มีคนให้ถาม)</p>
+
+<h3>จุดอนุมัติที่รอดทุก mode</h3>
+<ul>
+  <li>tool ที่ตรงกับ <strong>ask rule</strong> ที่ตั้งไว้ชัดเจน</li>
+  <li>connector tool ที่องค์กรตั้งให้ถาม (ในกรณีที่การตั้งค่านั้นมีผลถึง Claude Code)</li>
+  <li>tool ที่ต้องโต้ตอบกับผู้ใช้: <code>AskUserQuestion</code> และ MCP tool ที่ทำเครื่องหมาย <code>requiresUserInteraction</code></li>
+  <li><code>rm</code> และ <code>rmdir</code> ที่ลบ path สำคัญ (critical path)</li>
+  <li>กลไกป้องกันของการส่งข้อความข้าม session</li>
+</ul>
+<p>องค์กรปิด mode ที่หลวมที่สุดได้ผ่าน managed settings: <code>permissions.disableBypassPermissionsMode: "disable"</code> ปิด bypassPermissions และ <code>permissions.disableAutoMode: "disable"</code> เอา auto mode ออก</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>default (อ่านอย่างเดียว) → acceptEdits (+แก้ไฟล์) → plan (ดูแผนก่อน) → auto (classifier ช่วย) → dontAsk (ไม่ถาม = ปฏิเสธ) → bypassPermissions (เกือบทุกอย่าง, ใช้ใน sandbox เท่านั้น) ask rule, tool ที่ต้องโต้ตอบ และการลบ critical path ยังถามเสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่ mode กับพฤติกรรม:</p>
+  <ol>
+    <li><code>plan</code></li>
+    <li><code>acceptEdits</code></li>
+    <li><code>auto</code></li>
+    <li><code>dontAsk</code></li>
+    <li><code>bypassPermissions</code></li>
+  </ol>
+  <p>ก. ปฏิเสธทุกอย่างที่จะต้องถาม · ข. ใช้ classifier ตรวจแทนการอนุมัติประจำ · ค. ไม่แก้ไฟล์จนกว่าแผนจะได้รับอนุมัติ · ง. ข้าม prompt เกือบทั้งหมด · จ. อนุมัติการแก้ไฟล์และคำสั่ง filesystem ทั่วไปอัตโนมัติ</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-ค, 2-จ, 3-ข, 4-ก, 5-ง</strong></p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>หัวหน้าฝ่าย security ต้องการให้ทุกการรัน <code>terraform apply</code> ต้องมีคนอนุมัติ ไม่ว่า developer จะสลับไป mode ไหน ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>บอกทีมให้ใช้ default mode เสมอ</li>
+    <li>เพิ่ม ask rule สำหรับ <code>Bash(terraform apply *)</code></li>
+    <li>ใส่ <code>Bash</code> ใน allow rules</li>
+    <li>ใช้ acceptEdits</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ask rule รอดการเปลี่ยน mode เพราะถูกตรวจก่อนขั้น mode A พึ่งวินัยของคน C ยิ่งปล่อยผ่าน D ไม่ได้บังคับเรื่องนี้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>job ใน CI รันตอนตีสองโดยไม่มีใครเฝ้า ต้องการให้ call ที่ไม่ได้อนุมัติไว้ถูกปฏิเสธทันทีแทนที่จะค้างรอ ควรตั้งค่าอย่างไร?</p>
+  <ol type="A">
+    <li>ตั้ง <code>dontAsk</code> และระบุ tool ที่ปลอดภัยสำหรับ CI ไว้ใน <code>allowedTools</code></li>
+    <li>ตั้ง <code>default</code> แล้วให้ <code>canUseTool</code> รอคนตอบ</li>
+    <li>ตั้ง <code>bypassPermissions</code> บน runner ที่มี credential ของ production</li>
+    <li>ตั้ง <code>plan</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> dontAsk ปฏิเสธทุกอย่างที่จะต้องถาม และรันได้เฉพาะที่ allow ไว้ B จะค้างเพราะไม่มีคน C อันตรายบนเครื่องที่ไม่ได้แยกขาด D ไม่ได้ทำงานจริง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. คนอยู่ตรงไหนในลำดับการตัดสินสิทธิ์</h3>
+<p>ใน Agent SDK ทุก tool call ถูกตรวจตามลำดับนี้ <strong>ขั้นแรกที่ตัดสินได้ ชนะ</strong> ขั้นหลังไม่ได้เห็นอีก:</p>
+<ol class="steps">
+  <li><strong>Hooks</strong> เช่น PreToolUse อนุญาต, ปฏิเสธ, ให้ถาม (<code>permissionDecision: "ask"</code>) หรือแก้ไข input ได้</li>
+  <li><strong>Deny rules</strong> บล็อกโดยไม่ถาม และขั้นหลังยกเลิกไม่ได้</li>
+  <li><strong>Ask rules</strong> ถามทุกครั้งที่ใช้ tool นั้น</li>
+  <li><strong>Permission mode</strong></li>
+  <li><strong>Allow rules</strong> เช่น <code>Bash(npm test)</code> หรือ <code>Read</code> ถ้าใส่ชื่อ tool เปล่าๆ อย่าง <code>"Bash"</code> เท่ากับอนุมัติทั้ง tool</li>
+  <li><strong><code>canUseTool</code> callback</strong> ถามคนตอน runtime</li>
+</ol>
+
+<div class="box key"><span class="tag">ผลที่ตามมาจากลำดับนี้</span>
+  <ul>
+    <li><strong>plan mode:</strong> tool ที่เขียนไฟล์ถูกส่งไป <code>canUseTool</code> <em>แม้จะมี allow rule ตรง</em> เพราะ mode อยู่ก่อน allow</li>
+    <li><strong>allow แบบชื่อเปล่า:</strong> <code>canUseTool</code> ไม่มีวันเห็น tool นั้น เพราะถูกอนุมัติที่ขั้น 5 ไปแล้ว</li>
+    <li><strong>PreToolUse hook รอดแม้ใน bypassPermissions</strong> เพราะ hook อยู่ขั้น 1 ก่อนขั้น mode</li>
+    <li><strong>dontAsk:</strong> สิ่งที่จะต้องถามถูกปฏิเสธที่ขั้น mode ไม่ไปถึง <code>canUseTool</code></li>
+    <li><strong>deny rule</strong> ย้อนกลับจากใน callback ไม่ได้ เพราะตัดสินไปแล้วตั้งแต่ขั้น 2</li>
+  </ul>
+</div>
+
+<p>ตัวอย่าง hook ที่บังคับให้ถามก่อนเรียก tool โอนเงิน ไม่ว่า mode อะไร:</p>
+<pre><code>async def require_approval(input_data, tool_use_id, context):
+    if input_data["tool_name"] == "mcp__bank__transfer":
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+        }}
+    return {}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใน dontAsk mode call ที่ไม่ได้อนุมัติจะไปรอที่ canUseTool"</strong> ไม่ใช่ ถูกปฏิเสธทันที ไม่มีคนตัดสิน</p>
+  <p><strong>"bypassPermissions ข้ามทั้ง hook และ ask rule"</strong> ไม่ใช่ สองอย่างนี้อยู่ก่อนขั้น mode จึงยังมีผล</p>
+  <p><strong>"ใส่ tool ใน allowedTools แล้ว canUseTool ยังได้ตรวจทุก call อยู่"</strong> ไม่ใช่ allow แบบชื่อเปล่าอนุมัติทั้ง tool ก่อนถึง callback</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>hooks → deny → ask → mode → allow → canUseTool ขั้นแรกที่ตัดสินคือคำตอบ อยากบังคับให้คนเห็นทุก mode ใช้ hook หรือ ask rule อยากให้ callback เห็น อย่าใส่ allow แบบชื่อเปล่า</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>agent อยู่ใน plan mode และมี allow rule สำหรับ <code>Edit</code> เมื่อ Claude พยายามแก้ไฟล์ call นี้จะไปจบที่ไหน?</p>
+  <ol type="A">
+    <li>รันได้เลยเพราะมี allow rule</li>
+    <li>ถูกส่งไปที่ <code>canUseTool</code> ให้คนตัดสิน</li>
+    <li>ถูก deny อัตโนมัติ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> plan mode ตัดสินที่ขั้น mode ก่อนถึง allow rule และส่ง write tool ไปให้ callback</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>CI job ตั้ง dontAsk พร้อม allow <code>Bash(pytest *)</code> และ <code>Read</code> แล้ว Claude พยายามรัน <code>git push origin main</code> จะเกิดอะไร?</p>
+  <ol type="A">
+    <li>รอ canUseTool จนหมดเวลา</li>
+    <li>ถูกปฏิเสธทันที ไม่มีคนเกี่ยวข้อง และไม่เรียก canUseTool</li>
+    <li>รันได้เพราะ git เป็นคำสั่งพื้นฐาน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ไม่ตรงกับ allow rule ใด และ dontAsk เปลี่ยนสิ่งที่จะต้องถามให้เป็นการปฏิเสธ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>แอป SDK ตั้ง <code>allowedTools: ["Read", "Write"]</code> และมี <code>canUseTool</code> ที่แสดงทุกการเขียนไฟล์ให้ reviewer ดู แต่ reviewer ไม่เคยเห็นการเขียนไฟล์สักครั้ง ทั้งที่ไฟล์ถูกแก้ไปแล้ว สาเหตุและวิธีแก้คืออะไร?</p>
+  <ol type="A">
+    <li>callback เขียนผิด ต้อง return allow ก่อน</li>
+    <li><code>"Write"</code> แบบชื่อเปล่าอนุมัติที่ขั้น allow ก่อนถึง callback ให้เอา Write ออกจาก allowedTools</li>
+    <li>ต้องเปลี่ยนเป็น bypassPermissions callback จึงจะทำงาน</li>
+    <li>ต้องเพิ่ม deny rule ให้ Write</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> allow rule ตัดสินก่อน callback C ยิ่งข้ามการตรวจ D จะบล็อก Write ทั้งหมดโดยไม่ไปถึงคนเลย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>สตาร์ทอัพ HR tech มี tool <code>delete_employee_record</code> ที่ต้องให้คนอนุมัติทุกครั้ง แม้ทีม ops จะรัน agent ใน bypassPermissions บน sandbox ควรใช้กลไกไหน?</p>
+  <ol type="A">
+    <li>ลงทะเบียน PreToolUse hook ที่คืนค่า <code>"ask"</code> สำหรับ tool นั้น</li>
+    <li>ใส่ tool นั้นใน <code>allowedTools</code></li>
+    <li>เขียนใน system prompt ว่า "ถามก่อนลบเสมอ"</li>
+    <li>ตั้ง <code>canUseTool</code> ให้ถามเฉพาะ tool นั้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> hook อยู่ขั้นแรกจึงรอด bypassPermissions B ทำให้ผ่านอัตโนมัติ C เป็นแค่คำขอที่ model อาจไม่ทำตาม D ไม่ถูกเรียกเพราะ bypassPermissions ตัดสินที่ขั้น mode ไปแล้ว</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. <code>canUseTool</code>: ส่ง tool call ไปให้คนตัดสิน</h3>
+<p><code>canUseTool</code> ถูกเรียกเมื่อไม่มีขั้นก่อนหน้าตัดสินได้ หรือเมื่อ Claude เรียก <code>AskUserQuestion</code> มันได้รับ <strong>ชื่อ tool</strong>, <strong>input ของ tool</strong> และ <strong>context object</strong> เช่น input ของ Bash มี <code>command</code>, <code>description</code>, <code>timeout</code> ส่วน Write มี <code>file_path</code> และ <code>content</code></p>
+<div class="table-wrap"><table>
+  <tr><th>ผลลัพธ์</th><th>Python</th><th>TypeScript</th></tr>
+  <tr><td>อนุญาต (แก้ input ได้)</td><td><code>PermissionResultAllow(updated_input=...)</code></td><td><code>{ behavior: "allow", updatedInput }</code></td></tr>
+  <tr><td>ปฏิเสธ (Claude อ่าน message ได้)</td><td><code>PermissionResultDeny(message=...)</code></td><td><code>{ behavior: "deny", message }</code></td></tr>
+</table></div>
+<p>context มี <code>suggestions</code> (รายการ PermissionUpdate) ที่ถ้าอนุมัติแล้วบันทึกเป็น rule ครั้งต่อไป call แบบเดียวกันจะไม่ต้องถามอีก ฝั่ง TypeScript context ยังมี AbortSignal ด้วย</p>
+
+<pre><code>async def review(tool_name, tool_input, context):
+    if tool_name == "Bash" and "DROP TABLE" in tool_input["command"]:
+        return PermissionResultDeny(message="ห้ามลบตาราง ให้สร้าง backup ก่อน")
+    if tool_name == "Write" and tool_input["file_path"].startswith("/etc/"):
+        safe = {**tool_input, "file_path": "/tmp/staging" + tool_input["file_path"]}
+        return PermissionResultAllow(updated_input=safe)   # อนุมัติแบบแก้ไข
+    return PermissionResultAllow(updated_input=tool_input)</code></pre>
+<p>ใน Python ถ้าใช้ <code>can_use_tool</code> ต้องเปิด stream ค้างไว้ วิธีที่ใช้กันคือใส่ hook หลอกที่คืน <code>{"continue_": True}</code></p>
+
+<h3>reviewer ทำอะไรได้บ้าง (6 แบบ)</h3>
+<ol class="steps">
+  <li><strong>อนุมัติ</strong></li>
+  <li><strong>อนุมัติพร้อมแก้</strong> ผ่าน <code>updated_input</code> / <code>updatedInput</code></li>
+  <li><strong>อนุมัติและจำไว้</strong> โดยบันทึก rule จาก <code>suggestions</code></li>
+  <li><strong>ปฏิเสธ</strong> พร้อม message ที่ Claude อ่าน</li>
+  <li><strong>เสนอทางอื่น</strong> ใส่ใน message ของการปฏิเสธ</li>
+  <li><strong>เปลี่ยนทิศทางทั้งหมด</strong> ผ่าน streaming input</li>
+</ol>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ส่ง <code>tools</code> array ไปแล้ว คำถามชี้แจงของ Claude จะมาถึง callback เอง"</strong> ไม่ใช่ ถ้ากำหนด <code>tools</code> เองต้องใส่ <code>AskUserQuestion</code> ไว้ด้วย ไม่อย่างนั้นคำถามไม่มีทางมาถึง <code>canUseTool</code></p>
+  <p><strong>"deny rule ที่ตั้งไว้ ปลดได้จากใน callback"</strong> ไม่ได้ deny ตัดสินไปก่อนแล้ว callback ไม่ได้เห็น call นั้น</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>canUseTool</code> คือขั้นสุดท้ายที่ให้คนตัดสิน: allow (แก้ input ได้) หรือ deny (มี message) ใช้ suggestions จำการตัดสิน และอย่าลืมใส่ AskUserQuestion ถ้ากำหนด tools เอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>tech lead ต้องการว่า ห้ามมีไฟล์ไหนถูกแก้ก่อนที่เธอจะอนุมัติ แม้ทีมจะมี allow rule สำหรับ Edit อยู่ใน settings ควรใช้วิธีไหน?</p>
+  <ol type="A">
+    <li>ใช้ plan mode ซึ่งส่งการแก้ไฟล์ไปที่ <code>canUseTool</code> แม้มี allow rule ตรง</li>
+    <li>ใช้ acceptEdits</li>
+    <li>ใช้ dontAsk</li>
+    <li>เพิ่ม Edit ใน allowedTools อีกรอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> plan mode ตัดสินก่อนขั้น allow B อนุมัติ edit อัตโนมัติ C จะปฏิเสธหรือปล่อยตาม allow โดยไม่มีคน D ยิ่งข้าม callback</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>reviewer ต้องการอนุมัติคำสั่ง Bash แต่เปลี่ยน <code>--force</code> ออกก่อน ใน Python ต้องคืนค่าแบบไหน?</p>
+  <ol type="A">
+    <li><code>PermissionResultDeny(message=...)</code></li>
+    <li><code>PermissionResultAllow(updated_input=...)</code> ที่มีคำสั่งที่แก้แล้ว</li>
+    <li><code>{"permissionDecision": "ask"}</code></li>
+    <li><code>PermissionResultAllow()</code> แล้วส่งคำสั่งใหม่ผ่าน system prompt</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>updated_input</code> คือ field ที่ทำให้ tool รันด้วย input ที่ reviewer แก้ (TypeScript ใช้ <code>updatedInput</code>) A ปฏิเสธ C เป็นรูปแบบของ hook ไม่ใช่ callback</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>แอป SDK กำหนด <code>tools: ["Read", "Grep", "Bash"]</code> และมี <code>canUseTool</code> ที่จะแสดงคำถามของ Claude ให้ผู้ใช้ตอบ แต่ไม่เคยมีคำถามโผล่มาเลย เกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>Claude ถูกห้ามถามคำถามใน SDK</li>
+    <li>ไม่ได้ใส่ <code>AskUserQuestion</code> ใน <code>tools</code> คำถามจึงไม่มีทางไปถึง callback</li>
+    <li>ต้องใช้ dontAsk ก่อน</li>
+    <li>ต้องเพิ่ม deny rule ให้ Bash</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> เมื่อกำหนดรายชื่อ tool เอง ต้องรวม AskUserQuestion ไว้ด้วย dontAsk ยิ่งทำให้ไม่ถึง callback</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/permission-modes">Claude Code docs: Permission modes</a></li>
+  <li><a href="https://www.anthropic.com/engineering/claude-code-auto-mode">Anthropic Engineering: Claude Code auto mode</a></li>
+  <li><a href="https://code.claude.com/docs/en/permissions">Claude Code docs: Permissions</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/permissions">Claude Agent SDK docs: Permissions</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/user-input">Claude Agent SDK docs: User input</a></li>
+</ul>
+</section>

@@ -1,0 +1,282 @@
+<section class="lesson" id="l-7-3">
+<h2>7.3 Diagnose Claude Code configuration: what loaded and why</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/diagnosing-claude-code-configuration-mcp-and-hook-failures">CertSafari 7.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ใช้ <code>/memory</code>, <code>/hooks</code>, <code>/mcp</code>, <code>/permissions</code>, <code>/status</code> และ <code>/doctor</code> ดูว่า session โหลดอะไรมาจริง <strong>ก่อน</strong> ลงมือแก้อะไร</li>
+    <li>อธิบายได้ว่าทำไมค่า settings, ไฟล์ memory, permission rule หรือ hook ถึงมีอยู่บน disk แต่ไม่มีผล</li>
+    <li>แยก MCP server ที่ <strong>failed</strong>, ที่ <strong>ยังไม่ได้อนุมัติ</strong> และที่ <strong>connected แต่ไม่มี tool</strong> ออกจากกัน และรู้วิธีแก้ที่ถูกของแต่ละแบบ</li>
+    <li>หาต้นเหตุของปัญหา config ด้วย safe mode หรือ config directory ที่สะอาด</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ดูจากสิ่งที่โหลด ไม่ใช่สิ่งที่เขียน</span>
+  <p>ไฟล์บน disk บอกแค่ว่าเรา <em>ตั้งใจ</em> จะให้เป็นยังไง แต่ session ที่กำลังรันบอกว่าอะไร <em>มีผลจริง</em> ให้ถาม session ก่อนว่าโหลดอะไรมาบ้าง และค่าจากแหล่งไหนชนะ จากนั้นค่อยปิด customization ทีละส่วนเพื่อหาตัวการ เหมือนช่างไฟที่ไม่ได้ดูแค่แบบแปลนบ้าน แต่เอามิเตอร์ไปวัดที่ปลั๊กจริง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. เริ่มจากอาการ แล้วถามว่า "โหลดอะไรมา"</h3>
+<p>เวลามีคนบอกว่า "hook ไม่ทำงาน" หรือ "Claude ไม่สนกฎใน CLAUDE.md" สัญชาตญาณแรกมักเป็นการเปิดไฟล์ config มาแก้ ซึ่งมักเสียเวลา เพราะไฟล์อาจถูกต้องอยู่แล้ว แต่ไม่ได้ถูกโหลด หรือโหลดแล้วแต่มีค่าอื่นทับ ขั้นแรกที่ถูกคือใช้คำสั่งที่รายงาน <strong>สถานะที่ session โหลดอยู่จริง</strong>:</p>
+
+<div class="table-wrap"><table>
+  <tr><th>คำสั่ง</th><th>สิ่งที่แสดง</th></tr>
+  <tr><td><code>/memory</code></td><td>ตำแหน่งไฟล์ memory (CLAUDE.md) ทั้งระดับ user และ project รวมถึงโฟลเดอร์ auto memory และสวิตช์เปิด/ปิด auto memory</td></tr>
+  <tr><td><code>/skills</code></td><td>skill ที่ใช้ได้ จากทั้งแหล่ง project, user และ plugin</td></tr>
+  <tr><td><code>/hooks</code></td><td>hook configuration ที่ active อยู่</td></tr>
+  <tr><td><code>/mcp</code></td><td>MCP server ที่เชื่อมต่อ และสถานะของแต่ละตัว</td></tr>
+  <tr><td><code>/permissions</code></td><td>กฎ allow และ deny ที่ resolve แล้วและมีผลอยู่ตอนนี้</td></tr>
+  <tr><td><code>/status</code></td><td>แหล่ง settings ที่ active ทั้งหมด รวมถึงบอกว่ามี managed settings (settings ที่องค์กรบังคับ) มีผลอยู่หรือไม่</td></tr>
+  <tr><td><code>/doctor</code></td><td>ตรวจสุขภาพการตั้งค่า: ไฟล์ settings ที่ไม่ valid, extension ที่ไม่ได้ใช้, ชื่อ subagent ซ้ำ พร้อมเสนอวิธีแก้</td></tr>
+  <tr><td><code>/debug [ปัญหา]</code></td><td>เปิด debug logging แล้วให้ Claude วิเคราะห์ปัญหาจาก log และ path ของไฟล์ settings</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ก่อนแก้ไฟล์ ให้ถาม session ด้วยคำสั่ง <code>/…</code> ที่ตรงเรื่อง: memory, skills, hooks, mcp, permissions, status แล้วใช้ /doctor หรือ /debug ช่วยหาจุดผิด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่คำถามกับคำสั่งที่ควรใช้ (A: <code>/hooks</code>, B: <code>/permissions</code>, C: <code>/status</code>, D: <code>/mcp</code>, E: <code>/doctor</code>):</p>
+  <ol>
+    <li>"องค์กรมี managed settings บังคับเครื่องนี้อยู่หรือเปล่า"</li>
+    <li>"server ฐานข้อมูลที่เพิ่มไว้ ต่อติดไหม"</li>
+    <li>"สรุปตอนนี้กฎ deny ที่มีผลจริงมีอะไรบ้าง"</li>
+    <li>"hook ที่เขียนไว้ถูกโหลดเข้ามาไหม"</li>
+    <li>"ช่วยตรวจหน่อยว่ามีไฟล์ settings ไหน syntax พัง หรือชื่อ subagent ซ้ำ แล้วเสนอวิธีแก้"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-B, 4-A, 5-E</strong> /status ดูแหล่ง settings รวม managed · /mcp ดูสถานะ server · /permissions ดูกฎที่ resolve แล้ว · /hooks ดู hook ที่ active · /doctor ตรวจไฟล์ที่ไม่ valid และเสนอวิธีแก้</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Settings, memory และ permission rule ที่ "พลาดแบบเงียบๆ"</h3>
+<p>ปัญหากลุ่มนี้น่าหงุดหงิดเพราะไม่มี error ไฟล์ถูกอ่านแล้ว แต่ผลไม่ออกมาตามที่คิด สาเหตุหลักๆ มี 5 แบบ</p>
+
+<h3>2.1 ถูกอ่าน ไม่ได้แปลว่าชนะ (precedence)</h3>
+<p>ลำดับความสำคัญของไฟล์ settings จากสูงไปต่ำ:</p>
+<ol class="steps">
+  <li><code>.claude/settings.local.json</code> (ของเราคนเดียว ไม่ commit)</li>
+  <li><code>.claude/settings.json</code> ของ project (แชร์ทั้งทีม)</li>
+  <li><code>~/.claude/settings.json</code> ระดับ user</li>
+</ol>
+<p>ถ้า key เดียวกันอยู่ในหลายไฟล์ ไฟล์ที่อยู่สูงกว่าชนะ ดังนั้น <code>/status</code> อาจแสดงว่าไฟล์ project ถูกอ่านแล้ว แต่ค่าใน <code>settings.local.json</code> ของคนนั้นยังทับอยู่ นี่เป็นปัญหาเรื่องลำดับ ไม่ใช่ปัญหาการโหลด (ส่วน managed settings ขององค์กรอยู่เหนือทุกไฟล์ของ user และ project)</p>
+
+<h3>2.2 วางผิดไฟล์</h3>
+<p><code>~/.claude.json</code> (ไม่มี <code>/settings</code>) เก็บ <strong>app state และสวิตช์ UI</strong> เท่านั้น ส่วน permissions, hooks และ env ต้องไปอยู่ใน <code>~/.claude/settings.json</code> ชื่อคล้ายกันมาก ระวังสับสน</p>
+
+<h3>2.3 CLAUDE.md ไม่ได้โหลดพร้อมกันทั้งหมด</h3>
+<ul>
+  <li>CLAUDE.md ใน <strong>subdirectory</strong> จะโหลดแบบ on demand คือโหลดตอนที่ Claude อ่านไฟล์ในโฟลเดอร์นั้น ไม่ได้โหลดตอนเริ่ม session</li>
+  <li>subagent ที่มีมาในตัว (built-in) อย่าง <strong>Explore</strong> และ <strong>Plan</strong> <strong>ข้าม CLAUDE.md ตอนเริ่ม</strong> ถ้ามีกฎสำคัญ ต้องเขียนซ้ำลงใน prompt ที่ใช้สั่งงาน subagent</li>
+  <li>custom subagent ที่ตั้ง <code>omitClaudeMd</code> ก็ข้าม CLAUDE.md เหมือนกัน</li>
+</ul>
+
+<h3>2.4 Bash rule จับแค่ข้อความคำสั่งตรงตัว</h3>
+<p>Permission rule ของ Bash เทียบกับ <strong>string ของคำสั่ง</strong> ไม่ได้ดูว่าสุดท้ายแล้วรันโปรแกรมอะไร เช่น rule <code>Bash(rm *)</code> จะไม่บล็อก <code>/bin/rm -rf build</code> หรือ <code>find . -name '*.log' -delete</code> และ <strong>ไม่มีคำเตือนใดๆ</strong> เหมือนป้าย "ห้ามเข้าประตูหน้า" ที่ไม่ได้ห้ามคนเดินเข้าประตูหลัง</p>
+<p>ถ้าต้องการการันตีจริง ให้ใช้ <strong>PreToolUse hook</strong> (สคริปต์ที่ตรวจก่อน tool ทำงาน) หรือ <strong>sandbox</strong> แทน pattern ของ string</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"<code>/status</code> บอกว่าอ่าน <code>settings.json</code> ของ project แล้ว ค่าทุกตัวในนั้นก็ต้องมีผล"</strong> ไม่ใช่ ถูกอ่านไม่เท่ากับชนะ local ทับ project และ project ทับ user</p>
+  <p><strong>"rule <code>Bash(rm *)</code> ขึ้นใน <code>/permissions</code> แสดงว่าการลบไฟล์ถูกบล็อกหมดแล้ว"</strong> ไม่ใช่ rule โหลดแล้วจริง แต่จับเฉพาะคำสั่งที่ขึ้นต้นด้วย string นั้น วิธีลบแบบอื่นหลุดได้หมด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ค่าไม่มีผล → ดู precedence (local &gt; project &gt; user) · ใส่ permissions/hooks/env ใน <code>~/.claude/settings.json</code> ไม่ใช่ <code>~/.claude.json</code> · Explore/Plan ไม่อ่าน CLAUDE.md ต้องบอกซ้ำ · Bash rule ไม่ใช่กำแพงจริง ใช้ hook หรือ sandbox</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>Tech lead ตั้ง <code>"model": "claude-opus-4-8"</code> ไว้ใน <code>.claude/settings.json</code> ของ repo แต่ dev คนหนึ่งเปิดมาทีไรก็ได้ Sonnet ทุกครั้ง ทั้งที่ <code>/status</code> แสดงว่าไฟล์ project ถูกอ่านแล้ว สาเหตุที่น่าจะเป็นที่สุดคือ?</p>
+  <ol type="A">
+    <li>dev คนนั้นตั้ง key <code>model</code> ไว้ใน <code>.claude/settings.local.json</code> ของตัวเอง ซึ่งมีลำดับสูงกว่า</li>
+    <li>เครื่องของ dev ไม่ได้ export ตัวแปร environment ของ model ไว้ ไฟล์ project เลยถูกข้าม</li>
+    <li>ค่าใน settings.json มีผลกับไฟล์ที่สร้างหลังจากแก้ settings เท่านั้น</li>
+    <li>Claude Code เวอร์ชันของ dev เก่าเกินกว่าจะรู้จัก field <code>model</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> /status ยืนยันแล้วว่าไฟล์ถูกโหลด ปัญหาจึงเป็นเรื่องลำดับ ไม่ใช่การโหลด settings.local.json ชนะ settings.json ของ project ตัวเลือกอื่นเป็นกลไกที่ไม่มีอยู่จริง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมใส่ <code>Bash(rm *)</code> เป็น deny rule และเห็นใน <code>/permissions</code> แล้ว แต่ Claude ยังล้างโฟลเดอร์ cache ได้ด้วย <code>find ./cache -type f -delete</code> โดยไม่มีอะไรเตือน ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>ย้าย rule ไปไว้ใน <code>~/.claude.json</code> เพื่อให้มีผลทุก project</li>
+    <li>รีสตาร์ท session เพราะ rule ที่ขึ้นแต่ไม่บังคับแปลว่าโหลดไม่ครบ</li>
+    <li>เปลี่ยนไปบล็อกด้วย PreToolUse hook หรือ sandbox แทนการใช้ pattern ของ string คำสั่ง</li>
+    <li>เปิด debug log หา error ที่ rule โยนออกมา</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> rule โหลดครบแล้ว แต่จับได้เฉพาะ string ที่ตรง <code>rm …</code> และไม่โยน error ใดๆ ส่วน <code>~/.claude.json</code> เป็นที่เก็บ app state ไม่ใช่ที่ใส่ permission</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>CLAUDE.md ของ project เขียนว่า "ห้ามแก้ไฟล์ใน <code>migrations/</code>" session หลักทำตามดี แต่ตอนส่งงานให้ subagent Plan ไปวางแผน แผนที่ได้กลับมีขั้นตอนแก้ไฟล์ migration ควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>เพิ่มกฎลงใน <code>~/.claude.json</code></li>
+    <li>เขียนกฎนั้นซ้ำใน prompt ที่ใช้สั่งงาน subagent Plan</li>
+    <li>สร้าง CLAUDE.md ใหม่ไว้ใน <code>migrations/</code></li>
+    <li>รัน <code>/memory</code> อีกรอบให้ subagent เห็นไฟล์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> subagent Explore และ Plan ข้าม CLAUDE.md ตอนเริ่ม จึงต้องบอกกฎซ้ำใน prompt ที่ส่งไป <code>~/.claude.json</code> ไม่ใช่ที่เก็บกฎ, CLAUDE.md ในโฟลเดอร์ย่อยโหลดก็ต่อเมื่ออ่านไฟล์ในนั้นแล้ว (ซึ่งสายเกินไปสำหรับการวางแผน) และ /memory แค่แสดงตำแหน่งไฟล์</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Hook ที่ไม่เคยทำงานเลย</h3>
+<p>Hook ที่เขียนผิดส่วนใหญ่ <strong>ไม่ error</strong> แค่ไม่ถูกเรียกเฉยๆ สาเหตุที่พบบ่อย:</p>
+<ul>
+  <li><strong>วางผิดที่</strong> hook ของ project และ user ต้องอยู่ใต้ key <code>"hooks"</code> ใน <code>settings.json</code> ไฟล์แยก <code>hooks/hooks.json</code> ใช้ได้กับ <strong>plugin เท่านั้น</strong> ถ้าสร้างไฟล์นี้เองใน project มันจะไม่ถูกโหลด</li>
+  <li><strong>matcher เป็น array</strong> จะถูก flag ว่า invalid และถ้าอยู่ใต้ <code>PreToolUse</code> หรือ <code>PermissionRequest</code> จะทำให้ <strong>hook อื่นทั้งหมดในไฟล์เดียวกันไม่ถูกโหลดด้วย</strong></li>
+  <li><strong>ตัวพิมพ์เล็ก-ใหญ่</strong> matcher เป็น case-sensitive ชื่อ tool ขึ้นต้นด้วยตัวใหญ่ (<code>Bash</code>, <code>Edit</code>, <code>Write</code>, <code>Read</code>) ใส่ <code>"bash"</code> จะไม่ match อะไรเลย และไม่มี error</li>
+  <li><strong>คั่นด้วย comma</strong> ก่อนเวอร์ชัน v2.1.191 matcher <code>"Edit,Write"</code> ถูกตีความตรงตัวทั้ง string จึงไม่ match อะไร ใช้ <code>"Edit|Write"</code> ซึ่งใช้ได้ทุกเวอร์ชัน</li>
+  <li><strong>สะกดชื่อ tool ผิด</strong> ก็พลาดแบบเงียบๆ เหมือนกัน</li>
+</ul>
+<p>ตัวอย่างโครงสร้างที่ถูก (ใน <code>.claude/settings.json</code>):</p>
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "./scripts/check-protected.sh" }]
+      }
+    ]
+  }
+}</code></pre>
+<p>เทียบกับแบบที่พัง: <code>"matcher": ["Edit", "Write"]</code> (array) หรือ <code>"matcher": "edit|write"</code> (ตัวเล็ก)</p>
+
+<div class="box key"><span class="tag">ข้อสอบชอบถาม</span>
+  <p>matcher แบบ array ใต้ PreToolUse ไม่ได้ทำให้พังแค่ hook ตัวเดียว แต่ทำให้ hook อื่นในไฟล์เดียวกันไม่โหลดไปด้วย entry ผิดตัวเดียวเลยดูเหมือน "hook ทุกตัวเสีย"</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ถ้า matcher เขียนผิด เช่น <code>"bash"</code> ระบบจะขึ้น error ให้เห็น"</strong> ไม่ใช่ matcher เป็น case-sensitive และ matcher ที่ไม่ match อะไรก็ไม่ error hook แค่ไม่เคยรัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>hook ไม่ทำงาน → ดูที่อยู่ (key <code>"hooks"</code> ใน settings.json, ไม่ใช่ hooks.json แยก) · matcher เป็น string ไม่ใช่ array · ชื่อ tool ตัวใหญ่ · ใช้ <code>|</code> ไม่ใช่ <code>,</code> แล้วยืนยันด้วย <code>/hooks</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (จับคู่)</span>
+  <p>จับคู่ config ของ hook กับผลที่เกิดขึ้น:</p>
+  <ol>
+    <li><code>"matcher": "write"</code></li>
+    <li><code>"matcher": ["Bash", "Edit"]</code> ใต้ PreToolUse</li>
+    <li><code>"matcher": "Edit,Write"</code> บน Claude Code เวอร์ชันเก่ากว่า v2.1.191</li>
+    <li><code>"matcher": "Edit|Write"</code></li>
+    <li>เขียน hook ไว้ใน <code>hooks/hooks.json</code> ที่ root ของ project (ไม่ใช่ plugin)</li>
+  </ol>
+  <p>ผลที่เป็นไปได้: (a) ทำงานถูกต้องทุกเวอร์ชัน (b) ไม่ match อะไร และไม่มี error (c) ถูก flag invalid และ hook อื่นในไฟล์ไม่โหลดด้วย (d) ไฟล์ไม่ถูกโหลดเลย (e) ถูกตีความตรงตัวทั้ง string จึงไม่ match</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-b, 2-c, 3-e, 4-a, 5-d</strong> ชื่อ tool ต้องตัวใหญ่, array ใต้ PreToolUse ลากตัวอื่นพังด้วย, comma ไม่รองรับในเวอร์ชันเก่า, <code>|</code> ใช้ได้เสมอ และ hooks.json แยกไฟล์เป็นของ plugin เท่านั้น</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. MCP server: 3 สถานะที่พัง และวิธีแก้ของแต่ละแบบ</h3>
+<p>ดูสถานะจาก <code>/mcp</code> แล้วเลือกวิธีแก้ให้ตรงกับสถานะ ห้ามใช้วิธีเดียวกันแก้ทุกแบบ</p>
+<div class="table-wrap"><table>
+  <tr><th>สิ่งที่ <code>/mcp</code> แสดง</th><th>ความหมาย</th><th>วิธีแก้</th></tr>
+  <tr><td><strong>failed</strong></td><td>process ของ server ไม่ได้เริ่มเลย สาเหตุยอดฮิตคือ path แบบ relative ใน <code>command</code> หรือ <code>args</code> ซึ่งจะ resolve จากโฟลเดอร์ที่เปิด Claude Code</td><td>ใช้ absolute path สำหรับสคริปต์ในเครื่อง ส่วนโปรแกรมที่อยู่ใน PATH อย่าง <code>npx</code> หรือ <code>uvx</code> ใช้ได้ตามปกติ</td></tr>
+  <tr><td><strong>ไม่ขึ้นในรายการ / disabled</strong> (server ระดับ project)</td><td>หน้าต่างขออนุมัติครั้งแรกของ server ใน <code>.mcp.json</code> ถูกปิดทิ้งไป</td><td>เข้าไปอนุมัติจาก <code>/mcp</code></td></tr>
+  <tr><td><strong>connected แต่ 0 tools</strong></td><td>server เริ่มทำงานแล้ว แต่ไม่ส่งรายชื่อ tool กลับมา</td><td>กด Reconnect ถ้ายังเป็นศูนย์ ให้รัน <code>claude --debug=mcp</code> แล้วอ่าน stderr ของ server ใน <code>~/.claude/debug/&lt;session-id&gt;.txt</code></td></tr>
+</table></div>
+
+<h3>ที่อยู่ของ config MCP</h3>
+<ul>
+  <li>server ระดับ project อยู่ใน <code>.mcp.json</code> ที่ <strong>root ของ repo</strong> (ไม่ใช่ใน <code>.claude/</code>) ใต้ key <code>mcpServers</code> (ไม่ใช่ <code>servers</code> แบบที่ VS Code ใช้)</li>
+  <li><code>settings.json</code> <strong>ไม่อ่าน</strong> key <code>mcpServers</code> ใส่ไว้ตรงนั้นก็ไม่มีผล</li>
+  <li>ตัวแปร environment ของแต่ละ server ใส่ไว้ใน entry ของ server นั้นใน <code>.mcp.json</code></li>
+  <li>safe mode ปิด MCP server ทั้งหมด ดังนั้น server ที่ขึ้นว่า connected <strong>ไม่ได้รันอยู่ใน safe mode</strong></li>
+</ul>
+<pre><code>{
+  "mcpServers": {
+    "tickets": {
+      "command": "/Users/me/tools/ticket-mcp/run.sh",
+      "args": ["--readonly"],
+      "env": { "TICKET_API_URL": "https://tickets.internal" }
+    }
+  }
+}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"server ที่ connected แต่มี 0 tools ต้องแก้ path เป็น absolute หรือกดอนุมัติใหม่"</strong> ไม่ใช่ ปัญหา path ทำให้ server <em>เริ่มไม่ได้</em> (failed) และการปิดหน้าอนุมัติทำให้ server <em>ถูก disable</em> แต่ server ที่ connected แปลว่าเริ่มทำงานแล้ว ขั้นต่อไปคือ Reconnect แล้วดู stderr ใน debug log</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>failed → absolute path · disabled/ไม่ขึ้น → อนุมัติใน /mcp · connected 0 tools → Reconnect แล้วดู stderr · config อยู่ใน <code>.mcp.json</code> ที่ root ใต้ <code>mcpServers</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่อาการกับวิธีแก้ (A: เปลี่ยนเป็น absolute path, B: อนุมัติจาก <code>/mcp</code>, C: ย้าย config ไป <code>.mcp.json</code> ที่ root, D: Reconnect แล้วอ่าน stderr ใน debug log):</p>
+  <ol>
+    <li>server ขึ้นว่า failed และ <code>command</code> เขียนว่า <code>./scripts/mcp-server.sh</code></li>
+    <li>เพื่อนร่วมทีม clone repo มาแล้วไม่เห็น server ของ project เลย เพราะเผลอปิดหน้าต่างถามตอนเปิดครั้งแรก</li>
+    <li>ใส่ <code>mcpServers</code> ไว้ใน <code>.claude/settings.json</code> แล้ว server ไม่ขึ้นเลย</li>
+    <li>server ขึ้น connected แต่จำนวน tool เป็นศูนย์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-A, 2-B, 3-C, 4-D</strong> path relative ทำให้เริ่มไม่ได้, approval ที่ถูกปิดต้องอนุมัติใหม่ใน /mcp, settings.json ไม่อ่าน mcpServers และ connected-0-tools ต้องดู stderr</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p><code>/mcp</code> แสดงว่า server ค้นเอกสารภายใน "docs-search" เป็น connected แต่ Claude บอกว่าไม่มี tool สำหรับค้นเอกสาร ขั้นต่อไปที่ถูกต้องคือ?</p>
+  <ol type="A">
+    <li>เปลี่ยน command ของ server เป็น absolute path</li>
+    <li>เปิด Claude Code ใหม่ด้วย <code>--safe-mode</code> เพราะ server ที่ไม่มี tool ถูกปิดใน safe mode</li>
+    <li>อนุมัติ server ใหม่ เพราะ approval ระดับ project หมดอายุเองแบบเงียบๆ</li>
+    <li>กด Reconnect จาก <code>/mcp</code> ถ้ายังเป็นศูนย์ ให้รันแบบ debug MCP แล้วอ่าน stderr ของ server</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> connected แปลว่า process เริ่มแล้ว ปัญหา path และ approval จึงตัดทิ้งได้ (approval ไม่ได้หมดอายุเอง) ส่วน safe mode ปิด MCP ทั้งหมด ไม่ได้ช่วยวินิจฉัยเคสนี้</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. หาต้นเหตุด้วย safe mode หรือ config directory ที่สะอาด</h3>
+<p>ถ้าคำสั่งข้างบนยังชี้ไม่ได้ ให้ใช้วิธีตัดออกทีละส่วน (isolate) แบบเดียวกับการถอดปลั๊กทีละเครื่องเพื่อหาว่าเครื่องไหนทำไฟตก</p>
+
+<h3>5.1 Safe mode</h3>
+<p>เปิดด้วย <code>claude --safe-mode</code> หรือตั้ง env <code>CLAUDE_CODE_SAFE_MODE</code></p>
+<ul>
+  <li><strong>ปิด:</strong> CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands และ custom agents</li>
+  <li><strong>ยังทำงาน:</strong> การ auth, การเลือก model, built-in tools และ permissions</li>
+</ul>
+<p>ถ้าปัญหาหายไปใน safe mode แปลว่าต้นเหตุอยู่ในส่วนที่ถูกปิด ใช้ได้ดีกับอาการ CPU หรือ memory พุ่งด้วย ถ้าใช้ทรัพยากรลดลงใน safe mode ให้ไล่ดู plugins, MCP servers และ hooks</p>
+
+<h3>5.2 Config directory ที่สะอาด</h3>
+<pre><code>mkdir -p ~/claude-clean/empty &amp;&amp; cd ~/claude-clean/empty
+CLAUDE_CONFIG_DIR=~/claude-clean/config claude --setting-sources user</code></pre>
+<ul>
+  <li>บรรทัดแรกสร้างและเข้าโฟลเดอร์ว่าง จะได้ไม่มีไฟล์ project ใดๆ</li>
+  <li><code>CLAUDE_CONFIG_DIR</code> ชี้ไปที่ config directory ใหม่ที่ว่างเปล่า แทน <code>~/.claude</code> เดิม</li>
+  <li><code>--setting-sources user</code> เปิดเฉพาะแหล่ง settings ระดับ user ตัด project และ local ออก</li>
+</ul>
+<ol class="steps">
+  <li><strong>ถ้าปัญหาหาย:</strong> copy ไฟล์ของ user เดิมเข้าไปในโฟลเดอร์ใหม่ <strong>ทีละไฟล์</strong> จนปัญหากลับมา ไฟล์ล่าสุดคือตัวการ</li>
+  <li><strong>ถ้าใส่ไฟล์ user ครบแล้วปัญหาไม่กลับมา:</strong> ลองเปิดจากโฟลเดอร์ project โดยไม่ใส่ <code>--setting-sources user</code> เพื่อดูว่าเป็นที่ config ของ project หรือ local</li>
+  <li><strong>ถ้าปัญหายังอยู่แม้ในสภาพสะอาด:</strong> ต้นเหตุอยู่นอก config ของ user และ project ให้ดู <code>/status</code> ว่ามี managed settings หรือไม่ (ไฟล์ของ user ทับไม่ได้ และปิดด้วยการทดสอบนี้ไม่ได้) แล้วค่อยดู environment variable ของ shell</li>
+</ol>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>safe mode = ปิด customization ทั้งหมดทีเดียว ดูว่าปัญหาอยู่ในกลุ่มนั้นไหม · clean config dir + <code>--setting-sources user</code> = เริ่มจากศูนย์แล้วเติมทีละไฟล์ · ถ้ายังพังในสภาพสะอาด ดู managed settings และ env ของ shell</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>คุณต้องการเปิด Claude Code ด้วย config directory ใหม่ และให้โหลดเฉพาะ settings ระดับ user (ไม่เอา project และ local) ช่องว่างควรเป็นอะไร?</p>
+  <pre><code>CLAUDE_CONFIG_DIR=~/claude-clean/config claude --setting-sources ____</code></pre>
+  <ol type="A">
+    <li><code>project</code></li>
+    <li><code>managed</code></li>
+    <li><code>local</code></li>
+    <li><code>user</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>user</code> เปิดเฉพาะแหล่ง user ทำให้ project และ local ไม่ถูกโหลด ส่วน managed settings ปิดจากการทดสอบนี้ไม่ได้อยู่แล้ว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>Claude Code ของ dev คนหนึ่งกิน CPU สูงผิดปกติ พอเปิดด้วย <code>claude --safe-mode</code> อาการหายไป ข้อสรุปไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>ต้นเหตุอยู่ที่ระบบ auth หรือการเลือก model</li>
+    <li>ต้นเหตุน่าจะอยู่ในส่วนที่ safe mode ปิด เช่น plugin, MCP server หรือ hook</li>
+    <li>ต้นเหตุคือ permission rule เพราะ safe mode ปิด permissions</li>
+    <li>ต้นเหตุคือ built-in tools ต้องลง Claude Code ใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> safe mode ปิด CLAUDE.md, skills, plugins, hooks, MCP servers และ custom commands/agents แต่ auth, model, built-in tools และ permissions ยังทำงานตามปกติ ปัญหาที่หายไปจึงชี้ไปที่กลุ่มที่ถูกปิด</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/debug-your-config">Claude Code docs: Debug your config</a></li>
+  <li><a href="https://code.claude.com/docs/en/whats-new/2026-w24">Claude Code docs: What's new (2026-w24)</a></li>
+</ul>
+</section>

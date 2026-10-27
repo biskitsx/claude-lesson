@@ -1,0 +1,288 @@
+<section class="lesson" id="l-4-6">
+<h2>4.6 OpenTelemetry สำหรับ Claude Code และ Agent SDK: signals, traces และ content gates</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/opentelemetry-metrics-logs-and-traces-for-claude-agents">CertSafari 4.6</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>บอกได้ว่า metrics, log events และ traces ตอบคำถามคนละแบบ และแต่ละตัวต้องมี exporter ของตัวเอง</li>
+    <li>ตั้งค่า OTLP ให้ข้อมูลออกจาก process จริงๆ (exporter + protocol + endpoint + headers) ทั้งใน Claude Code และ Agent SDK</li>
+    <li>คุม cardinality ของ metrics ด้วยตัวแปร <code>OTEL_METRICS_INCLUDE_*</code> แทนการไปยืด export interval</li>
+    <li>อ่าน trace ของ agent ที่มี subagent ได้ ว่าเวลาหายไปที่ model, tool หรือคนที่กดอนุมัติ</li>
+    <li>รู้ว่า content gate ตัวไหนเปิดเผยข้อมูลอะไร และ gate ไหน "ลากตัวอื่นมาด้วย" โดยไม่ตั้งใจ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เปิด telemetry ≠ ส่งข้อมูลออก</span>
+  <p>Claude Code และ Agent SDK ปล่อย OpenTelemetry ได้ 3 signal คือ <strong>metrics</strong>, <strong>log events</strong> และ <strong>traces</strong> ทั้งหมดเป็นแบบ opt-in และ <strong>แต่ละ signal มี exporter แยกกัน</strong> signal ไหนไม่ได้เลือก exporter ข้อมูลก็วนอยู่ใน process ไม่ไปไหน ต่อให้เปิดสวิตช์ telemetry หลักไว้แล้วก็ตาม</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Metrics, log events และ traces ตอบคำถามคนละข้อ</h3>
+<p>ลองนึกถึงร้านอาหาร: metrics คือยอดขายรายวันกับต้นทุนวัตถุดิบ, log events คือใบสั่งอาหารแต่ละใบว่าใครสั่งอะไร, traces คือการจับเวลาว่าจานนี้รอที่ครัวกี่นาที รอเสิร์ฟกี่นาที สามอย่างนี้แทนกันไม่ได้</p>
+<ul>
+  <li><strong>Metrics</strong> เป็น counter ที่นับ token, ค่าใช้จ่าย (cost), จำนวน session, จำนวนบรรทัดโค้ด และการตัดสินใจเรื่อง tool (ยอมรับ/ปฏิเสธ) ใช้ตอบว่า <em>ใช้ไปเท่าไหร่ เสียเงินเท่าไหร่</em></li>
+  <li><strong>Log events</strong> เป็น record แบบมีโครงสร้าง หนึ่งรายการต่อหนึ่งเหตุการณ์ เช่น prompt หนึ่งครั้ง, API request หนึ่งครั้ง, API error หนึ่งครั้ง หรือผลของ tool หนึ่งครั้ง (มี event อย่าง <code>user_prompt</code> และ <code>assistant_response</code>) ใช้ตอบว่า <em>เกิดอะไรขึ้นบ้าง</em></li>
+  <li><strong>Traces (beta)</strong> เป็น span ที่มีเวลาเริ่ม/จบ ครอบ interaction, การเรียก model, การเรียก tool และ hook ใช้ตอบว่า <em>เวลาไปหมดที่ไหน</em></li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>Signal</th><th>ตัวแปรเลือก exporter</th><th>ค่าที่ใส่ได้</th><th>backend ที่เหมาะ</th></tr>
+  <tr><td>Metrics</td><td><code>OTEL_METRICS_EXPORTER</code></td><td><code>otlp</code>, <code>prometheus</code>, <code>console</code>, <code>none</code></td><td>time-series DB, หรือ columnar store ถ้าต้องนับ unique user</td></tr>
+  <tr><td>Log events</td><td><code>OTEL_LOGS_EXPORTER</code></td><td><code>otlp</code>, <code>console</code>, <code>none</code></td><td>ระบบรวม log ที่ค้น full-text ได้ หรือ columnar store</td></tr>
+  <tr><td>Traces (beta)</td><td><code>OTEL_TRACES_EXPORTER</code> + <code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code></td><td>ตาม exporter ที่เลือก</td><td>ระบบ distributed tracing</td></tr>
+</table></div>
+
+<h3>ตั้งค่าให้ข้อมูลออกไปจริง</h3>
+<ul>
+  <li><code>CLAUDE_CODE_ENABLE_TELEMETRY=1</code> แค่ <strong>เปิดการเก็บ</strong> ไม่ได้เลือกว่าจะส่งไปทางไหน</li>
+  <li>ถ้าเลือก <code>otlp</code> ต้องบอก <strong>protocol</strong> ด้วย <code>OTEL_EXPORTER_OTLP_PROTOCOL</code> (เช่น <code>grpc</code>) และ <strong>ปลายทาง</strong> ด้วย <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> Claude Code <strong>ไม่มี protocol ค่า default</strong> ให้</li>
+  <li><code>OTEL_EXPORTER_OTLP_HEADERS</code> ใช้ใส่ credential ของ <strong>collector ของเรา</strong> (เช่น bearer token) ไม่ใช่ Anthropic API key</li>
+  <li>flag beta มีผลกับ traces อย่างเดียว ส่วน exporter แบบ <code>console</code> มีไว้ debug ดูบนจอ ไม่ใช่ของที่ต้องมีก่อน</li>
+  <li>รอบการ flush ค่า default: metrics ทุก 60 วินาที (<code>OTEL_METRIC_EXPORT_INTERVAL</code> หน่วยเป็น ms คือ 60000) และ logs ทุก 5 วินาที</li>
+</ul>
+<p>ตัวอย่าง env block ในไฟล์ settings ที่ทำให้ metrics กับ logs ออกไปที่ collector ภายในบริษัท:</p>
+<pre><code>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel.internal.example:4317",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer &lt;collector-token&gt;"
+  }
+}</code></pre>
+
+<h3>Agent SDK: ระวังเรื่อง <code>env</code></h3>
+<p>ใน production ให้ตั้งตัวแปรพวกนี้ไว้ที่ environment ของ process เลย ถ้าจะส่งผ่าน <code>ClaudeAgentOptions.env</code> ทีละ call ต้องรู้ว่าสอง SDK ทำงานไม่เหมือนกัน:</p>
+<ul>
+  <li><strong>Python</strong> เอา <code>env</code> ที่ส่งมา <strong>merge ทับ</strong> environment ที่สืบทอดมา ตัวแปรอื่นยังอยู่ครบ</li>
+  <li><strong>TypeScript</strong> เอา <code>env</code> ไป <strong>แทนที่ทั้งก้อน</strong> ถ้าลืม spread <code>process.env</code> เข้าไป ตัวแปรอื่น (PATH, key ต่างๆ) จะหายหมด</li>
+</ul>
+<pre><code>// TypeScript: ต้อง spread ของเดิมเข้าไปเอง
+const options = {
+  env: {
+    ...process.env,
+    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+    OTEL_TRACES_EXPORTER: "otlp",
+    CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+  },
+};</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง <code>CLAUDE_CODE_ENABLE_TELEMETRY=1</code> แล้วข้อมูลจะไหลเข้า dashboard เอง"</strong> ไม่ใช่ ต้องเลือก exporter ให้ทีละ signal และถ้าเป็น <code>otlp</code> ต้องมีทั้ง protocol และ endpoint ด้วย</p>
+  <p><strong>"ต้องใส่ Anthropic API key ใน OTLP headers"</strong> ไม่ใช่ headers เป็น credential ของ collector ปลายทาง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Metrics = เท่าไหร่, logs = เกิดอะไร, traces = เวลาไปไหน สวิตช์หลักแค่เปิดการเก็บ แต่ละ signal ต้องมี exporter ของตัวเอง และ otlp ต้องมี protocol + endpoint เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่คำถามของทีมกับ signal ที่ควรใช้:</p>
+  <ol>
+    <li>ฝ่ายการเงินอยากรู้ว่าเดือนนี้ทีม data ใช้ token ไปเท่าไหร่ คิดเป็นเงินกี่บาท</li>
+    <li>ทีม support อยากเปิดดูว่าเมื่อวาน 14:05 มี API error อะไรเกิดขึ้นกับ request ของผู้ใช้คนหนึ่ง</li>
+    <li>dev สงสัยว่า turn ที่ช้า 50 วินาทีนั้น ช้าเพราะ model หรือเพราะ tool</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-Metrics, 2-Log events, 3-Traces</strong> ยอดรวม token/cost เป็นงานของ counter, การดูเหตุการณ์รายครั้งเป็นงานของ log event และการแยกเวลาเป็นงานของ span ใน trace</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีม platform ตั้ง <code>CLAUDE_CODE_ENABLE_TELEMETRY=1</code>, <code>OTEL_METRICS_EXPORTER=otlp</code>, protocol และ endpoint ครบแล้ว metrics เข้ามาปกติ แต่ไม่มี event <code>api_error</code> สักรายการ ต้องเพิ่มอะไร?</p>
+  <ol type="A">
+    <li><code>CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1</code></li>
+    <li><code>OTEL_LOGS_EXPORTER=otlp</code></li>
+    <li><code>OTEL_TRACES_EXPORTER=otlp</code></li>
+    <li><code>OTEL_LOG_USER_PROMPTS=1</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> log events เป็นอีก signal หนึ่ง ต้องเลือก exporter ของมันเอง flag beta เกี่ยวกับ traces เท่านั้น ตัวแปร traces ก็เปิดคนละ signal และ <code>OTEL_LOG_USER_PROMPTS</code> เป็น content gate ไม่ได้เลือก exporter</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>pipeline CI รัน Agent SDK ฝั่ง TypeScript ตั้ง <code>env: { CLAUDE_CODE_ENABLE_TELEMETRY: "1" }</code> ใน options แล้วไม่มีข้อมูลอะไรถึง collector เลย สาเหตุที่น่าจะเป็นที่สุดคืออะไร?</p>
+  <ol type="A">
+    <li>ต้องใช้ exporter แบบ <code>console</code> ก่อนจึงจะส่ง otlp ได้</li>
+    <li>ต้องใส่ Anthropic Admin API key ใน headers</li>
+    <li>ไม่ได้เลือก exporter ให้ signal ใดเลย (และใน TypeScript ค่า env นี้ยังแทนที่ environment เดิมทั้งหมด จึงไม่ได้ตัวแปร OTEL ที่ตั้งไว้ใน process มาด้วย)</li>
+    <li>CI ต้องเปิด flag beta ก่อนเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> สวิตช์หลักไม่ได้เลือกปลายทาง และพฤติกรรม replace ของ TypeScript ทำให้ตัวแปรที่ตั้งไว้ข้างนอกหายด้วย console เป็นแค่เครื่องมือ debug, headers ไม่ใช่ Anthropic key และ flag beta เกี่ยวกับ traces เท่านั้น</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. คุมว่า metrics พก attribute อะไรไปบ้าง</h3>
+<p>ต้นทุนของ metrics backend ขึ้นกับ <strong>cardinality</strong> คือจำนวนชุดค่า attribute ที่ไม่ซ้ำกัน ทุกชุดค่าใหม่กลายเป็น time series ใหม่หนึ่งเส้น ปัญหาคือ <code>session.id</code> <strong>เปิดอยู่เป็นค่า default</strong> ถ้ามี CI job สั้นๆ วันละหลายพันรอบ ทุกรอบก็เป็น session ใหม่ = series ใหม่ งอกขึ้นเป็นพันเส้นต่อวัน</p>
+<p>เหมือนการแยกถังขยะ ถ้าแยกถังตามประเภทขยะก็มีไม่กี่ถัง แต่ถ้าแยกถังตามบ้านเลขที่ทุกหลัง จำนวนถังจะระเบิด การ "เก็บขยะห่างขึ้น" (ยืด interval) ไม่ได้ทำให้จำนวนถังลดลงเลย</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ตัวแปร</th><th>เพิ่ม attribute อะไร</th><th>ค่า default</th></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_SESSION_ID</code></td><td><code>session.id</code> (และ <code>ccr.session.id</code> สำหรับ cloud session)</td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_ACCOUNT_UUID</code></td><td><code>user.account_uuid</code>, <code>user.account_id</code></td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES</code></td><td>key ต่างๆ ที่ตั้งไว้ใน <code>OTEL_RESOURCE_ATTRIBUTES</code></td><td>true</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_VERSION</code></td><td><code>app.version</code></td><td>false</td></tr>
+  <tr><td><code>OTEL_METRICS_INCLUDE_ENTRYPOINT</code></td><td><code>app.entrypoint</code></td><td>false</td></tr>
+</table></div>
+
+<ul>
+  <li>อยากแยกดูตาม service หรือลูกค้า ให้ใช้ <code>OTEL_SERVICE_NAME</code> และ <code>OTEL_RESOURCE_ATTRIBUTES</code> เช่น <code>deployment.environment=prod,tenant.id=acme</code> ค่าพวกนี้มีจำนวนจำกัด จึงไม่ทำให้ series ระเบิด</li>
+  <li>แต่ถ้าเอา ID รายผู้ใช้ไปใส่เป็น attribute ก็เจอปัญหา cardinality แบบเดียวกับ session ID</li>
+  <li>metrics ใช้ <strong>delta temporality</strong> เป็นค่า default (ส่งเฉพาะส่วนที่เพิ่มในแต่ละรอบ) ถ้า backend ต้องการค่าสะสม ให้ตั้ง <code>OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative</code> ซึ่งเป็นเรื่องรูปแบบตัวเลข ไม่เกี่ยวกับจำนวน series</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"series เยอะเกินไป ยืด export interval จาก 60 วินาทีเป็น 5 นาทีก็หาย"</strong> ไม่ใช่ interval แค่ลดความถี่การ flush จำนวน series มาจาก attribute ต้องปิด <code>OTEL_METRICS_INCLUDE_SESSION_ID</code></p>
+  <p><strong>"ปิด resource attributes ไปเลยจะได้ลด series"</strong> ได้ผลแต่เสียของที่ต้องการ เช่น breakdown ตาม <code>deployment.environment</code> ตัวต้นเหตุจริงคือ session ID</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>series = ชุดค่า attribute ที่ไม่ซ้ำ ต้นเหตุคลาสสิกคือ <code>session.id</code> ที่เปิดเป็น default ปิดตัวนั้น แล้วแยกมิติที่มีค่าจำกัดผ่าน <code>OTEL_RESOURCE_ATTRIBUTES</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>บริษัทรัน agent ตรวจ PR อัตโนมัติวันละ 8,000 รอบ บิลของ metrics backend พุ่งเพราะจำนวน series โดยทีมยังต้องการกราฟแยกตาม model และตาม <code>tenant.id</code> ที่ตั้งไว้ใน resource attributes ควรทำอะไร?</p>
+  <ol type="A">
+    <li>ตั้ง <code>OTEL_METRIC_EXPORT_INTERVAL=600000</code></li>
+    <li>ตั้ง <code>OTEL_METRICS_INCLUDE_RESOURCE_ATTRIBUTES=false</code></li>
+    <li>ตั้ง <code>OTEL_METRICS_INCLUDE_SESSION_ID=false</code></li>
+    <li>เปลี่ยน temporality เป็น cumulative</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> แต่ละรอบเป็น session ใหม่ การตัด <code>session.id</code> ลด series โดยตรงและยังเก็บ breakdown อื่นไว้ A แค่ flush ห่างขึ้น, B ทำให้เสีย <code>tenant.id</code> และ D เปลี่ยนแค่รูปแบบตัวเลข</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. อ่าน trace: span ตลอดหนึ่งรอบ รวมถึง subagent</h3>
+<p>โครงสร้าง span ของ Claude Code เรียงเป็นต้นไม้แบบนี้:</p>
+<pre><code>claude_code.interaction            ← root: ตั้งแต่ prompt ถึงคำตอบ
+├─ claude_code.llm_request         ← การเรียก Claude API แต่ละครั้ง
+├─ claude_code.tool                ← การเรียก tool แต่ละครั้ง
+│  ├─ claude_code.tool.blocked_on_user   ← รอคนกดอนุมัติ permission
+│  └─ claude_code.tool.execution         ← เวลาที่ tool ทำงานจริง
+└─ claude_code.tool (Agent)        ← subagent
+   └─ claude_code.llm_request (agent_id=..., parent_agent_id=...)</code></pre>
+
+<p>span <code>claude_code.llm_request</code> มี attribute สำคัญ:</p>
+<div class="table-wrap"><table>
+  <tr><th>Attribute</th><th>ใช้ดูอะไร</th></tr>
+  <tr><td><code>duration_ms</code>, <code>ttft_ms</code></td><td>เวลาทั้งหมด และเวลาจนได้ token แรก (time to first token)</td></tr>
+  <tr><td><code>attempt</code>, <code>error_class</code></td><td>ครั้งที่เท่าไหร่ของการ retry และประเภท error</td></tr>
+  <tr><td><code>input_tokens</code>, <code>output_tokens</code></td><td>token เข้า/ออก</td></tr>
+  <tr><td><code>cache_read_tokens</code>, <code>cache_creation_tokens</code></td><td>token ที่อ่านจาก/เขียนลง prompt cache</td></tr>
+  <tr><td><code>agent_id</code>, <code>parent_agent_id</code></td><td>เป็นของ subagent ตัวไหน และใครเป็นแม่</td></tr>
+  <tr><td><code>query_source_safe</code></td><td>แหล่งที่มาของ query</td></tr>
+  <tr><td><code>stop_reason</code></td><td>เหตุผลที่ model หยุด</td></tr>
+</table></div>
+
+<ul>
+  <li>span ของ subagent จะ <strong>ซ้อนอยู่ใต้ span ของ Agent tool</strong> ที่สร้างมันขึ้นมา ส่วน session หลักจะ <strong>ไม่มี</strong> <code>agent_id</code></li>
+  <li>span <code>claude_code.hook</code> จะโผล่มาเฉพาะโหมด <strong>detailed beta tracing</strong> (<code>ENABLE_BETA_TRACING_DETAILED=1</code> + <code>BETA_TRACING_ENDPOINT</code>) และในโหมดนี้ logs กับ traces จะถูกส่งไปที่ <code>BETA_TRACING_ENDPOINT</code> แทน exporter ที่ตั้งไว้</li>
+</ul>
+
+<div class="box key"><span class="tag">สูตรอ่าน trace ที่ใช้บ่อย</span>
+  <ul>
+    <li>หา subagent ที่แพงที่สุด: รวม token แยกตาม <code>agent_id</code></li>
+    <li>ขนาด input จริงทั้งหมด: <code>input_tokens</code> + <code>cache_read_tokens</code> (ส่วนที่อ่านจาก cache ไม่ได้รวมอยู่ใน input_tokens)</li>
+    <li><code>attempt</code> สูงพร้อม <code>duration_ms</code> ยาว: กำลังโดน retry</li>
+    <li><code>stop_reason = max_tokens</code>: output ถูกตัดกลางทาง</li>
+    <li><code>tool.blocked_on_user</code> ยาว แต่ <code>tool.execution</code> สั้น: tool ไม่ได้ช้า คนกดอนุมัติช้า</li>
+  </ul>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>interaction → llm_request / tool → (blocked_on_user, execution) subagent ซ้อนใต้ Agent tool และระบุตัวด้วย agent_id อยากเห็น hook ต้องใช้ detailed beta tracing</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>turn หนึ่งใช้เวลา 62 วินาที ใน trace มี span <code>claude_code.tool</code> ของ Write ยาว 58 วินาที แบ่งเป็น <code>tool.blocked_on_user</code> 57 วินาที และ <code>tool.execution</code> 1 วินาที ส่วน llm_request ทุกตัวมี <code>attempt=1</code> ข้อสรุปไหนถูก?</p>
+  <ol type="A">
+    <li>ดิสก์เขียนไฟล์ช้า</li>
+    <li>API โดน retry หลายรอบ</li>
+    <li>มีคนใช้เวลานานกว่าจะกดอนุมัติ permission prompt</li>
+    <li>output ถูกตัดเพราะ max_tokens</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> เวลาเกือบทั้งหมดอยู่ใน blocked_on_user ซึ่งคือการรอคน execution แค่ 1 วินาที จึงไม่ใช่ดิสก์ attempt=1 แปลว่าไม่มี retry และไม่มีหลักฐานเรื่อง stop_reason</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมอยากรู้ว่า subagent ตัวไหนในงานรีเสิร์ชกินค่า input มากที่สุด และต้องการตัวเลข input ที่ "ครบ" ควรคำนวณอย่างไร?</p>
+  <ol type="A">
+    <li>รวม <code>input_tokens</code> แยกตาม <code>parent_agent_id</code></li>
+    <li>รวม <code>input_tokens</code> + <code>cache_read_tokens</code> แยกตาม <code>agent_id</code></li>
+    <li>นับจำนวน span <code>claude_code.hook</code> แยกตาม agent</li>
+    <li>ดู <code>ttft_ms</code> สูงสุดของแต่ละ agent</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> <code>agent_id</code> ระบุตัว subagent เอง (parent ระบุแม่) และ input เต็มต้องบวกส่วนที่อ่านจาก cache ด้วย hook span ไม่ได้บอกต้นทุน และ ttft เป็นเรื่องเวลา</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Content gates: ค่า default คือปิดเนื้อหา</h3>
+<p>โดย default telemetry เก็บแค่ <strong>ความยาว</strong> ไม่เก็บ <strong>เนื้อหา</strong> prompt และ response ถูกย่อเหลือแค่จำนวนตัวอักษร และ event <code>user_prompt</code> จะแสดงเป็น <code>&lt;REDACTED&gt;</code> ข้อมูลไปแค่ endpoint ที่เราตั้งเอง แต่ต้องคิดให้ดีว่าถ้าเปิด gate แล้ว collector ของเราจะกลายเป็นที่เก็บ source code และ secret ของทั้งบริษัท</p>
+<p>ข้อยกเว้นหนึ่งที่ต้องจำ: ถ้า login ด้วย OAuth ค่า <code>user.email</code> จะติดไปด้วย <strong>โดยไม่มี gate</strong> คุม</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ตัวแปร</th><th>เปิดเผยอะไร</th></tr>
+  <tr><td><code>OTEL_LOG_USER_PROMPTS=1</code></td><td>ข้อความ prompt ใน event <code>user_prompt</code> (field <code>prompt</code> และ <code>prompt_text</code>) และบน interaction span</td></tr>
+  <tr><td><code>OTEL_LOG_ASSISTANT_RESPONSES=1</code></td><td>ข้อความคำตอบใน event <code>assistant_response</code> <strong>ถ้าไม่ตั้ง จะสืบทอดค่าจาก gate ของ prompts</strong></td></tr>
+  <tr><td><code>OTEL_LOG_TOOL_DETAILS=1</code></td><td>input ของ tool: คำสั่ง Bash, path ไฟล์, URL, ชื่อ MCP และ skill</td></tr>
+  <tr><td><code>OTEL_LOG_TOOL_CONTENT=1</code></td><td>span event <code>tool.output</code> ที่มีเนื้อไฟล์และ output ของคำสั่ง (ต้องเปิด tracing)</td></tr>
+  <tr><td><code>OTEL_LOG_RAW_API_BODIES</code></td><td>JSON ของ Messages API ทั้งก้อน รวมประวัติบทสนทนา (<code>1</code> = inline, <code>file:&lt;dir&gt;</code> = เขียนลงไฟล์แบบไม่ตัด)</td></tr>
+</table></div>
+
+<ul>
+  <li>เนื้อหาแบบ inline ถูกตัดที่ <code>CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH</code> ค่า default 61440 UTF-16 code units (ประมาณ 60 KB)</li>
+  <li>ในโหมด detailed beta tracing ค่า <code>response.model_output</code> บน llm_request span <strong>ตาม gate ของ prompts</strong> ไม่ได้ตาม gate ของ responses</li>
+  <li>การเปิด raw API bodies เท่ากับยินยอมให้เห็นทุกอย่างที่ gate อื่นเปิดเผยอยู่แล้ว เพราะ body ดิบมีทั้ง prompt, response และผล tool อยู่ในตัว เป็น gate ที่กว้างที่สุด</li>
+</ul>
+
+<h3>Managed settings กับ endpoint</h3>
+<p>ถ้าแอดมินตั้ง <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> ผ่าน managed settings (ค่าที่ deploy บังคับให้ผู้ใช้ทุกคน) endpoint แยกราย signal ที่ developer ตั้งเองจะถูกเอาออก dev จึงชี้ signal ใดไป collector อื่นไม่ได้ แต่ตัวเลือก exporter (<code>OTEL_*_EXPORTER</code>) ยังเป็นไปตามลำดับ precedence ปกติทีละ key แปลว่า developer ยังสลับ signal ไปเป็น <code>none</code> หรือ <code>console</code> ได้ <strong>เว้นแต่</strong> managed settings จะตั้งตัวเลือก exporter ไว้ด้วย</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปิดแค่ <code>OTEL_LOG_USER_PROMPTS=1</code> ก็จะได้เฉพาะ prompt ส่วนคำตอบยังปิดอยู่"</strong> ไม่ใช่ gate ของ responses สืบทอดค่าจาก prompts เมื่อไม่ได้ตั้ง ถ้าอยากได้แค่ prompt ต้องตั้ง <code>OTEL_LOG_ASSISTANT_RESPONSES=0</code> ชัดๆ</p>
+  <p><strong>"แอดมินตั้ง endpoint ใน managed settings แล้ว dev ปิด telemetry ไม่ได้แน่นอน"</strong> ยังได้ ถ้า managed settings ไม่ได้ล็อก exporter selector ไว้ด้วย</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>default = เก็บแค่ความยาว gate แต่ละตัวเปิดเนื้อหาคนละชั้น: prompt, response (สืบทอดจาก prompt), tool input, tool output (ต้อง tracing), และ raw body ที่กว้างสุด อย่าลืม <code>user.email</code> ที่ไม่มี gate ใน OAuth</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ทีม compliance ขอเก็บข้อความที่พนักงานพิมพ์ถามเพื่อ audit แต่ห้ามเก็บคำตอบของ Claude เพราะอาจมีโค้ดลับ ถ้าตั้งแค่ <code>OTEL_LOG_USER_PROMPTS=1</code> จะเกิดอะไร?</p>
+  <ol type="A">
+    <li>เก็บแค่ prompt ตามที่ต้องการ</li>
+    <li>เก็บทั้ง prompt และ response เพราะ response gate สืบทอดค่ามา</li>
+    <li>ไม่เก็บอะไรเลยจนกว่าจะเปิด tracing</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ต้องตั้ง <code>OTEL_LOG_ASSISTANT_RESPONSES=0</code> เพิ่มเพื่อกันไม่ให้คำตอบหลุดไปด้วย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ความต้องการกับ content gate:</p>
+  <ol>
+    <li>อยากเห็นว่า agent รันคำสั่ง Bash อะไร และแตะไฟล์ path ไหน</li>
+    <li>อยากเห็นผลลัพธ์ที่คำสั่งพิมพ์ออกมาและเนื้อไฟล์ที่อ่าน (ใช้ tracing อยู่แล้ว)</li>
+    <li>อยากได้ request/response ของ Messages API แบบดิบทั้งก้อนไว้ replay</li>
+    <li>อยากเห็นข้อความที่ผู้ใช้พิมพ์</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-OTEL_LOG_TOOL_DETAILS, 2-OTEL_LOG_TOOL_CONTENT, 3-OTEL_LOG_RAW_API_BODIES, 4-OTEL_LOG_USER_PROMPTS</strong> tool details = input, tool content = output (ต้องมี tracing), raw bodies = กว้างที่สุดและครอบ gate อื่นทั้งหมด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>แอดมินตั้ง <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> ใน managed settings อย่างเดียว developer คนหนึ่งตั้ง <code>OTEL_LOGS_EXPORTER=none</code> ในเครื่องตัวเอง ผลคืออะไร?</p>
+  <ol type="A">
+    <li>log ยังถูกส่งไป endpoint ของบริษัท เพราะ managed settings ชนะทุกอย่าง</li>
+    <li>log ของ dev คนนั้นไม่ถูกส่ง เพราะ selector ยังตาม precedence ปกติ และ managed settings ไม่ได้ล็อก selector ไว้</li>
+    <li>log ถูกส่งไป endpoint ที่ dev ตั้งเองแทน</li>
+    <li>Claude Code ไม่ยอมเริ่มทำงาน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> managed endpoint ลบแค่ endpoint ราย signal ของ dev แต่ exporter selector ยังเปลี่ยนได้ ถ้าจะบังคับจริงต้องตั้ง selector ใน managed settings ด้วย C ผิดเพราะ dev ชี้ไป endpoint อื่นไม่ได้แล้ว</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/observability">Claude Agent SDK docs: Observability</a></li>
+  <li><a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code docs: Monitoring usage</a></li>
+  <li><a href="https://claude.com/blog/claude-code-and-new-admin-controls-for-business-plans">Claude blog: Claude Code and new admin controls for business plans</a></li>
+</ul>
+</section>

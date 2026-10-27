@@ -1,0 +1,315 @@
+<section class="lesson" id="l-6-3">
+<h2>6.3 Stakeholder expectations: SLAs, limits และ pilot feedback</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/stakeholder-expectations-and-slas-for-claude-solutions">CertSafari 6.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายให้ฝั่งธุรกิจเข้าใจว่า service tier แต่ละแบบ (Standard, Priority Tier, Batch) สัญญาอะไรไว้ และ <strong>ไม่ได้</strong> สัญญาอะไร</li>
+    <li>แยกได้ว่า rate limit กับ spend cap เป็น "เพดาน" ไม่ใช่ "ความจุที่จองไว้" และอ่าน error 429 / 400 แต่ละแบบออกว่าต้องทำอะไรต่อ</li>
+    <li>ระบุเกณฑ์ที่ stakeholder ต้องเซ็นรับก่อนจะคุยเรื่อง SLA และรู้ว่าเกณฑ์นั้นต้องเปิดคุยใหม่เมื่อไหร่</li>
+    <li>วางช่องทางสื่อสารตอนระบบล่มและตอนโมเดลถูก retire ได้ถูกที่</li>
+    <li>ออกแบบ feedback loop ของ pilot และไล่สาเหตุเวลามีคนบ่นว่า "คุณภาพตก" อย่างเป็นระบบ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: สัญญาได้แค่เพดานกับเป้า ไม่ใช่การรับประกัน</span>
+  <p>สิ่งที่สถาปนิกบอก stakeholder ได้ต้องยืนอยู่บน <strong>ตัวเลขที่เป็นเพดาน (ceiling) และเป้าหมาย (target)</strong> เท่านั้น rate limit กับ spend cap คือค่าสูงสุดที่ใช้ได้ ไม่ใช่ขั้นต่ำที่การันตี และในบรรดา tier ทั้งหมด มีแค่ <strong>Priority Tier</strong> ที่มีตัวเลข uptime เป็นเป้า</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Service tier: แต่ละแบบสัญญาอะไรไว้</h3>
+<p>ก่อนจะรับปากใครว่า "ระบบจะพร้อมใช้ 99.x%" ต้องรู้ก่อนว่าคำขอของเราวิ่งอยู่บน tier ไหน เพราะแต่ละ tier ให้คำมั่นต่างกันมาก</p>
+<ul>
+  <li><strong>Standard</strong> เป็นค่าเริ่มต้นของทุก request ให้บริการแบบ <em>best effort</em> ไม่มีตัวเลข uptime ใดๆ ช่วงคนใช้เยอะอาจเจอ overload error ได้ เป็นเรื่องปกติของ tier นี้</li>
+  <li><strong>Priority Tier</strong> ต้องทำ <strong>capacity commitment</strong> (ผูกปริมาณใช้งานล่วงหน้า) แลกกับเป้า uptime <strong>99.5%</strong> แต่เป้านี้ครอบคลุมแค่ <strong>ปริมาณที่ commit ไว้ บนโมเดลเวอร์ชันที่ระบุ</strong> เท่านั้น ส่วนที่เกินจาก commitment จะไหลกลับไปเป็น Standard</li>
+  <li><strong>Batch</strong> สำหรับงานแบบ asynchronous ที่รอได้ ไม่เหมาะกับเส้นทางที่ผู้ใช้นั่งรอคำตอบ (latency-sensitive)</li>
+</ul>
+<p>Commitment ของ Priority Tier ประกอบด้วย 3 อย่าง:</p>
+<ul>
+  <li>จำนวน token ต่อนาที แยก <strong>input</strong> กับ <strong>output</strong></li>
+  <li>ระยะเวลา <strong>1, 3, 6 หรือ 12 เดือน</strong></li>
+  <li><strong>โมเดลเวอร์ชันเดียว</strong> ที่ระบุชื่อ</li>
+</ul>
+<p>Cache read และ cache write ก็นับเข้า capacity ของ Priority Tier ด้วย โดยมีน้ำหนัก (weighting) ของตัวเอง และที่ต้องจำคือ Priority Tier <strong>ไม่รองรับ</strong> หลายโมเดลรุ่นปัจจุบัน ได้แก่ Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5 และ Claude Haiku 5.5 ถ้าลูกค้าอยากได้เป้า uptime บนโมเดลพวกนี้ ต้องบอกตรงๆ ว่า Priority Tier ช่วยไม่ได้</p>
+<p>เปรียบง่ายๆ Priority Tier เหมือนจองโต๊ะร้านอาหารไว้ 10 ที่ ถ้ามา 10 คนได้นั่งแน่ (ตามเป้า) แต่ถ้ามา 14 คน อีก 4 คนต้องไปต่อคิวเหมือนลูกค้า walk-in ปกติ</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Tier</th><th>คำมั่นเรื่องความพร้อมใช้</th><th>เหมาะกับ</th></tr>
+  <tr><td>Standard</td><td>Best effort ไม่มีตัวเลข uptime</td><td>ค่าเริ่มต้นของทุกงาน</td></tr>
+  <tr><td>Priority Tier (ในส่วนที่ commit)</td><td>เป้า 99.5% เฉพาะโมเดลเวอร์ชันที่ commit</td><td>เส้นทางสำคัญที่ต้องมีตัวเลขไปคุยกับธุรกิจ</td></tr>
+  <tr><td>Priority Tier (ส่วนที่เกิน)</td><td>กลับไปเป็น Standard</td><td>ไม่ได้ออกแบบมาให้พึ่งพา</td></tr>
+  <tr><td>Batch</td><td>ไม่เน้นความเร็ว ประมวลผลแบบ async</td><td>งานรอได้ เช่น ประมวลผลเอกสารข้ามคืน</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ซื้อ Priority Tier แล้วได้ 99.5% กับ traffic ทั้งหมด ทุกโมเดล"</strong> ไม่ใช่ เป้า 99.5% ครอบคลุมแค่ capacity ที่ commit บนโมเดลเวอร์ชันที่รองรับ ส่วนที่ล้นเป็น Standard และบางโมเดลไม่รองรับ Priority Tier เลย</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Standard = best effort, Priority Tier = เป้า 99.5% เฉพาะส่วนที่ commit บนโมเดลเดียว, Batch = งานที่รอได้ อย่าเอาตัวเลขของ tier หนึ่งไปสัญญากับ traffic ที่วิ่งอยู่อีก tier</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>ทีมมี traffic 4 แบบ จับคู่กับสิ่งที่ฝั่ง Claude สัญญาไว้:</p>
+  <ol>
+    <li>แชตบอตภายในที่ไม่ได้ทำ commitment อะไรเลย</li>
+    <li>ระบบตอบลูกค้าที่ commit token ต่อนาทีไว้ 6 เดือนบนโมเดลที่รองรับ และใช้ไม่เกินที่ commit</li>
+    <li>ช่วงแคมเปญที่ traffic ของระบบข้อ 2 พุ่งเกิน commitment ไปเกือบเท่าตัว</li>
+    <li>งานสรุปรายงานประจำวันที่รันตอนตีสองและพรุ่งนี้เช้าค่อยมีคนอ่าน</li>
+  </ol>
+  <p>ตัวเลือก: (a) เป้า uptime 99.5% (b) best effort ไม่มีตัวเลข uptime (c) ส่วนเกินถูกให้บริการแบบ Standard (d) Batch เหมาะสุด</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-b, 2-a, 3-c, 4-d</strong> ข้อ 3 คือกับดักที่เจอบ่อย ส่วนที่ล้นจาก commitment ไม่ได้รับเป้า 99.5% แต่กลับไปอยู่ใน Standard</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Rate limit กับ spend cap: เพดาน ไม่ใช่ความจุที่จองไว้</h3>
+<p>ทุกองค์กรถูกจัดอยู่ใน <strong>usage tier</strong> ซึ่งขยับขึ้นเองอัตโนมัติตามประวัติการใช้งาน องค์กรใหม่อาจเริ่มที่ <strong>Evaluation tier</strong> ที่ limit ต่ำกว่า นอกจากนี้ admin ยังตั้ง limit ของแต่ละ <strong>workspace</strong> ให้ต่ำกว่าขององค์กรได้ ซึ่งมีประโยชน์มากตอนทำ pilot เพราะกันไม่ให้ทีมหนึ่งใช้ headroom ของอีกทีมจนหมด</p>
+
+<h3>Rate limit วัดยังไง</h3>
+<ul>
+  <li>วัดแยกตาม <strong>model class</strong> เป็น 3 ตัว: <strong>RPM</strong> (requests per minute), <strong>ITPM</strong> (input tokens per minute) และ <strong>OTPM</strong> (output tokens per minute)</li>
+  <li>ทุกตัวเป็น <strong>ค่าสูงสุด</strong> ไม่ใช่ขั้นต่ำที่รับประกัน</li>
+  <li>บังคับใช้จริงใน <strong>ช่วงเวลาที่สั้นกว่าหนึ่งนาที</strong> ดังนั้นถ้ายิงกระจุก (burst) อาจโดน limit ได้ทั้งที่ยอดรวมทั้งนาทียังไม่ถึง</li>
+  <li>ในโมเดลส่วนใหญ่ <strong>เฉพาะ input token ที่ไม่ได้มาจาก cache</strong> เท่านั้นที่นับเข้า ITPM แปลว่าใช้ prompt caching ดีๆ จะได้ ITPM ที่ใช้งานได้จริงสูงขึ้น</li>
+  <li>ขอเพิ่ม limit ได้ใน Console เมื่อใช้ไปแล้ว <strong>อย่างน้อย 50%</strong> ของ limit ปัจจุบัน และการเพิ่ม limit ก็แค่ยกเพดานขึ้น ไม่ได้จองความจุให้</li>
+</ul>
+
+<h3>Spend cap รายเดือนตาม tier</h3>
+<div class="table-wrap"><table>
+  <tr><th>Tier</th><th>Spend cap ต่อเดือน</th></tr>
+  <tr><td>Start</td><td>$500</td></tr>
+  <tr><td>Build</td><td>$1,000</td></tr>
+  <tr><td>Scale</td><td>$200,000</td></tr>
+  <tr><td>Custom</td><td>ไม่มี cap (ตกลงกับ account team)</td></tr>
+</table></div>
+
+<h3>อ่าน error ให้ออกว่าต้องทำอะไรต่อ</h3>
+<p>ตรงนี้คือจุดที่ runbook มักเขียนผิด เพราะ 429 ไม่ได้มีความหมายเดียว</p>
+<div class="table-wrap"><table>
+  <tr><th>สาเหตุ</th><th>HTTP / type</th><th>สัญญาณที่แยกได้</th><th>ต้องทำอะไร</th></tr>
+  <tr><td>ชน rate limit</td><td>429 <code>rate_limit_error</code></td><td>มี header <code>retry-after</code></td><td>รอตามเวลาที่บอก แล้ว retry</td></tr>
+  <tr><td>ชน spend cap ของ tier</td><td>429 <code>rate_limit_error</code> + <code>enforced_spend_limit_reached</code></td><td><strong>ไม่มี</strong> <code>retry-after</code></td><td>รอถึง 00:00 UTC วันที่ 1 ของเดือนถัดไป หรือขยับไป tier ที่สูงกว่า</td></tr>
+  <tr><td>ชน spend limit ที่องค์กรตั้งเอง</td><td>400 <code>invalid_request_error</code></td><td>ข้อความขึ้นต้นด้วย "You have reached your specified API usage limits"</td><td>เพิ่มหรือเอา limit ที่ตั้งไว้ออก</td></tr>
+</table></div>
+<p>ตัวอย่าง logic แยกเคสใน client:</p>
+<pre><code>if status == 429 and "retry-after" in headers:
+    sleep(int(headers["retry-after"])); retry()
+elif status == 429 and code == "enforced_spend_limit_reached":
+    alert_finance("ชน spend cap ของ tier: retry ไม่ช่วย")
+elif status == 400 and msg.startswith("You have reached your specified API usage limits"):
+    alert_admin("ชน limit ที่เราตั้งเอง: ปรับใน Console")</code></pre>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ถ้าใช้ SDK ที่ retry 429 ให้อัตโนมัติ แล้วไปชน spend cap ของ tier จะเกิดอะไร? คำตอบ: retry กี่รอบก็ไม่ผ่าน เพราะ 429 แบบนี้ไม่มี <code>retry-after</code> และจะค้างอยู่อย่างนั้นจนกว่าจะถึงรอบรีเซ็ตต้นเดือน หรือจนกว่าจะเปลี่ยน tier</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Rate limit คือความจุขั้นต่ำที่เราได้แน่ๆ"</strong> ไม่ใช่ เป็นเพดานบน Standard ยังเป็น best effort อยู่ดี</p>
+  <p><strong>"429 ทุกตัว retry แล้วเดี๋ยวก็หาย"</strong> ไม่ใช่ 429 จาก spend cap ของ tier ไม่หายด้วยการ retry</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Limit วัดเป็น RPM/ITPM/OTPM ต่อ model class บังคับในหน้าต่างสั้น และเป็นเพดานทั้งหมด แยก 429 แบบมี <code>retry-after</code> (รอแล้วลองใหม่) ออกจาก 429 spend cap (รอเดือนใหม่/เปลี่ยน tier) และ 400 จาก limit ที่ตั้งเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ผู้บริหารถามว่า "เราได้ ITPM limit เพิ่มเป็นสองเท่าแล้ว แปลว่าตอนช่วงพีกระบบเราจะไม่ช้าหรือ error แน่นอนใช่ไหม" ทีมใช้ Standard tier อยู่ ควรตอบแบบไหน?</p>
+  <ol type="A">
+    <li>ใช่ เพราะ limit ใหม่คือความจุที่ Anthropic จองไว้ให้เรา</li>
+    <li>ไม่ใช่ limit ที่เพิ่มแค่ยกเพดาน บน Standard ยังเป็น best effort และอาจเจอ overload ช่วงพีกได้</li>
+    <li>ใช่ ตราบใดที่ยอดรวมต่อนาทีไม่เกิน limit จะไม่มี error เลย</li>
+    <li>ไม่ใช่ เพราะ limit จะกลับลงมาเองทุกต้นเดือน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> limit ไม่ใช่ความจุที่จอง (A ผิด) และถึงยอดรวมต่อนาทีไม่เกิน การยิงกระจุกก็โดน limit ได้เพราะบังคับในหน้าต่างที่สั้นกว่าหนึ่งนาที (C ผิด) ส่วน D ไม่มีกลไกแบบนั้น</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เกณฑ์ที่ stakeholder ต้องเซ็นรับก่อนคุย SLA</h3>
+<p>ก่อนจะคุยเรื่อง uptime หรือ response time ต้องตกลงเกณฑ์เลือกโมเดลกับฝั่งธุรกิจให้ได้ก่อน โดยถาม 3 คำถาม:</p>
+<ol class="steps">
+  <li><strong>ต้องการความสามารถอะไร</strong> (capabilities) งานนี้ต้องใช้ reasoning ลึกแค่ไหน</li>
+  <li><strong>ต้องเร็วแค่ไหน</strong> รวมถึงยอมจ่ายราคา premium ของ <strong>fast mode</strong> หรือไม่ (fast mode บน Opus 5.5, Opus 5 และ Opus 4.8 ให้ความเร็ว output สูงขึ้นได้ถึง <strong>2.5 เท่า</strong> ในราคา premium การยอมจ่ายหรือไม่เป็นการตัดสินใจทางธุรกิจ ไม่ใช่ทางเทคนิค)</li>
+  <li><strong>งบเท่าไหร่</strong> แยกทั้งช่วง development และ production</li>
+</ol>
+<p>สิ่งที่ <strong>ไม่ใช่</strong> เกณฑ์เลือก: จำนวน parameter ของโมเดล หรือที่ตั้งของ data center ข้อมูลพวกนี้ไม่ได้ถูกเผยแพร่เป็นเกณฑ์ในเอกสาร ใครถามมาให้ดึงกลับไปที่ความสามารถ ความเร็ว และงบ</p>
+<p>ส่วน uptime กับ response time ควรอยู่ในเอกสารที่เซ็นด้วย แต่ต้องเขียนเป็น <strong>เป้า (target) ที่ตรงกับ tier ที่ซื้อจริง</strong> ถ้าอยู่บน Standard ก็ห้ามเขียนตัวเลข uptime ที่ Standard ไม่ได้ให้</p>
+
+<h3>เกณฑ์ที่เซ็นแล้วไม่ได้ตายตัว</h3>
+<p>หลัง launch เกณฑ์ต้องถูกเปิดคุยใหม่เป็นระยะ เพราะโมเดลใหม่อาจเปลี่ยนสมการ เช่น โมเดลถูกลงหรือเก่งขึ้นจนสลับ trade-off เดิม สิ่งที่ทำให้การคุยใหม่มีหลักฐานคือ <strong>eval suite</strong> ที่วัดตามเกณฑ์เดิม เวลาย้ายไปโมเดลใหม่ให้:</p>
+<ul>
+  <li>รัน eval suite เทียบกับเกณฑ์ที่เซ็นไว้ ไม่ใช่รอให้มีคนบ่นก่อน</li>
+  <li>ทบทวน prompt และ guardrail ที่เขียนไว้ให้โมเดลเก่า เพราะอาจไปจำกัดโมเดลที่เก่งกว่า</li>
+  <li>ไม่สมมติว่าโมเดลใหม่จะดีกว่าเสมอโดยไม่ทดสอบ</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เซ็นเกณฑ์ 3 ข้อ: ความสามารถ, ความเร็ว (รวม fast mode), งบ dev/prod ตัวเลข uptime/latency เป็นเป้าตาม tier จริง และเปิดคุยใหม่ด้วย eval suite ทุกครั้งที่เปลี่ยนโมเดล</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบสรุปสัญญาเช่าผ่านเกณฑ์ที่เซ็นไว้มา 8 เดือน ทีมวางแผนย้ายไปโมเดลรุ่นใหม่ที่เก่งกว่า ควรทำอะไรเป็นอันดับแรก?</p>
+  <ol type="A">
+    <li>ย้ายเลย แล้วรอดูว่ามีผู้ใช้ร้องเรียนไหม</li>
+    <li>ย้ายโดยคง prompt และ guardrail เดิมไว้ทุกตัว เพื่อไม่ให้พฤติกรรมเปลี่ยน</li>
+    <li>รัน eval suite บนโมเดลใหม่เทียบกับเกณฑ์ที่เซ็นไว้ และทบทวน prompt/guardrail ที่อาจไปจำกัดโมเดลใหม่</li>
+    <li>ไม่ต้องทดสอบ เพราะโมเดลใหม่ทำได้ดีกว่าโมเดลเก่าเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> A เป็นการตั้งรับ B อาจกดโมเดลที่เก่งกว่าไว้ด้วยข้อจำกัดที่เขียนไว้ให้รุ่นเก่า และ D ไม่มีอะไรรับประกันได้ถ้าไม่วัด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เลือก 3 ข้อ)</span>
+  <p>เวิร์กชอปเลือกโมเดลกับฝ่ายปฏิบัติการ ข้อไหนเป็นเกณฑ์ที่ควรให้ stakeholder เซ็นรับ?</p>
+  <ol type="A">
+    <li>ความสามารถที่งานต้องการ เช่น ต้องเข้าใจตารางในเอกสารสแกน</li>
+    <li>จำนวน parameter ของโมเดลแต่ละตัว</li>
+    <li>เวลาตอบที่รับได้ และยอมจ่ายราคา premium ของ fast mode หรือไม่</li>
+    <li>ประเทศที่ตั้ง data center ที่ประมวลผลคำขอ</li>
+    <li>งบประมาณช่วงพัฒนาและช่วง production</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, C, E</strong> จำนวน parameter และที่ตั้ง data center ไม่ใช่เกณฑ์เลือกที่มีการเผยแพร่ไว้ในเอกสาร</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. สื่อสารตอนระบบล่มและตอนโมเดลถูก retire</h3>
+<h3>ช่องทางต้องแยกให้ชัด</h3>
+<ul>
+  <li><strong>เหตุขัดข้องฝั่ง Anthropic</strong> ดูได้แบบ real-time ที่ <strong>status.claude.com</strong> เป็นแหล่งอ้างอิงหลัก</li>
+  <li><strong>คำถามเรื่องบัญชีและ billing</strong> ไปที่ Support ผ่านไอคอนข้อความใน Help Center หรือปุ่ม "Get help" ใน Console</li>
+  <li>เขียนสองช่องทางนี้แยกกันใน runbook อย่าให้ทีม on-call ไปเปิด ticket หา Support ทั้งที่ควรดู status page หรือกลับกัน</li>
+</ul>
+<p>สิ่งที่คนพลาดบ่อย: <strong>capacity constraint</strong> ช่วงที่ความต้องการสูง เป็นการจัดการโหลดปกติ <strong>ไม่ขึ้นบน status page</strong> และ 429 หมายถึงองค์กรเราชน limit ของตัวเอง ไม่ใช่ incident ของ Anthropic ส่วน system card เป็นเอกสารอธิบายพฤติกรรมโมเดล ไม่ใช่ช่องทางแจ้งเหตุขัดข้อง</p>
+
+<h3>การ retire โมเดล</h3>
+<ul>
+  <li>Anthropic แจ้งล่วงหน้า <strong>อย่างน้อย 60 วัน</strong> ก่อน retire โมเดลที่เปิดให้ใช้สาธารณะ ผ่านอีเมลถึงลูกค้าที่ได้รับผลกระทบและในเอกสาร</li>
+  <li><strong>Deprecated</strong> = ยังใช้ได้ แต่มีตัวแทนที่แนะนำและมีวัน retire แล้ว</li>
+  <li><strong>Retired</strong> = ทุก request ล้มเหลว (ไม่ใช่แค่ปิดใน Console แต่ปิด API inference ด้วย)</li>
+  <li>หา API key ที่ยังเรียกโมเดลเก่าอยู่ได้จากหน้า <strong>Usage</strong> ใน Console โดย export เป็น CSV แยกตาม API key และโมเดล</li>
+</ul>
+
+<div class="box key"><span class="tag">ลองเดาก่อน: วัน retire ใช้กับทุก platform ไหม?</span>
+  <p>วัน retire ที่ Anthropic ประกาศใช้กับ platform ที่ Anthropic ดูแลเอง คือ <strong>Claude API, Claude Platform on AWS และ Microsoft Foundry</strong> ส่วน <strong>Amazon Bedrock</strong> และ <strong>Google Cloud</strong> กำหนดตารางของตัวเอง และไม่มี platform ไหนยกเว้นให้ traffic ที่ใช้อยู่เดิม (ไม่ใช่ว่าห้ามแค่ลูกค้าใหม่)</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ข้อความแจ้ง capacity constraint แปลว่า Claude ล่ม เดี๋ยวเช็ก status page ได้"</strong> ไม่ใช่ capacity constraint เป็นการจัดการโหลดปกติ และไม่ขึ้นบน status page</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Incident ดูที่ status.claude.com, บัญชี/billing ไปที่ Support, overload/429 ไม่ใช่ incident โมเดล retire แจ้งล่วงหน้า ≥60 วัน ใช้กับ platform ของ Anthropic ส่วน Bedrock/Google Cloud มีตารางของตัวเอง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ช่วงบ่ายวันจันทร์ ระบบบน Standard tier เจอ overload error เป็นพักๆ ราว 20 นาทีแล้วหายไป หัวหน้าทีมขายอยากส่งอีเมลแจ้งลูกค้าว่า "ผู้ให้บริการ AI ล่ม" ควรแนะนำอะไร?</p>
+  <ol type="A">
+    <li>ส่งได้เลย overload error คือหลักฐานว่า Anthropic มี incident</li>
+    <li>เปิด ticket กับ Support ให้ยืนยัน incident ก่อนส่ง</li>
+    <li>ยังไม่ควรบอกว่าล่ม overload บน Standard ช่วงพีกเป็นการจัดการโหลดปกติ ไม่ใช่ incident ที่ยืนยันแล้ว และจะไม่ขึ้นบน status page</li>
+    <li>ดู system card ของโมเดลเพื่อยืนยันเหตุขัดข้อง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> overload บน Standard เป็นพฤติกรรมที่คาดได้ของ best effort Support ไม่ใช่ช่องทางยืนยัน incident และ system card ไม่ได้รายงานสถานะแบบ real-time</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>บริษัทใช้โมเดลรุ่นหนึ่งผ่าน Claude API โดยตรงในระบบหลัก และใช้รุ่นเดียวกันผ่าน Amazon Bedrock ในอีกระบบ Anthropic ประกาศวัน retire ของรุ่นนั้นแล้ว ข้อใดถูก?</p>
+  <ol type="A">
+    <li>Traffic เดิมใช้ต่อได้ การ retire มีผลกับลูกค้าที่สมัครใหม่เท่านั้น</li>
+    <li>ระบบที่ใช้ Claude API ต้องย้ายก่อนวัน retire ส่วนระบบบน Bedrock ให้ตรวจตารางของ Bedrock เอง</li>
+    <li>ทั้งสองระบบหยุดวันเดียวกัน เพราะวัน retire ใช้กับทุก platform</li>
+    <li>การ retire ปิดแค่การเข้าถึงใน Console แต่ API ยังเรียกได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> วัน retire ของ Anthropic ใช้กับ platform ที่ Anthropic ดูแล ส่วน Bedrock และ Google Cloud กำหนดเอง ไม่มีการยกเว้น traffic เดิม และโมเดลที่ retire แล้วทุก request จะล้มเหลว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีม on-call กำลังเขียน runbook ว่า "ถ้าสงสัยว่าฝั่ง Claude มีปัญหา ให้ดูที่ไหนเป็นอันดับแรก" ควรเขียนว่าอะไร?</p>
+  <ol type="A">
+    <li>status.claude.com สำหรับ incident แบบ real-time และแยกให้คำถามเรื่องบัญชีไปที่ Help Center/Support</li>
+    <li>System card ของโมเดลล่าสุด</li>
+    <li>ไม่ต้องดูที่ไหน เพราะ Anthropic ไม่มีหน้าแสดงสถานะ ให้ถือว่า 429 คือ incident ทุกครั้ง</li>
+    <li>ส่งอีเมลถาม account team ทุกครั้ง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> Anthropic มี status page ที่เป็นแหล่งอ้างอิงหลัก system card ไม่ใช่ช่องทาง incident และ 429 อาจมาจากการที่องค์กรเราชน limit เอง</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. สร้าง feedback loop ไว้ใน pilot ตั้งแต่วันแรก</h3>
+<p>Pilot ที่ไม่มีช่องทางรับ feedback ที่ชัดเจน จะจบด้วยความรู้สึกมากกว่าข้อมูล ให้วาง loop 4 ขั้นนี้:</p>
+<div class="table-wrap"><table>
+  <tr><th>ขั้น</th><th>ทำอะไร</th><th>ได้อะไร</th></tr>
+  <tr><td><strong>Collect</strong></td><td>เปิดช่องทางเฉพาะ มี <strong>เจ้าของที่ระบุชื่อ</strong> คอยเฝ้าช่วง <strong>48 ชั่วโมงแรก</strong> และตอบแบบเปิดเผยให้ทุกคนเห็น</td><td>คำถามช่วงแรกได้คำตอบเร็ว คนอื่นเห็นคำตอบด้วย</td></tr>
+  <tr><td><strong>Prompt</strong></td><td>ส่งคำถามประจำสัปดาห์ เช่น "สัปดาห์นี้เครื่องมือช่วยอะไรคุณได้บ้าง" ให้ตอบด้วย screenshot หรือสองสามประโยค</td><td>feedback ไหลเข้ามาต่อเนื่อง ไม่เงียบหายหลังสัปดาห์แรก</td></tr>
+  <tr><td><strong>Observe</strong></td><td>ดู usage analytics: active users, sessions, spend</td><td>เห็นการใช้งานที่ลดลง ซึ่งอาจเป็นสัญญาณว่ามีจุดติดขัด</td></tr>
+  <tr><td><strong>Report back</strong></td><td>สรุปรายสัปดาห์ว่า feedback นำไปสู่การตัดสินใจอะไรบ้าง</td><td>ผู้ใช้เห็นว่าเสียงของตัวเองเปลี่ยนอะไรได้จริง เลยให้ feedback ต่อ</td></tr>
+</table></div>
+<p>แต่ละเรื่องที่เข้ามาให้คัดแยก (triage) เป็น 4 ประเภท:</p>
+<ul>
+  <li><strong>ช่องว่างด้านความสามารถ</strong> (capability gap) โมเดลหรือระบบยังทำสิ่งนี้ไม่ได้</li>
+  <li><strong>ปัญหา limit หรือ quota</strong></li>
+  <li><strong>ปรับได้ด้วย prompt หรือ configuration</strong></li>
+  <li><strong>คำบ่นเรื่องคุณภาพ</strong> ที่ต้องเอาไปตรวจกับ eval</li>
+</ul>
+<p>ตอนชวนคนเข้า pilot ให้บอกเหตุผลว่าทำไมเลือกเขา และ input ของเขาจะเปลี่ยนอะไร คนที่รู้ว่าความเห็นตัวเองมีผล จะให้ feedback ที่ใช้ได้มากกว่า</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Collect (ช่องทาง + เจ้าของ 48 ชม.แรก) → Prompt (ถามทุกสัปดาห์) → Observe (analytics) → Report back (สรุปว่าทำอะไรจาก feedback) แล้ว triage เป็น capability / limit / config / คุณภาพ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่ปัญหาที่เจอใน pilot กับขั้นของ feedback loop ที่แก้ได้:</p>
+  <ol>
+    <li>สัปดาห์แรกมีคำถามซ้ำๆ แต่ไม่มีใครตอบ คนเลยเลิกถาม</li>
+    <li>หลังสัปดาห์ที่สอง ไม่มีใครส่ง feedback อีกเลย</li>
+    <li>ทีมบัญชีเลิกใช้ไปเงียบๆ โดยไม่มีใครบ่น</li>
+    <li>ผู้ใช้รู้สึกว่าส่ง feedback ไปก็เหมือนโยนลงหลุมดำ</li>
+  </ol>
+  <p>ตัวเลือก: (a) Collect (b) Prompt (c) Observe (d) Report back</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-d</strong> ข้อ 3 จะเห็นได้จาก analytics ที่การใช้งานตกลง ไม่ใช่จากคำบ่น</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. แยก "คุณภาพตกจริง" ออกจาก "ความแปรปรวนปกติ"</h3>
+<p>โมเดลให้คำตอบต่างกันได้แม้ input ใกล้เคียงกัน ดังนั้นมีคนเจอคำตอบแย่ไม่กี่ครั้ง <strong>ยังไม่ได้พิสูจน์ว่าเกิด regression</strong> และถ้าไม่มี eval ทีมก็ได้แต่ debug แบบตามแก้ทีละเคส</p>
+<p>เวลามีคนบอกว่า "ช่วงนี้คุณภาพแย่ลง" ให้ไล่ตามลำดับนี้ เริ่มจากสิ่งที่เช็กง่ายที่สุดก่อน:</p>
+<ol class="steps">
+  <li><strong>มี incident ยืนยันไหม</strong> เปิด status.claude.com</li>
+  <li><strong>เป็นเรื่อง capacity หรือ limit ไหม</strong> error ที่เห็นเป็น overload หรือ 429 หรือเปล่า ซึ่งทั้งคู่ไม่ใช่ปัญหาคุณภาพ</li>
+  <li><strong>มี regression ที่วัดได้ไหม</strong> รัน eval suite บน build ปัจจุบัน ถ้าคะแนน <strong>ต่ำกว่า baseline</strong> เท่านั้นถึงจะมีเหตุผลพอให้ rollback หรือแก้ prompt</li>
+  <li><strong>เป็นความแปรปรวนปกติ</strong> เอาเคสที่ถูกรายงานไปเพิ่มใน eval set แล้วแจ้ง stakeholder ว่าวัดอะไรไปและผลเป็นยังไง</li>
+</ol>
+<p>เพื่อให้คำบ่นมีมาตรฐานให้เทียบ ควรเขียน <strong>ความคาดหวังเรื่องความสม่ำเสมอ</strong> ไว้ในเกณฑ์ที่เซ็นตั้งแต่ต้น เช่น "ยอมรับคำตอบที่สำนวนต่างกันได้ ตราบที่ข้อมูลตัวเลขถูกต้อง"</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"มีคนร้องเรียนหลายคน และเราทำซ้ำได้ 1 เคส ก็ rollback ได้เลย"</strong> ไม่พอ คำร้องเรียนและเคสที่ทำซ้ำด้วยมือแยก regression ออกจาก noise ไม่ได้ ต้องเทียบ eval กับ baseline</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ไล่ 4 ขั้น: incident → capacity/limit → regression ที่วัดด้วย eval → ความแปรปรวนปกติ rollback ได้ก็ต่อเมื่อ eval ต่ำกว่า baseline เท่านั้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>หลัง deploy prompt เวอร์ชันใหม่ ผู้จัดการ 3 คนบ่นว่าสรุปประชุม "ห้วนลง" และวิศวกรลองทำซ้ำเองได้ 1 เคส status page ไม่มี incident และไม่มี 429 ข้อใดเป็นเหตุผลที่เพียงพอให้ rollback?</p>
+  <ol type="A">
+    <li>มีผู้บริหารร้องเรียนเกิน 2 คน</li>
+    <li>วิศวกรทำซ้ำได้ด้วยมือ 1 เคส</li>
+    <li>เปิดเคสกับ Support แล้ว</li>
+    <li>รัน eval suite บน build ปัจจุบันแล้วคะแนนต่ำกว่า baseline</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> มีแค่การเทียบ eval กับ baseline ที่แยก regression จริงออกจากความแปรปรวนปกติได้ ถ้าคะแนนไม่ตก ให้เพิ่มเคสที่ถูกรายงานเข้า eval set แล้วรายงานผลการวัดกลับไป</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/api/service-tiers">Claude Docs: Service tiers</a></li>
+  <li><a href="https://platform.claude.com/docs/en/api/rate-limits">Claude Docs: Rate limits</a></li>
+  <li><a href="https://support.claude.com/en/articles/8243635-our-approach-to-rate-limits-for-the-claude-api">Claude Help Center: Our approach to rate limits for the Claude API</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude Docs: Choosing a model</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Claude Docs: Develop tests</a></li>
+  <li><a href="https://claude.com/blog/building-effective-human-agent-teams">Claude blog: Building effective human-agent teams</a></li>
+  <li><a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">Anthropic Engineering: Demystifying evals for AI agents</a></li>
+  <li><a href="https://support.claude.com/en/articles/12466728-troubleshoot-claude-error-messages">Claude Help Center: Troubleshoot Claude error messages</a></li>
+  <li><a href="https://support.claude.com/en/articles/8114535-where-can-i-go-for-claude-api-support-and-assistance">Claude Help Center: Where can I go for Claude API support</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">Claude Docs: Model deprecations</a></li>
+  <li><a href="https://code.claude.com/docs/en/communications-kit">Claude Code Docs: Communications kit</a></li>
+  <li><a href="https://code.claude.com/docs/en/champion-kit">Claude Code Docs: Champion kit</a></li>
+  <li><a href="https://code.claude.com/docs/en/analytics">Claude Code Docs: Analytics</a></li>
+</ul>
+</section>

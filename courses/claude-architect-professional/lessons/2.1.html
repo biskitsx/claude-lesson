@@ -1,0 +1,256 @@
+<section class="lesson" id="l-2-1">
+<h2>2.1 เลือกโมเดล Claude: lineup, จุดเริ่มต้น และต้นทุนต่องาน</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/choosing-a-claude-model-lineup-trade-offs-and-starting-points">CertSafari 2.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เทียบ Fable 5.1, Opus 5.5, Sonnet 5.5 และ Haiku 5.5 ได้ในด้าน capability, latency, ราคา, context และ default effort</li>
+    <li>เลือกระหว่างเริ่มจากโมเดลเล็ก (small first) กับเริ่มจากโมเดลเก่ง (capability first) ได้ตามลักษณะงาน</li>
+    <li>เทียบโมเดลด้วย <strong>ต้นทุนต่องานที่สำเร็จ</strong> แทนราคาต่อ token และเลือก billing mode ที่เหมาะกับงาน bulk</li>
+    <li>ออกแบบระบบหลายโมเดลที่ใช้ token ราคา frontier เฉพาะจุดที่เปลี่ยนผลลัพธ์</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: cost per solved task</span>
+  <p><strong>ต้นทุนต่องานที่สำเร็จ</strong> คือเงินทั้งหมดที่จ่ายไปจนงานเสร็จถูกต้อง รวม token ที่ใช้ รอบที่ล้มเหลว และการ retry โมเดลที่ token แพงกว่าอาจถูกกว่าต่องาน ถ้ามันใช้แรงน้อยกว่าในการทำให้สำเร็จ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Lineup ปัจจุบัน และอะไรที่ทำให้ต่างกัน</h3>
+<p>ทุกโมเดลรับ text และรูปภาพ ส่ง text กลับ รองรับ vision หลายภาษา และ tool use เหมือนกันหมด สิ่งที่ต่างคือ <strong>latency, ราคา และความยากของปัญหาที่รับมือได้อย่างน่าเชื่อถือ</strong> ไม่ใช่ฟีเจอร์เฉพาะทาง</p>
+
+<div class="table-wrap"><table>
+  <tr><th>โมเดล (API ID)</th><th>เหมาะกับ</th><th>Latency</th><th>ราคา / MTok (in / out)</th><th>Default effort</th></tr>
+  <tr><td>Claude Fable 5.1 (<code>claude-fable-5-1</code>)</td><td>reasoning ที่ยาก และงาน agent ระยะยาว</td><td>ช้าที่สุด</td><td>$10 / $50</td><td>high</td></tr>
+  <tr><td>Claude Opus 5.5 (<code>claude-opus-5-5</code>)</td><td>agentic coding และ knowledge work ระยะยาว</td><td>ปานกลาง</td><td>$4 / $20</td><td>medium</td></tr>
+  <tr><td>Claude Sonnet 5.5 (<code>claude-sonnet-5-5</code>)</td><td>สมดุลความเร็วกับความฉลาดดีที่สุด</td><td>เร็ว</td><td>$2 / $10</td><td>high</td></tr>
+  <tr><td>Claude Haiku 5.5 (<code>claude-haiku-5-5</code>)</td><td>งานปริมาณมากที่ latency สำคัญ เช่น classification, extraction, routing</td><td>เร็วที่สุด</td><td>เริ่มที่ $0.10 / $0.50</td><td>medium</td></tr>
+</table></div>
+<ul>
+  <li>ทั้ง 4 ตัวมี context window <strong>1M token</strong> และ max output <strong>128K</strong> เท่ากัน ดังนั้น <strong>ขนาด context ไม่ใช่ตัวตัดสิน</strong></li>
+  <li>แต่ prompt ยาวกระทบ <strong>ราคา</strong>: Haiku 5.5 คิด $0.10 ต่อ MTok input เมื่อ prompt ไม่เกิน 100,000 token ถ้าเกินจะเป็น $0.50 input / $2.50 output ต่อ MTok การยัดเอกสารทั้งก้อนทุก request ทำให้ราคาต่อ token แพงขึ้น 5 เท่า</li>
+  <li>ทุกตัวใช้ adaptive thinking สำหรับ Fable 5.1 และ Opus 5.5 thinking <strong>เปิดตลอด ปิดไม่ได้</strong> คุมความลึกได้ผ่าน effort เท่านั้น</li>
+</ul>
+
+<h3>Fast mode</h3>
+<p>Fast mode (research preview) มีบน <strong>Opus 5.5, Opus 5 และ Opus 4.8</strong> เท่านั้น เป็นโมเดลตัวเดิม weights เดิม คุณภาพเดิม แต่รันบน inference setup ที่เร็วกว่า ได้ output tokens per second สูงขึ้นถึง <strong>2.5 เท่า</strong> แลกกับราคาพรีเมียม (บน Opus 5.5 คือ $8 input / $40 output ต่อ MTok)</p>
+<p>มันเร่ง <strong>ความเร็วในการพ่น output</strong> ไม่ได้ลด time to first token จึงเห็นผลชัดเมื่อใช้ streaming เหมือนรถคันเดิมที่วิ่งบนทางด่วน ไม่ได้เปลี่ยนเป็นรถเล็ก แต่ต้องจ่ายค่าผ่านทาง</p>
+<pre><code>client = anthropic.Anthropic()
+resp = client.beta.messages.create(
+    model="claude-opus-5-5",
+    max_tokens=2048,
+    speed="fast",
+    betas=["fast-mode-2026-02-01"],
+    messages=[{"role": "user", "content": "ร่างแผน migration ..."}],
+)</code></pre>
+<p>ต้องใส่ทั้ง <code>speed="fast"</code> และ beta header <code>fast-mode-2026-02-01</code> ผ่าน <code>betas</code></p>
+
+<h3>Models API: อย่า hardcode ตาราง</h3>
+<p>ระบบที่เลือกโมเดลตอน runtime ควรอ่านข้อมูลจาก <strong>Models API</strong> แทนการฝังตารางไว้ในโค้ด response มี:</p>
+<ul>
+  <li><code>max_input_tokens</code> และ <code>max_tokens</code></li>
+  <li>object <code>capabilities</code> บอกเช่น ปิด thinking ด้วย <code>thinking: {type: "disabled"}</code> ได้ไหม และรองรับ server tool อย่าง web search หรือ code execution ไหม</li>
+  <li>field <code>line</code> บอกตระกูลโมเดล เช่น <code>opus</code> ให้อ่าน field นี้แทนการแกะจาก model ID</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Fast mode คือสลับไปใช้โมเดลเล็กที่เก่งน้อยกว่า"</strong> ไม่ใช่ เป็น Opus ตัวเดิม weights เดิม แค่รันเร็วขึ้นและแพงขึ้น ความสามารถไม่ลด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>4 โมเดลมี context เท่ากัน ต่างที่ latency ราคา และความยากที่รับได้ Fast mode มีแค่ตระกูล Opus ข้อมูลขีดจำกัดและ capability อ่านจาก Models API</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ทีมอยากเปิด fast mode ให้ผู้ช่วยเขียนรายงานที่ stream คำตอบ เพื่อให้ตัวหนังสือไหลเร็วขึ้น ช่อง <code>model=</code> ต้องเป็นตัวไหน?</p>
+  <ol type="A">
+    <li><code>claude-haiku-5-5</code></li>
+    <li><code>claude-fable-5-1</code></li>
+    <li><code>claude-sonnet-5-5</code></li>
+    <li><code>claude-opus-5-5</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> fast mode รองรับเฉพาะตระกูล Opus (5.5, 5, 4.8) และไม่ได้สลับโมเดลให้อัตโนมัติ Haiku, Sonnet และ Fable ใช้ fast mode ไม่ได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>แพลตฟอร์มภายในต้องรู้ว่าแต่ละโมเดลรับ input ได้กี่ token, ตอบได้ยาวสุดเท่าไหร่ และรองรับ code execution ไหม ก่อนจะส่ง request จริง ควรเอาข้อมูลจากไหน?</p>
+  <ol type="A">
+    <li>เรียก Models API แล้วอ่าน <code>max_input_tokens</code>, <code>max_tokens</code> และ <code>capabilities</code></li>
+    <li>รายงาน usage และค่าใช้จ่ายจาก Admin API</li>
+    <li>ยิงข้อความทดสอบที่ effort สูงสุดแล้วดูจาก latency</li>
+    <li>ถามโมเดลให้อธิบายขีดจำกัดของตัวเองใน system prompt</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> Models API คือแหล่งข้อมูลทางการ latency ไม่ได้บอก capability Admin API รายงานการใช้งานและค่าใช้จ่าย และ metadata ไม่ได้อยู่ใน system prompt</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เลือกโมเดลเริ่มต้น: ก้าวลง หรือก้าวขึ้น</h3>
+<p>ถ้าไม่มีเหตุผลพิเศษ <strong>ค่าเริ่มต้นคือ Opus 5.5</strong> ใช้ Fable 5.1 เมื่องาน reasoning ยากมากหรือเป็นงาน agent ระยะยาว หรือเมื่อ Opus 5.5 ที่ effort สูง (<code>xhigh</code> / <code>max</code>) ยังไม่ผ่าน eval ระดับ effort ที่มีคือ <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, <code>max</code></p>
+
+<div class="table-wrap"><table>
+  <tr><th></th><th>Small first, then step up</th><th>Capability first, then step down</th></tr>
+  <tr><td>วิธี</td><td>เริ่มจากโมเดลเร็วและถูก เช่น Haiku 5.5 แล้วอัปเกรดเฉพาะจุดที่ eval เจอช่องว่าง</td><td>เริ่มจาก Opus 5.5 จูน prompt ประเมินผล แล้วค่อยลด effort หรือย้ายลงโมเดลเล็ก ถ้า Opus ที่ xhigh/max ยังไม่พอ ค่อยขึ้น Fable 5.1</td></tr>
+  <tr><td>เหมาะกับ</td><td>prototype, latency ต้องต่ำ, งานที่คุมต้นทุน, งานปริมาณมากที่ตรงไปตรงมา</td><td>reasoning ซับซ้อน, วิทยาศาสตร์และคณิตศาสตร์, งานที่ต้องเข้าใจละเอียด, งานที่ความแม่นสำคัญกว่าต้นทุน, coding ขั้นสูง</td></tr>
+  <tr><td>ข้อสังเกต</td><td>ไม่มีข้อบังคับเรื่องลำดับ ทุกโมเดลใช้ได้ตั้งแต่ request แรก</td><td>ถ้าเริ่มเล็กแล้วพัง จะแยกยากว่าโมเดลไม่พอหรือ setup ผิด เริ่มจากตัวเก่งช่วยแยกสาเหตุได้</td></tr>
+</table></div>
+
+<h3>ปรับ effort ก่อนเปลี่ยนโมเดล</h3>
+<p>Effort คือปุ่มปรับ accuracy กับ latency ภายในโมเดลเดียว (รายละเอียดในบท 3.3) ลำดับที่ถูก:</p>
+<ul>
+  <li><strong>แพงไปแต่คุณภาพโอเค</strong> → ลด effort บนโมเดลเดิมก่อน</li>
+  <li><strong>คุณภาพต่ำ</strong> → คืน effort ที่เคยลดไปก่อน แล้วค่อยลองโมเดลขั้นถัดไปที่ default effort ของมัน</li>
+  <li><strong>อย่ายกค่า effort ข้ามโมเดล</strong> เพราะ default ต่างกัน เช่น Opus 5.5 default เป็น medium แต่ Opus 5 เป็น high request ที่ไม่ได้ระบุ effort ตอนย้ายจาก Opus 5 มา Opus 5.5 จะรันต่ำลงหนึ่งระดับโดยไม่รู้ตัว</li>
+</ul>
+<p>ตัดสินใจด้วย <strong>eval set ของ use case ตัวเอง</strong> (prompt และข้อมูลจริง) เทียบความแม่น คุณภาพคำตอบ และ edge case (วิธีเทียบอยู่ในบท 4.3) public benchmark ช่วยได้น้อยที่ระดับบนสุด เพราะ Opus กับ Fable ทำคะแนนเกือบเต็มแล้ว</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แพงเกินงบ ให้เปลี่ยนไปโมเดลที่ถูกกว่าก่อน"</strong> ไม่ใช่ ลด effort บนโมเดลปัจจุบันก่อน การเปลี่ยน tier มาหลังจากทำ effort sweep กับ eval แล้ว</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Default คือ Opus 5.5 งานง่าย/ต้องเร็ว/ปริมาณมากเริ่มเล็ก งานยาก/ต้องแม่นเริ่มใหญ่ ปรับ effort ก่อนสลับโมเดล และไม่ยก effort ข้ามโมเดล</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบตรวจเอกสารประกันใช้ Opus 5.5 อยู่ คุณภาพผ่านเกณฑ์ แต่ค่าใช้จ่ายเกินงบ 30% ขั้นแรกที่ควรทำคืออะไร?</p>
+  <ol type="A">
+    <li>ย้ายไป Haiku 5.5 เพราะ token ถูกที่สุด</li>
+    <li>เปิด fast mode ให้งานจบเร็วขึ้น</li>
+    <li>ย้ายไป Sonnet 5.5 โดยตั้ง effort ค่าเดียวกับที่ใช้บน Opus</li>
+    <li>ลด effort ของ Opus 5.5 แล้วรัน eval ซ้ำ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ลด effort ก่อนเปลี่ยนโมเดล A ดูแค่ราคา token ซึ่งไม่เท่ากับบิลต่ำสุด C ทั้งเปลี่ยนโมเดลก่อนเวลาและยก effort ข้ามโมเดล B ทำให้แพงขึ้น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมวิจัยยาสร้างเครื่องมือวิเคราะห์ผลการทดลอง ความแม่นยำสำคัญกว่าเงิน และอยากรู้ให้ชัดว่าเวลาผลผิด เป็นเพราะโมเดลหรือเพราะ prompt/tool ควรเริ่มอย่างไร?</p>
+  <ol type="A">
+    <li>เริ่มที่ Opus 5.5 จูน prompt ให้ดี แล้วค่อยลด effort หรือย้ายลงโมเดลเล็กทีหลัง</li>
+    <li>เริ่มที่ Haiku 5.5 แล้วอัปเกรดเมื่อเจอช่องว่าง</li>
+    <li>เริ่มที่ Fable 5.1 เพราะ public benchmark แยกโมเดลระดับบนได้ชัดที่สุด</li>
+    <li>เริ่มที่ Sonnet 5.5 เพราะโมเดลกลางๆ ช่วยแยกปัญหา setup ได้ดีที่สุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งานซับซ้อนที่ความแม่นสำคัญใช้ capability first การเริ่มเล็ก (B, D) ทำให้แยกสาเหตุยาก ส่วน C ผิดทั้งสองส่วน public benchmark แยกระดับบนได้น้อย และ Fable ไม่ใช่จุดเริ่มต้น ใช้เมื่อ Opus ที่ effort สูงยังไม่พอ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (เลือก 3 ข้อ)</span>
+  <p>หัวหน้าทีมถามว่าทำไมเราสร้าง prototype ระบบติดแท็กอีเมลด้วย Haiku 5.5 แทนที่จะเริ่มที่ Opus 5.5 ซึ่งเก่งกว่า เหตุผลไหนถูกต้อง?</p>
+  <ol type="A">
+    <li>โมเดลเร็วและถูกทำให้วนรอบแก้และทดลองได้เร็วในช่วง prototype</li>
+    <li>ต้องเริ่มที่ Haiku ก่อน เพราะจะเข้าถึง Opus ได้ต่อเมื่อผ่าน benchmark ของ prototype</li>
+    <li>ระบบนี้ต้องตอบเร็ว latency ต่ำ</li>
+    <li>Haiku 5.5 รับประกันความแม่นเท่า Opus 5.5 ทุกงาน</li>
+    <li>งานนี้ปริมาณมาก ตรงไปตรงมา และต้องคุมต้นทุน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, C, E</strong> สามข้อนี้คือเงื่อนไขที่เหมาะกับ small first ไม่มีข้อจำกัดการเข้าถึงแบบข้อ B (เริ่มที่ Opus ได้ทันที) และไม่มีการรับประกันความแม่นเท่ากันแบบข้อ D ต้องทดสอบแล้วอัปเกรดเมื่อเจอช่องว่าง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เทียบโมเดลด้วยต้นทุนต่องานที่สำเร็จ</h3>
+<p>ราคาต่อ token บอกได้แค่ request เดียว โมเดลที่ฉลาดกว่ามักใช้ turn และ thinking น้อยกว่า จึงอาจชดเชยราคาพรีเมียมได้ ส่วนโมเดลถูกที่ทำงานพลาดก็ยังเก็บเงินทุก token บวกค่า retry และความเสียหายปลายทาง</p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>Opus 5.5 ราคา token เป็น 2 เท่าของ Sonnet 5.5 ใน coding benchmark Opus 5.5 ที่ effort low แก้งานได้ใกล้กับ Sonnet 5.5 ที่ default effort ต้นทุนต่องานที่สำเร็จต่างกันเท่าไหร่? คำตอบคือ <strong>Opus แพงกว่าแค่ราว 7%</strong> เพราะที่ effort ต่ำ Opus ทำงานน้อยลงต่อ task จนกลบส่วนต่างราคาไปเกือบหมด</p>
+</div>
+
+<div class="table-wrap"><table>
+  <tr><th>โมเดล</th><th>Effort</th><th>แก้ได้</th><th>ต้นทุนต่องานที่สำเร็จ</th></tr>
+  <tr><td>Sonnet 5.5</td><td>high (default)</td><td>87.6%</td><td>$0.11</td></tr>
+  <tr><td>Opus 5.5</td><td>low</td><td>87.4%</td><td>$0.12</td></tr>
+  <tr><td>Opus 5.5</td><td>medium (default)</td><td>92.8%</td><td>$0.22</td></tr>
+  <tr><td>Fable 5.1</td><td>high (default)</td><td>92.3% (รันครั้งเดียว)</td><td>$1.19</td></tr>
+</table></div>
+<p>ตัวเลขจาก SWE-bench Pro subset ใช้ดูทิศทางเท่านั้น ไม่ใช่การรับประกัน สิ่งที่ควรเก็บ:</p>
+<ul>
+  <li>Opus 5.5 ที่ default ได้ผลพอๆ กับ Fable 5.1 (อยู่ในช่วง noise ระหว่างรอบ) ในราคาราว <strong>1 ใน 5</strong> ต่องาน จึงเป็นจุดเริ่มต้นยอดนิยม</li>
+  <li>บน GPQA Diamond, Haiku 5.5 ได้ 85% เทียบกับ 91% ของ Opus 5.5 และ Sonnet 5.5 แต่ต้นทุนต่อคำตอบที่ถูกราว <strong>1 ใน 20</strong> ของ Opus 5.5 เหมาะกับงานปริมาณมากที่ตรวจผลได้</li>
+  <li>อันดับอาจกลับด้านได้ เช่น research loop ยาวๆ ที่ Fable 5.1 อาจทำได้มากกว่าและแพงกว่าต่องาน</li>
+  <li><strong>วัดที่ task ยากสุด 10%</strong> ไม่ใช่ task ทั่วไป บิลถูกขับโดยงานที่โมเดลถูกทำพลาด ในการรัน 20 ข้อครั้งหนึ่ง แค่ 2 ข้อกินไป <strong>43%</strong> ของค่าใช้จ่าย</li>
+</ul>
+
+<h3>ของฟรีที่ต้องเก็บก่อนตัดสินเรื่องโมเดล</h3>
+<ul>
+  <li><strong>Message Batches API</strong>: ประมวลผลแบบ async ลด <strong>50%</strong> แลกกับ latency ปกติเสร็จในชั่วโมงเดียว แต่ควรเผื่อถึง 24 ชั่วโมง <strong>ทุก active model รองรับ</strong> ไม่ผูกกับ tier</li>
+  <li><strong>Prompt caching</strong>: ในการทดลองของ Anthropic มักเป็นก้อนประหยัดที่ใหญ่ที่สุดก้อนเดียว</li>
+  <li>อย่าใช้ synchronous call ที่ effort <code>max</code> กับงานที่รอได้ และอย่าปิด caching เพื่อประหยัด</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"โมเดลที่ token ถูกสุดคือวิธีที่ถูกที่สุด"</strong> ไม่ใช่ โมเดลที่ฉลาดกว่าอาจทำงานเสร็จด้วยแรงน้อยกว่าและพลาดน้อยกว่า จึงถูกกว่าต่องานที่สำเร็จ</p>
+  <p><strong>"ส่วนลด batch ใช้ได้กับบางโมเดลเท่านั้น"</strong> ไม่ใช่ ทุก active model ได้ส่วนลด 50% เลือกโมเดลจากคุณภาพและต้นทุนต่องาน ไม่ใช่จากสิทธิ์ batch</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เทียบด้วย cost per solved task บน eval ของตัวเอง ดูงานยากสุด เก็บ batch (−50%) และ caching ก่อนแตะเรื่องโมเดล</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทุกคืนระบบต้องสกัดข้อมูลจากใบแจ้งหนี้หลายแสนใบ ไม่มีใครรอผลจนเช้า Sonnet 5.5 ที่ default effort แม่นพอแล้ว จะลดค่าใช้จ่ายอย่างไรโดยคุณภาพไม่ลด?</p>
+  <ol type="A">
+    <li>ส่งผ่าน Message Batches API กับ Sonnet 5.5 แล้วเปิด prompt caching ไว้</li>
+    <li>ปิด prompt caching เพื่อเลี่ยงค่าเขียน cache</li>
+    <li>ย้ายไป Haiku 5.5 เพราะมีแค่โมเดลเล็กสุดที่ได้ส่วนลด batch</li>
+    <li>ใช้ synchronous call ที่ effort max ให้เสร็จเร็วๆ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งานรอได้จึงได้ส่วนลด 50% โดยโมเดลและคุณภาพเหมือนเดิม และ caching เป็นของฟรีที่ไม่ควรปิด C ผิดเพราะทุก active model ได้ส่วนลด batch D แพงขึ้นโดยไม่จำเป็น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ทีม data ต้องจัดหมวดหมู่และสรุปบันทึกการโทร call center ย้อนหลัง 25 ล้านรายการภายในสุดสัปดาห์ ไม่มีผู้ใช้รอ อยากลดค่า API รวมให้มากที่สุดโดยคุณภาพยังดีพอ ทางไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>ใช้ Message Batches API ซึ่งราคาราวครึ่งหนึ่งของ synchronous</li>
+    <li>ใช้ synchronous call ที่ effort max เพราะไม่มีข้อจำกัดเรื่องเวลา</li>
+    <li>ใช้ Batch API กับ Fable 5.1 เท่านั้น เพราะส่วนลดมีเฉพาะ tier บนสุด</li>
+    <li>ใช้ synchronous และปิด prompt caching เพื่อเลี่ยงค่า storage</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งาน bulk ที่ไม่มีคนรอคือที่ของ batch B เพิ่ม token โดยไม่ได้อะไรกับงานตรงไปตรงมา C ผิดเพราะส่วนลดใช้ได้ทุกโมเดล และใช้โมเดลบนสุดกับงานจัดหมวดก็เปลืองเปล่า D ทิ้งเงินที่ประหยัดได้</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. ใช้หลายโมเดลในระบบเดียว (tiering)</h3>
+<p>ใช้โมเดลเดียวกับทุก request หมายความว่าจะจ่ายราคา frontier กับงานง่าย หรือได้คุณภาพโมเดลเล็กกับงานยาก ระบบหลายโมเดลส่งเฉพาะ <strong>การตัดสินใจที่ต้องใช้สมองแพง</strong> ไปให้โมเดลแพง token ส่วนใหญ่จึงถูกคิดในราคาที่ต่ำกว่า</p>
+
+<div class="table-wrap"><table>
+  <tr><th>Pattern</th><th>ทำงานอย่างไร</th><th>เหมาะเมื่อ / ข้อควรระวัง</th></tr>
+  <tr><td><strong>Executor with an advisor</strong></td><td>โมเดลถูกทำงานหลัก แล้วปรึกษาโมเดล frontier ให้ตรวจแผนหรือรีวิว output ตอนเจอจุดยาก</td><td>เหมาะเมื่อโมเดลถูกติดแค่บางจุด advisor ช่วยได้เฉพาะตอนถูกเรียก จึงต้อง <strong>วัด consult rate ก่อน</strong> (เริ่มทดสอบ executor ที่ effort low) Haiku 5.5 เป็น advisor ไม่ได้</td></tr>
+  <tr><td><strong>Orchestrator with workers</strong></td><td>โมเดลเก่งวางแผน แล้วกระจายงานส่วนใหญ่ให้ worker ราคาถูก</td><td>เหมาะกับงานที่ใหญ่เกิน context window เดียว Sonnet เป็น worker ยอดนิยมเพราะสมดุลความเร็ว/ราคา และ Haiku ถูกวางไว้สำหรับงาน sub-agent</td></tr>
+  <tr><td><strong>Routing</strong> (บท 1.5)</td><td>classifier คัดแยกก่อนเริ่มงาน งานง่ายไปโมเดลเล็ก งานยากไปโมเดลใหญ่</td><td>ประหยัดได้ก็ต่อเมื่อ classifier เชื่อถือได้ งานยากที่หลงไปโมเดลเล็กจะกลายเป็นงานล้มเหลวและดันบิลขึ้น</td></tr>
+</table></div>
+<p>ตัวอย่างผลวัดของ advisor: Sonnet 5 ที่มี Fable 5 เป็น advisor ได้คะแนน SWE-bench Pro ห่างจาก Fable 5 ตัวเดียวไม่เกิน 10% ในราคา 63% ของการรัน Fable 5 อย่างเดียว</p>
+<p>ไม่ว่าจะใช้ pattern ไหน ต้องวัดด้วย <strong>ต้นทุนต่องานที่สำเร็จบน eval set ของตัวเอง</strong> ไม่ใช่แค่ดูว่าใช้ token ของโมเดล frontier น้อยลงไหม</p>
+
+<div class="box key"><span class="tag">ลองใช้กับงานของคุณ</span>
+  <p>นึกถึง workflow ที่คุณรู้จักดี ขั้นไหนต้องการการตัดสินใจระดับ frontier จริงๆ ขั้นไหนโมเดลเล็กทำได้ถ้ามีอะไรตรวจ output แล้ว pattern ไหนเหมาะ: advisor, orchestrator หรือ router</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Advisor = ตัวถูกทำ ตัวแพงช่วยตอนยาก, orchestrator = ตัวแพงวางแผน ตัวถูกลงมือ, routing = แยกก่อนเริ่ม ทั้งหมดต้องพิสูจน์ด้วย cost per solved task</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับ pattern:</p>
+  <ol>
+    <li>Sonnet 5.5 เขียนโค้ด migration ทั้งหมด แต่ส่งแผนให้ Opus 5.5 ตรวจเฉพาะตอนต้องตัดสินใจเรื่อง schema ที่เสี่ยง</li>
+    <li>Opus 5.5 แตกงานแปลเอกสาร 3,000 หน้าเป็นชุดๆ แล้วส่งให้ Haiku 5.5 หลายตัวแปล</li>
+    <li>classifier ดูคำถามลูกค้าก่อน ถ้าเป็นเรื่องเช็คสถานะส่งไป Haiku ถ้าเป็นข้อพิพาทส่งไป Opus</li>
+  </ol>
+  <ol type="A">
+    <li>Routing</li>
+    <li>Executor with an advisor</li>
+    <li>Orchestrator with workers</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-C, 3-A</strong> advisor ถูกเรียกเฉพาะจุดยากระหว่างงาน orchestrator วางแผนแล้วกระจายงานก้อนใหญ่ ส่วน routing ตัดสินก่อนเริ่มงาน</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/models/overview">Models overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/pricing">Pricing</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/fast-mode">Fast mode</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Choosing a model</a></li>
+  <li><a href="https://claude.com/blog/claude-models-explained-choosing-the-best-model-for-your-use-case">Claude blog: Claude models explained</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Optimizing for cost and intelligence</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/batch-processing">Batch processing</a></li>
+</ul>
+</section>

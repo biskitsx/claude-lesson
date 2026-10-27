@@ -1,0 +1,336 @@
+<section class="lesson" id="l-2-5">
+<h2>2.5 Prompt reuse with caching, modular prompts and Agent Skills</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/prompt-caching-and-modular-prompt-layout">CertSafari 2.5</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>อธิบายได้ว่า prompt caching เก็บอะไร อายุเท่าไร และคิดเงินยังไง พร้อมคำนวณความคุ้มได้</li>
+    <li>ใช้ automatic caching กับ explicit <code>cache_control</code> breakpoint ร่วมกันได้ถูก และรู้ข้อจำกัด 4 breakpoint</li>
+    <li>วินิจฉัย cache miss ที่เกิดจาก lookback 20 block และแก้ได้</li>
+    <li>จัดลำดับ prompt แบบ modular: ส่วนคงที่ไว้ก่อน ส่วนที่เปลี่ยนไว้ท้าย และรู้ว่าการเปลี่ยนอะไรทำ cache ส่วนไหนพัง</li>
+    <li>เขียน <code>SKILL.md</code> ให้ผ่านกฎ รู้ว่า Skill อยู่ที่ไหนและใครใช้ได้ และอธิบาย progressive disclosure 3 ระดับ</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ต้นเหมือนกันเป๊ะ ถึงจะ reuse ได้</span>
+  <p>Caching ได้ผลเฉพาะเมื่อ <strong>ส่วนต้นของ request เหมือนกับครั้งก่อนทุกตัวอักษร</strong> การจัด prompt แบบ modular ช่วยให้ส่วนต้น (prefix) นิ่ง โดยเอาของที่เปลี่ยนบ่อยไว้ท้ายสุด ส่วน <strong>Agent Skills</strong> ดึงคำสั่งที่ใช้ซ้ำออกจาก prefix ไปเลย แล้วค่อยโหลดเข้ามาเมื่องานต้องใช้จริง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Prompt caching เก็บอะไร และต้องจ่ายเท่าไร</h3>
+<p>Caching เก็บ <strong>prefix</strong> ของ request ไว้จนถึงจุดที่เรียกว่า <strong>breakpoint</strong> request ถัดไปที่ขึ้นต้นเหมือนกันจะข้ามการประมวลผลส่วนนั้นไปได้ เปรียบเหมือนร้านกาแฟที่ต้มน้ำเชื่อมไว้หม้อใหญ่ แก้วต่อไปตักใช้ได้เลยไม่ต้องเคี่ยวใหม่ ของที่เหมาะจะ cache: system prompt ยาว ตัวอย่างจำนวนมาก เอกสารอ้างอิงขนาดใหญ่ งานซ้ำๆ และบทสนทนาหลายรอบที่ยาว</p>
+
+<h3>อายุของ cache</h3>
+<ul>
+  <li>ค่าเริ่มต้นอยู่ได้ <strong>5 นาที</strong> และทุกครั้งที่ถูกใช้ อายุจะต่อใหม่ <strong>ฟรี</strong></li>
+  <li>เลือก TTL <strong>1 ชั่วโมง</strong> ได้ ค่าเขียนแพงขึ้นเป็น <strong>2 เท่า</strong> ของราคา input ปกติ</li>
+  <li>นาฬิกาเริ่มนับ <strong>ตอนที่ request ที่เขียนหรืออ่าน cache เริ่มต้น</strong> ไม่ใช่ตอน response จบ ดังนั้นถ้า response stream นานๆ เวลาที่เหลือก็หดลง เช่น stream 4 นาที จะเหลือราว 1 นาทีให้ request ถัดไปมาใช้</li>
+</ul>
+
+<h3>ราคา (ต่อ 1 ล้าน token)</h3>
+<div class="table-wrap"><table>
+  <tr><th>รุ่น</th><th>Input ปกติ</th><th>เขียน cache 5 นาที</th><th>เขียน cache 1 ชม.</th><th>Hit / refresh</th></tr>
+  <tr><td>Claude Opus 5.5</td><td>$4</td><td>$5</td><td>$8</td><td>$0.20</td></tr>
+  <tr><td>Claude Sonnet 5.5</td><td>$2</td><td>$2.50</td><td>$4</td><td>$0.10</td></tr>
+  <tr><td>Claude Haiku 5.5 (prompt ไม่เกิน 100,000 token)</td><td>$0.10</td><td>$0.125</td><td>$0.20</td><td>$0.01</td></tr>
+  <tr><td>Claude Fable 5.1</td><td>$10</td><td>$12.50</td><td>$20</td><td>$0.25</td></tr>
+</table></div>
+<ul>
+  <li>ราคา hit เป็น <strong>0.05 เท่า</strong> ของ input ปกติบน Opus 5.5 และ Sonnet 5.5, <strong>0.025 เท่า</strong> บน Fable 5.1 และ Mythos 5.1 และ <strong>0.1 เท่า</strong> บนรุ่นอื่น</li>
+  <li><strong>breakpoint ไม่มีค่าใช้จ่าย</strong> เราจ่ายแค่ 3 อย่าง: การเขียน cache, การอ่าน cache และ input ที่ไม่ได้ cache</li>
+  <li>ลองคิดเลข: system prompt 50,000 token บน Opus 5.5 ถ้าไม่ cache = $0.20 ต่อ request เขียน cache ครั้งแรก = $0.25 แล้วแต่ละ hit = $0.01 ส่วนเกินตอนเขียน ($0.05) คืนทุนตั้งแต่ใช้ซ้ำครั้งแรก</li>
+  <li>prefix ที่สั้นกว่า <strong>ความยาวขั้นต่ำ</strong> ของรุ่นนั้นจะไม่ถูก cache เลย แม้ใส่ <code>cache_control</code> ไว้ ขั้นต่ำคือ <strong>512 token</strong> ในรุ่นปัจจุบัน และสูงสุดถึง <strong>4,096</strong> ในบางรุ่นเก่า เช่น Haiku 4.5</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"5 นาทีเริ่มนับหลัง response จบ"</strong> ไม่ใช่ เริ่มนับตอน request เริ่ม การ generate นานๆ กินเวลาในหน้าต่างนั้นไป</p>
+  <p><strong>"ยิ่งใส่ breakpoint เยอะ ยิ่งเสียเงินเพิ่ม"</strong> ไม่ใช่ breakpoint ฟรี จ่ายแค่ write, read และ input ที่ไม่ได้ cache</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Cache = เก็บ prefix ที่เหมือนกันเป๊ะ อยู่ 5 นาที (ต่ออายุฟรีเมื่อใช้) หรือ 1 ชม. ที่ค่าเขียน 2 เท่า นับเวลาจากตอนเริ่ม request hit ถูกมาก breakpoint ฟรี และต้องยาวถึงขั้นต่ำก่อนถึงจะ cache</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>แชตบอตกฎหมาย cache system prompt ไว้ด้วย TTL ค่าเริ่มต้น คำถามหนึ่งทำให้ response stream ยาว 4 นาที ผู้ใช้อยากถามต่อโดยใช้ cache เดิม ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>มีเวลาอีก 5 นาทีเต็มหลัง response จบ</li>
+    <li>cache ถูกลบทันทีเมื่อ response ใดๆ stream นานเกิน 3 นาที</li>
+    <li>ใช้ cache ต่อได้เฉพาะเมื่อ request ถัดไปส่งผ่าน connection เดิม</li>
+    <li>request ถัดไปต้องเริ่มภายในราว 1 นาทีหลัง response จบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> 5 นาทีนับจากตอน request เริ่ม stream 4 นาทีจึงเหลือราว 1 นาที A นับผิดจุด ส่วน B และ C เป็นกฎที่ไม่มีอยู่จริง</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Automatic caching กับ explicit <code>cache_control</code> breakpoint</h3>
+<ul>
+  <li><strong>Automatic caching</strong>: ใส่ field <code>cache_control</code> ที่ระดับบนสุดของ request แค่ที่เดียว ระบบจะวาง breakpoint ไว้ที่ block สุดท้ายที่ cache ได้ และเลื่อนตามไปเองเมื่อบทสนทนายาวขึ้น</li>
+  <li><strong>Explicit breakpoint</strong>: ใส่ <code>cache_control</code> ที่ content block แต่ละตัว ใช้เมื่ออยากคุมละเอียด เช่น cache ส่วนที่เปลี่ยนไม่บ่อยแยกจากส่วนที่เปลี่ยนบ่อย</li>
+</ul>
+<pre><code>{
+  "model": "claude-opus-5-5",
+  "max_tokens": 1024,
+  "cache_control": {"type": "ephemeral"},
+  "system": [
+    {"type": "text",
+     "text": "คู่มือนโยบายบริษัท ... (ยาวมาก)",
+     "cache_control": {"type": "ephemeral"}}
+  ],
+  "messages": [{"role": "user", "content": "สรุปนโยบายการลาให้หน่อย"}]
+}</code></pre>
+<p>ตัวอย่างนี้เป็น setup ที่นิยม: explicit breakpoint บน system prompt + automatic caching ตามท้ายบทสนทนา ถ้าอยากได้อายุ 1 ชั่วโมง ใส่ <code>"ttl": "1h"</code> ไว้ใน object เดียวกัน เช่น <code>{"type": "ephemeral", "ttl": "1h"}</code></p>
+
+<h3>กฎ 4 breakpoint</h3>
+<ul>
+  <li>หนึ่ง request มี breakpoint ได้ <strong>สูงสุด 4 จุด</strong> automatic caching ใช้ไป 1 ช่อง</li>
+  <li>ถ้ามี explicit breakpoint ระดับ block ครบ 4 จุดแล้วยังเปิด automatic ด้วย → <strong>400</strong></li>
+  <li>ถ้า block สุดท้ายมี explicit marker ที่ TTL ต่างจาก automatic caching ของ request → <strong>400</strong> เช่นกัน</li>
+  <li>ทั้งสองวิธีใช้ราคา ความยาวขั้นต่ำ กฎลำดับ และ lookback 20 block แบบเดียวกัน</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Automatic = <code>cache_control</code> ระดับบนสุด เลื่อนตามบทสนทนาเอง. Explicit = <code>cache_control</code> ราย block. รวมกันได้ไม่เกิน 4 จุด และ TTL ต้องไม่ขัดกัน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (เติมคำ)</span>
+  <p>request มี explicit breakpoint บน system prompt แล้ว และต้องการเปิด automatic caching ให้บทสนทนาด้วย field ระดับบนสุดที่หายไปคืออะไร?</p>
+<pre><code>{
+  "model": "claude-sonnet-5-5",
+  "____": {"type": "ephemeral"},
+  "system": [{"type": "text", "text": "...", "cache_control": {"type": "ephemeral"}}],
+  "messages": [...]
+}</code></pre>
+  <ol type="A">
+    <li><code>reuse_prefix</code></li>
+    <li><code>ephemeral_cache</code></li>
+    <li><code>cache_control</code></li>
+    <li><code>cache_strategy</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> automatic caching ใช้ชื่อ field เดียวกับ explicit breakpoint เพียงแต่วางไว้ที่ระดับบนสุด ชื่ออื่นไม่มีอยู่จริง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Lookback หา cache เก่าอย่างไร</h3>
+<p>Breakpoint คือ "ปลายของ prefix ที่จะเอาไปค้น" ถ้าไม่เจอ entry ที่ตรงตำแหน่งนั้นพอดี ระบบจะ <strong>เดินถอยหลังทีละ block</strong> หา prefix ที่ยาวที่สุดที่ request ก่อนหน้าเคยเขียนไว้ แต่เดินได้แค่ <strong>20 ตำแหน่ง</strong> เท่านั้น breakpoint ที่ block N จะค้นแค่ block N ถึง N−19</p>
+<p>ไล่ดูตัวอย่าง (ใช้ breakpoint เดียวท้ายบทสนทนา):</p>
+<ol class="steps">
+  <li>รอบแรก มี 8 block → เขียน cache ที่ block 8</li>
+  <li>รอบสอง มี 12 block → ค้น 12 ลงไป ชน entry ที่ block 8 = hit แล้วเขียนใหม่ที่ block 12</li>
+  <li>agent วน tool loop จนรอบสามมี 34 block → ค้นได้แค่ 34 ถึง 15 ไม่ถึง block 12 = <strong>miss</strong></li>
+</ol>
+<p>สังเกตว่า entry ที่ block 12 <strong>ยังอยู่</strong> ไม่ได้หมดอายุหรือถูกลบ แค่อยู่นอกระยะค้นหา</p>
+<p><strong>ทางแก้</strong>: เพิ่ม explicit breakpoint ไว้ใกล้ๆ จุดที่เขียนล่าสุด เพราะ <strong>แต่ละ breakpoint มีหน้าต่างค้นหา 20 ตำแหน่งของตัวเอง</strong> การย้าย breakpoint เดียวไปไว้ block แรกไม่ช่วย และเปลี่ยนไปใช้ automatic caching อย่างเดียวก็ไม่ช่วย เพราะใช้ lookback 20 block แบบเดียวกัน</p>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>เจอ cache miss ในบทสนทนายาว ทั้งที่ส่วนต้นไม่เปลี่ยนเลย → สงสัย <strong>lookback window</strong> ก่อน ไม่ใช่การหมดอายุหรือการลบ แก้ด้วย explicit breakpoint ที่ใกล้จุดเขียนล่าสุด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Breakpoint ค้นย้อนได้ 20 block ถ้า entry เก่าอยู่ไกลกว่านั้นก็ miss ทั้งที่ยังอยู่ แก้โดยเพิ่ม breakpoint ใกล้จุดเขียนล่าสุด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>มี cache entry ที่ block 8 ต่อมา request ยาวขึ้นเป็น 30 block โดย block 1–8 ไม่เปลี่ยนเลย และมี breakpoint เดียวที่ block 30 ผลคือ?</p>
+  <ol type="A">
+    <li>Miss เพราะการค้นครอบคลุมแค่ block 30 ถึง 11</li>
+    <li>Hit ที่ block 8</li>
+    <li>Miss เพราะ entry หมดอายุแล้ว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> 30 − 19 = 11 การค้นจึงไปไม่ถึง block 8 ทั้งที่ entry ยังอยู่</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>agent วิเคราะห์ log มี explicit breakpoint ตัวเดียวที่ block สุดท้าย หลังวน tool loop เพิ่มอีกราว 25 block ก็เริ่ม miss เพื่อนร่วมทีมเสนอให้เปลี่ยนเป็น automatic caching แทน คุณควรตอบว่าอะไร?</p>
+  <ol type="A">
+    <li>เห็นด้วย automatic caching หา entry เก่าเจอเสมอไม่ว่าห่างแค่ไหน</li>
+    <li>ลดจำนวน tool ให้ต่ำกว่า 20 ตัว lookback จะได้ครอบคลุม</li>
+    <li>ปิด caching ระหว่าง tool loop แล้วค่อยเปิดใหม่หลังจบ loop</li>
+    <li>ไม่ช่วย automatic caching ใช้ lookback 20 block แบบเดียวกัน ต้องเพิ่ม explicit breakpoint ใกล้จุดเขียนล่าสุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ทั้งสองวิธีมี lookback 20 block เท่ากัน อาการ miss หลังเพิ่มหลาย block ทั้งที่ต้นไม่เปลี่ยนชี้ไปที่ระยะค้นหา C ทำให้เสียประโยชน์ของ cache ไปเลย B สับสนระหว่างจำนวน tool กับจำนวน block</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>cache entry อยู่ที่ block 9 breakpoint อยู่ที่ block 33 ส่วนต้นไม่เปลี่ยน แต่ miss ตลอด สาเหตุและทางแก้คืออะไร?</p>
+  <ol type="A">
+    <li>lookback ค้นไปข้างหน้าจาก breakpoint ไม่ใช่ถอยหลัง จึงไม่เจอ block 9</li>
+    <li>ต้องเรียก <code>count_tokens</code> ก่อนทุก request เพื่อลงทะเบียน prefix</li>
+    <li>breakpoint ควรอยู่ที่ block แรกเสมอ ให้ย้ายไปที่ block 1</li>
+    <li>block 9 ห่างจาก block 33 อยู่ 24 ตำแหน่ง เกินหน้าต่าง 20 ให้เพิ่ม explicit breakpoint ระหว่างทาง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> การค้นจาก 33 ถอยไปได้ถึง 14 เท่านั้น A ผิดทิศ (lookback ถอยหลัง) B ไม่เกี่ยวกับ caching เลย (count_tokens ไม่มี logic ของ cache) C ผิดเพราะ breakpoint ควรอยู่ที่ block คงที่ตัวสุดท้าย ไม่ใช่ตัวแรก</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Modular prompt layout: ของนิ่งไว้ก่อน ตัวแปรไว้ท้าย</h3>
+<p>เรียง module จาก <strong>เปลี่ยนน้อยที่สุด → เปลี่ยนบ่อยที่สุด</strong>:</p>
+<ol class="steps">
+  <li>Tool definitions</li>
+  <li>System instructions</li>
+  <li>Reference context และ examples</li>
+  <li>Conversation</li>
+  <li>ค่าที่เปลี่ยนทุก request ไว้ท้ายสุด (ข้อความ template ที่คงที่ต้องอยู่ก่อนช่องตัวแปรทุกช่อง)</li>
+</ol>
+<p>ลำดับชั้นของ cache คือ <strong>tools → system → messages</strong> การเปลี่ยนที่ชั้นไหนจะทำให้ชั้นนั้นและ <em>ทุกชั้นหลังจากนั้น</em> ใช้ไม่ได้ เหมือนโดมิโนที่ล้มไปข้างหน้าอย่างเดียว</p>
+<div class="table-wrap"><table>
+  <tr><th>สิ่งที่เปลี่ยน</th><th>cache ส่วนที่ใช้ไม่ได้</th></tr>
+  <tr><td>แก้ tool definitions</td><td>ทั้งหมด</td></tr>
+  <tr><td>เปิด/ปิด web search หรือ citations</td><td>system และ messages</td></tr>
+  <tr><td>เปลี่ยน <code>tool_choice</code></td><td>messages เท่านั้น</td></tr>
+  <tr><td>เปลี่ยน <code>disable_parallel_tool_use</code></td><td>messages เท่านั้น</td></tr>
+  <tr><td>มี/ไม่มีรูปภาพ</td><td>messages เท่านั้น</td></tr>
+  <tr><td>เปลี่ยนพารามิเตอร์ thinking</td><td>messages เสมอ และ tools กับ system ด้วยในรุ่นที่ render การตั้งค่า thinking ไว้ก่อนส่วนนั้น</td></tr>
+</table></div>
+<p><strong>Deferred tools</strong> (tool ที่ใช้กับ tool search) ไม่อยู่ใน prefix ของ system prompt เมื่อ tool search ค้นเจอ definition จะถูก <em>ต่อท้าย</em> ประวัติบทสนทนา หลัง prefix ที่ cache ไว้ cache จึงยัง hit ต่อได้</p>
+
+<h3>พลาดบ่อย: timestamp อยู่ตรง breakpoint</h3>
+<pre><code># ผิด: ค่าเปลี่ยนทุก request อยู่ใน block ที่มี breakpoint
+system = [
+  {"type": "text", "text": RULES},
+  {"type": "text", "text": f"เวลาปัจจุบัน: {now()}",
+   "cache_control": {"type": "ephemeral"}},
+]
+
+# ถูก: breakpoint อยู่ท้ายส่วนคงที่ ตัวแปรอยู่หลังจากนั้น
+system = [
+  {"type": "text", "text": RULES, "cache_control": {"type": "ephemeral"}},
+  {"type": "text", "text": f"เวลาปัจจุบัน: {now()}"},
+]</code></pre>
+<p>แบบผิด hash ของ prefix เปลี่ยนทุก request ไม่มีอะไรถูกเขียนที่ prefix เดิมซ้ำ การ lookback จึงหาอะไรไม่เจอเลย</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เปลี่ยน tool_choice แล้ว cache พังหมด"</strong> ไม่ใช่ กระทบแค่ messages มีแค่การแก้ tool definitions ที่ล้างทั้งหมด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เรียง tools → system → reference/examples → conversation → ตัวแปร การเปลี่ยนล้มไปข้างหน้าตามลำดับชั้น breakpoint ต้องอยู่ท้ายส่วนคงที่ ไม่ใช่บน timestamp</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5 (จับคู่)</span>
+  <p>จับคู่การเปลี่ยนแปลงกับผลต่อ cache:</p>
+  <ol>
+    <li>แก้ข้อความ description ของ tool ตัวหนึ่ง</li>
+    <li>เปิด citations</li>
+    <li>เปลี่ยน <code>disable_parallel_tool_use</code></li>
+    <li>tool search ต่อท้าย definition ของ deferred tool</li>
+  </ol>
+  <p>A = system และ messages · B = ไม่กระทบ prefix ที่ cache ไว้ · C = ทั้งหมด · D = messages เท่านั้น</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-A, 3-D, 4-B</strong> การเปลี่ยนล้มไปข้างหน้าตาม tools → system → messages ส่วน deferred definition ถูกต่อท้ายหลัง prefix</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>agent มี tool 20 ตัวและ system prompt ที่ cache ไว้ ประวัติยาวขึ้นเรื่อยๆ รอบนี้เปลี่ยนแค่ <code>disable_parallel_tool_use</code> เป็น true อย่างเดียว ผลคือ?</p>
+  <ol type="A">
+    <li>cache ทั้งหมดใช้ไม่ได้ เพราะเกี่ยวกับ tool</li>
+    <li>tools กับ messages ใช้ไม่ได้ แต่ system ยังใช้ได้</li>
+    <li>tools และ system ยังใช้ cache ได้ มีแค่ messages ที่ใช้ไม่ได้</li>
+    <li>ต้องรอ 5 นาทีให้ cache เดิมหมดอายุก่อน ถึงจะเขียน cache ใหม่ได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> field นี้อยู่ในกลุ่มเดียวกับ tool_choice คือกระทบแค่ messages A สับสนกับการแก้ definitions B เป็นไปไม่ได้เพราะการพังล้มไปข้างหน้าเท่านั้น ถ้า tools พัง system ก็ต้องพังด้วย D ไม่มีกฎแบบนั้น</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Agent Skills: แพ็กคำสั่งที่ใช้ซ้ำเป็น SKILL.md</h3>
+<p><strong>Skill</strong> คือ directory ที่มีคำสั่ง metadata และไฟล์ประกอบ (ถ้ามี) Claude หยิบมาใช้เองเมื่อคำขอเกี่ยวข้อง ต่างจาก prompt ตรงที่ prompt เป็นคำสั่งเฉพาะบทสนทนาเดียว แต่ Skill โหลดเมื่อต้องใช้และใช้ได้ข้ามบทสนทนา Anthropic มี Skill สำเร็จรูปสำหรับ PowerPoint, Excel, Word และ PDF ส่วน custom Skill ใช้แพ็กขั้นตอนงานขององค์กรเราเอง</p>
+
+<h3>Frontmatter ของ SKILL.md</h3>
+<p>ไฟล์ขึ้นต้นด้วย YAML frontmatter ที่มี field บังคับ 2 ตัว:</p>
+<ul>
+  <li><code>name</code>: ไม่เกิน <strong>64 ตัวอักษร</strong> ใช้ได้แค่ตัวพิมพ์เล็ก ตัวเลข และขีด (-) ห้ามมี XML tag และ <strong>ห้ามมีคำสงวน "anthropic" หรือ "claude"</strong> ไม่ต้องมี version suffix</li>
+  <li><code>description</code>: ห้ามว่าง ไม่เกิน <strong>1,024 ตัวอักษร</strong> ห้ามมี XML tag ไม่มีความยาวขั้นต่ำ ควรบอกทั้ง <em>ทำอะไร</em> และ <em>ใช้เมื่อไหร่</em> โดยใช้คำที่ผู้ใช้น่าจะพิมพ์จริง เพราะ Claude อาจต้องเลือกจาก Skill 100+ ตัวโดยดูจาก description นี้</li>
+</ul>
+<pre><code>---
+name: reconciling-invoices
+description: กระทบยอดใบแจ้งหนี้กับรายการเดินบัญชี หารายการที่ไม่ตรงกัน และสรุปส่วนต่าง ใช้เมื่อผู้ใช้พูดถึงการกระทบยอด reconcile ใบแจ้งหนี้ หรือ statement ธนาคาร
+---</code></pre>
+<ul>
+  <li>ชื่อที่แนะนำเป็นแบบ gerund (คำกริยา -ing) เช่น <code>processing-pdfs</code>, <code>analyzing-spreadsheets</code> และเลี่ยงชื่อกว้างๆ อย่าง <code>helper</code> หรือ <code>utils</code></li>
+  <li>ตัวอย่างชื่อที่ผิด: มีคำสงวน (<code>anthropic-report-tool</code>), มีขีดล่าง (<code>report_tool</code>), มีตัวพิมพ์ใหญ่ (<code>Report-Tool</code>)</li>
+</ul>
+
+<h3>Custom Skill อยู่ที่ไหน ใครใช้ได้</h3>
+<div class="table-wrap"><table>
+  <tr><th>ที่อยู่</th><th>เพิ่มยังไง</th><th>ใครใช้ได้</th></tr>
+  <tr><td>Claude API</td><td>อัปโหลดผ่าน Skills API (<code>/v1/skills</code>) ใช้คู่กับ <code>skill_id</code> และ code execution tool</td><td>ทุกคนใน workspace</td></tr>
+  <tr><td>Claude Code</td><td>โฟลเดอร์ที่มี SKILL.md ใน <code>~/.claude/skills/</code> หรือ <code>.claude/skills/</code></td><td><code>~/.claude/skills/</code> = ส่วนตัว, <code>.claude/skills/</code> = ทุกคนในโปรเจกต์</td></tr>
+  <tr><td>claude.ai</td><td>อัปโหลด zip ที่ Settings &gt; Features</td><td>เฉพาะคนที่อัปโหลด ไม่ใช่ทั้งองค์กร admin จัดการรวมศูนย์ไม่ได้</td></tr>
+</table></div>
+<p><strong>ความปลอดภัย</strong>: Skill มีโค้ดและคำสั่งที่สั่งให้เรียก tool ได้ ใช้เฉพาะจากแหล่งที่เชื่อถือได้ และตรวจทุกไฟล์ที่แนบมาก่อนแชร์</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ชื่อรูปแบบถูกแล้ว (ตัวเล็ก + ขีด) ใส่คำว่า claude ก็ได้"</strong> ไม่ได้ คำสงวนห้ามอยู่ตรงไหนของชื่อก็ตาม</p>
+  <p><strong>"อัปโหลด Skill ใน claude.ai แล้วทั้งองค์กรใช้ได้"</strong> ไม่ใช่ ใช้ได้เฉพาะคนอัปโหลด การแชร์ทั้ง workspace เป็นเรื่องของ API</p>
+</div>
+
+<div class="box key"><span class="tag">ลองใช้กับงานตัวเอง</span>
+  <p>หาขั้นตอนที่ทีมพิมพ์ซ้ำใน prompt บ่อยๆ แล้วแยกให้ได้ว่า อะไรควรอยู่ใน description (ทำอะไร + ใช้เมื่อไหร่) อะไรควรอยู่ใน body ของ SKILL.md (คำสั่งหลัก) และอะไรเปลี่ยนเป็น script ได้ เพราะ Claude ต้องการแค่ผลลัพธ์ของมัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>SKILL.md ต้องมี <code>name</code> (≤64, ตัวเล็ก/ตัวเลข/ขีด, ห้าม anthropic/claude) และ <code>description</code> (≤1,024, บอกทำอะไร+ใช้เมื่อไหร่) API แชร์ทั้ง workspace, Claude Code แบ่งส่วนตัว/โปรเจกต์, claude.ai เฉพาะคนอัปโหลด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7 (จับคู่)</span>
+  <p>จับคู่ที่อยู่ของ custom Skill กับคนที่ใช้ได้:</p>
+  <ol>
+    <li>อัปโหลดผ่าน <code>/v1/skills</code> แล้วอ้างด้วย <code>skill_id</code></li>
+    <li><code>.claude/skills/</code> ใน repo</li>
+    <li>zip ที่อัปโหลดใน claude.ai</li>
+    <li><code>~/.claude/skills/</code></li>
+  </ol>
+  <p>A = เฉพาะนักพัฒนาคนนั้นบนเครื่องตัวเอง · B = ทุกคนใน workspace · C = เฉพาะคนที่อัปโหลด · D = ทุกคนที่ทำงานในโปรเจกต์นั้น</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-D, 3-C, 4-A</strong> แต่ละช่องทางมีขอบเขตการแชร์ต่างกัน claude.ai ไม่ใช่ทั้งองค์กร</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทีมสร้าง Skill ชื่อ <code>excel-claude-tools</code> description คือ "ช่วยทำงาน Excel" แต่อัปโหลดไม่ผ่าน เพราะอะไร?</p>
+  <ol type="A">
+    <li>ชื่อต้องขึ้นต้นด้วยคำกริยารูปปกติ เช่น <code>build-</code></li>
+    <li>description ต้องระบุนามสกุลไฟล์ที่รองรับ เช่น .xlsx</li>
+    <li>ชื่อมีคำสงวน "claude"</li>
+    <li>ชื่อห้ามมีขีด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> "claude" เป็นคำสงวน ห้ามอยู่ในชื่อ ชื่อแบบ gerund เป็นแค่คำแนะนำ ไม่ใช่กฎบังคับ description ไม่มีข้อบังคับเรื่องนามสกุลไฟล์ และขีดใช้ได้ (แต่ description นี้ควรปรับให้บอก "ใช้เมื่อไหร่" ด้วย)</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Progressive disclosure: Skill โหลด 3 ระดับ</h3>
+<div class="table-wrap"><table>
+  <tr><th>ระดับ</th><th>โหลดเมื่อไหร่</th><th>ต้นทุนโดยประมาณ</th><th>เนื้อหา</th></tr>
+  <tr><td>1. Metadata</td><td>ตลอด ตั้งแต่เริ่มเซสชัน</td><td>ราว 100 token ต่อ Skill</td><td><code>name</code> และ <code>description</code></td></tr>
+  <tr><td>2. Instructions</td><td>เมื่อ Skill ถูก trigger</td><td>ต่ำกว่าราว 5k token</td><td>body ของ SKILL.md</td></tr>
+  <tr><td>3+. Resources</td><td>เมื่อต้องใช้</td><td>ศูนย์จนกว่าจะถูกเปิด</td><td>ไฟล์แนบ ส่วน script รันผ่าน bash และมีแค่ output ที่เข้า context ไม่ใช่ตัวโค้ด</td></tr>
+</table></div>
+<p>เหมือนห้องสมุด: ระดับ 1 คือบัตรรายการหนังสือที่วางไว้ให้ดูตลอด ระดับ 2 คือหยิบเล่มที่ตรงเรื่องมาเปิดอ่าน ระดับ 3 คือภาคผนวกที่เปิดเฉพาะหน้าที่ต้องใช้</p>
+<h3>แนวทางเขียน</h3>
+<ul>
+  <li>มอง SKILL.md เป็น <strong>สารบัญ</strong> body ไม่เกิน <strong>500 บรรทัด</strong> ย้ายรายละเอียดไปไฟล์ลิงก์ เช่น <code>FORMS.md</code>, <code>REFERENCE.md</code>, <code>examples.md</code></li>
+  <li>reference หลายโดเมน ให้แยกไฟล์ตามโดเมน</li>
+  <li>reference ทุกไฟล์ต้องลิงก์จาก SKILL.md <strong>ลึกแค่ชั้นเดียว</strong> ถ้าซ้อนหลายชั้น Claude อาจอ่านแค่บางส่วน (เช่นอ่านแค่ <code>head -100</code>) แล้วพลาดข้อมูล</li>
+  <li>ไฟล์ reference ที่ยาวเกิน <strong>100 บรรทัด</strong> ให้มีสารบัญไว้ด้านบน</li>
+  <li>script ถูกกว่าและให้ผลสม่ำเสมอกว่าการให้ Claude เขียนโค้ดเทียบเท่าขึ้นใหม่ เพราะมีแค่ output ที่เข้า context</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Metadata (~100 token) อยู่เสมอ → body (&lt;5k) โหลดเมื่อ trigger → ไฟล์ประกอบโหลดเมื่อใช้ SKILL.md ≤500 บรรทัด, reference ลึกชั้นเดียว, ไฟล์ยาวเกิน 100 บรรทัดมีสารบัญ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9 (เรียงลำดับ)</span>
+  <p>ผู้ใช้ติดตั้ง Skill <code>reconciling-invoices</code> ที่มี <code>MATCHING_RULES.md</code> และ <code>TAX_CODES.md</code> แล้วขอให้ "กระทบยอดใบแจ้งหนี้เดือนนี้กับ statement" (ไม่เกี่ยวกับภาษี) เรียงสิ่งที่เกิดขึ้น:</p>
+  <ol>
+    <li>คำขอตรงกับ description จึงโหลด body ของ SKILL.md</li>
+    <li>ตอนเริ่มเซสชัน name และ description อยู่ใน context แล้ว</li>
+    <li>Claude ทำงานเสร็จด้วยคำสั่งที่โหลดมา</li>
+    <li>Claude เปิด <code>MATCHING_RULES.md</code> เพราะต้องใช้ ส่วน <code>TAX_CODES.md</code> ไม่ถูกเปิดเลย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>2 → 1 → 4 → 3</strong> metadata มาก่อนเสมอ body โหลดเมื่อ trigger ไฟล์ประกอบโหลดเฉพาะที่ต้องใช้ ไฟล์ที่ไม่เกี่ยวไม่กิน token เลย</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">Claude Docs: Prompt caching</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-use-with-prompt-caching">Claude Docs: Tool use with prompt caching</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Claude Docs: Agent Skills overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices">Claude Docs: Agent Skills best practices</a></li>
+</ul>
+</section>

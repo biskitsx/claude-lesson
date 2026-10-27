@@ -1,0 +1,256 @@
+<section class="lesson" id="l-4-3">
+<h2>4.3 A/B testing prompt: baseline, segment และการ rollout ตามเวอร์ชัน</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/a-b-testing-prompt-and-model-changes-against-a-baseline">CertSafari 4.3</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ตั้ง baseline และเป้าตัวเลขไว้ <strong>ก่อน</strong> จะลองเปลี่ยนอะไร</li>
+    <li>เปรียบเทียบแบบ offline อย่างยุติธรรม: ชุดข้อมูลเดียวกัน grader เดียวกัน เปลี่ยนทีละตัวแปร</li>
+    <li>บอกได้ว่าเมื่อไหร่ live A/B test คุ้มค่า และเมื่อไหร่ offline eval ก็พอ</li>
+    <li>อ่านผลแยกตาม segment เพื่อจับ regression ที่ค่าเฉลี่ยรวมซ่อนไว้</li>
+    <li>ใช้เวอร์ชันที่ pin ไว้ (Managed Agents) ทำ canary, promote และ rollback</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: "ดีขึ้น" ต้องเทียบกับของจริง ด้วยเกณฑ์ที่ตั้งไว้ก่อน</span>
+  <p>การเปลี่ยนแปลงหนึ่งจะนับว่าเป็นการปรับปรุงได้ก็ต่อเมื่อมัน <strong>ชนะเวอร์ชันที่รันอยู่ใน production ตอนนี้</strong> บน <strong>metric และเป้าที่เลือกไว้ล่วงหน้า</strong> คะแนนสูงลอยๆ โดยไม่มีอะไรให้เทียบ หรือเป้าที่ขยับตามผลลัพธ์ ไม่นับ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Baseline และเป้าหมาย</h3>
+<p>การพัฒนา prompt คือลูปง่ายๆ: <strong>เปลี่ยนหนึ่งอย่าง → วัดเทียบ baseline → เก็บหรือทิ้ง</strong> แล้ววนต่อ baseline ในที่นี้คือผลของเวอร์ชันที่ใช้อยู่จริงบนชุดทดสอบเดียวกัน</p>
+<p>เป้าหมาย (target) ควรยึดกับอะไรที่มีที่มา เช่น benchmark ของอุตสาหกรรม ผลการทดลองก่อนหน้า งานวิจัย หรือความเห็นผู้เชี่ยวชาญ สังเกตว่า <strong>ผลการทดลองก่อนหน้าก็คือ baseline ชนิดหนึ่ง</strong> นั่นเอง</p>
+<p>สิ่งสำคัญคือ <strong>ตั้งเส้นชัยก่อนวิ่ง</strong> ถ้ากำหนดเป้าหลังเห็นผล คนมักขยับเป้าให้ผลที่ได้ดูผ่านโดยไม่รู้ตัว</p>
+<p>เคล็ดลับเชิงปฏิบัติ: รัน eval suite กับเวอร์ชัน production ไว้ตั้งแต่แรก แล้วบันทึกไม่ใช่แค่คะแนนคุณภาพ แต่รวมถึง <strong>latency, token usage, ต้นทุน และ error rate</strong> พอมีผู้สมัคร (candidate) ใหม่มา ก็เทียบได้ทันทีทุกมิติ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>baseline = คะแนนของ production บนชุด eval เดียวกัน · เป้าต้องมีที่มาและตั้งก่อนรัน · บันทึก latency/token/cost/error คู่กับคุณภาพตั้งแต่แรก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>prompt สกัดข้อมูลจากใบสั่งซื้อปัจจุบันได้ 91% ทีมเขียน prompt ใหม่และอยากรู้ว่ามันดีกว่าจริงไหม ต้องมีอะไรบ้างถึงจะตัดสินได้?</p>
+  <ol type="A">
+    <li>ให้ senior engineer สามคนอ่าน output แล้วโหวตว่าชอบอันไหน</li>
+    <li>คะแนนของ prompt ใหม่อย่างเดียว ถ้าเกิน 90% ก็ถือว่าดี</li>
+    <li>คะแนนของ prompt production บนชุด eval เดียวกัน และ margin ที่ต้องชนะซึ่งกำหนดไว้ก่อนรัน</li>
+    <li>ชุดทดสอบใหม่ที่ออกแบบมาเพื่อโชว์จุดแข็งของ prompt ใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ต้องมีทั้งของเทียบ (baseline บนชุดเดียวกัน) และเกณฑ์ที่ล็อกไว้ก่อน A เป็นความเห็น B ไม่มีของเทียบ D ทำให้ชุดทดสอบลำเอียงเข้าข้างผู้สมัคร</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เปรียบเทียบแบบ offline บน held-out set</h3>
+<p>วิธีพื้นฐานที่สุดคือรันทั้ง baseline และ candidate บน <strong>held-out set ที่มี label ชุดเดียวกัน</strong> และให้คะแนนด้วย <strong>grader ตัวเดียวกัน</strong> แล้วเลือก metric ให้เหมาะกับลักษณะ output:</p>
+<div class="table-wrap"><table>
+  <tr><th>ลักษณะงาน</th><th>วิธีให้คะแนน</th><th>ทำไม</th></tr>
+  <tr><td>label เชิงหมวดหมู่ (เช่น ระดับความเร่งด่วน)</td><td>exact match เทียบกับ label ที่คนติดไว้</td><td>ชัดเจน ไม่กำกวม รันซ้ำได้ถูกๆ</td></tr>
+  <tr><td>สรุปข้อความอิสระที่มีสรุปอ้างอิง</td><td>ROUGE-L F1</td><td>ให้คะแนนการเก็บเนื้อหาสำคัญในลำดับใกล้เคียงกัน exact match ใช้ไม่ได้เพราะคำตอบถูกเขียนได้หลายแบบ</td></tr>
+  <tr><td>ความเร็วในการตอบ</td><td>response time (ms)</td><td>เป็นเกณฑ์เชิงปฏิบัติการ ติดตามคู่กับคุณภาพ ไม่ใช่ใช้แทน</td></tr>
+</table></div>
+<p>อะไรที่ <strong>ไม่ใช่</strong> metric ที่ถูกต้อง: ความมั่นใจที่โมเดลประเมินตัวเอง (self-rated confidence) และการให้เพื่อนร่วมงานโหวต ทั้งสองอย่างไม่ได้บอกความถูกต้อง</p>
+<p>เรื่องขนาด: เหมือนบท 4.2 คือ <strong>ชุดใหญ่ที่ตรวจอัตโนมัติชนะชุดเล็กที่คนตรวจ</strong> เพราะการตรวจเป็นต้นทุนที่เกิดซ้ำทุกครั้งที่รันใหม่</p>
+<pre><code>def compare(dataset, prompt_a, prompt_b, grade):
+    score = {"A": 0, "B": 0}
+    for case in dataset:                      # ชุดเดียวกัน
+        score["A"] += grade(run(prompt_a, case.input), case.label)   # grader เดียวกัน
+        score["B"] += grade(run(prompt_b, case.input), case.label)
+    return {k: v / len(dataset) for k, v in score.items()}</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เวอร์ชันใหม่รายงานความมั่นใจเฉลี่ยสูงกว่า แปลว่าแม่นกว่า"</strong> ไม่ใช่ ความมั่นใจที่โมเดลบอกเองไม่ได้สัมพันธ์กับความถูกต้อง</p>
+  <p><strong>"ชุดเล็กที่คนติด label เองน่าเชื่อกว่าชุดใหญ่ที่ตรวจอัตโนมัติเสมอ"</strong> ไม่ใช่ โดยทั่วไปปริมาณ + ตรวจอัตโนมัติให้สัญญาณที่ดีกว่าและรันซ้ำได้บ่อยกว่า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ชุดเดียวกัน grader เดียวกัน · หมวดหมู่ → exact match · สรุปมีอ้างอิง → ROUGE-L F1 · latency คู่กับคุณภาพ · ห้ามใช้ความมั่นใจของโมเดลหรือโหวต</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ระบบจัดอีเมลเข้ากล่อง "ขาย / ซัพพอร์ต / สแปม" ทีมมีอีเมล 500 ฉบับที่คนติด label ไว้แล้ว อยากเทียบ prompt สองเวอร์ชัน วิธีไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>ให้แต่ละเวอร์ชันบอกความมั่นใจของตัวเองแล้วเลือกตัวที่มั่นใจกว่า</li>
+    <li>รันทั้งสองเวอร์ชันบน 500 ฉบับเดิม ให้คะแนนด้วย exact match เทียบ label</li>
+    <li>ใช้ ROUGE-L เทียบชื่อกล่องกับ label</li>
+    <li>ให้ทีมขายโหวตว่าชอบผลของเวอร์ชันไหน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> output เป็นหมวดหมู่ exact match บนชุดเดียวกันเร็วและเป็นกลางที่สุด ROUGE-L เหมาะกับข้อความยาว ส่วนความมั่นใจและการโหวตไม่ได้วัดความถูก</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ทีมทำสรุปรายงานประชุม มีรายงาน 300 ชิ้นพร้อมสรุปอ้างอิงที่คนเขียน อยากได้ metric ที่ให้รางวัลเมื่อสรุปเก็บเนื้อหาของสรุปอ้างอิงไว้ในลำดับคล้ายกัน ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>exact match</li>
+    <li>ROUGE-L F1</li>
+    <li>response time</li>
+    <li>ความยาวของสรุปเป็นจำนวน token</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ROUGE-L ดู longest common subsequence จึงสะท้อนการเก็บเนื้อหาตามลำดับ exact match จะตกเกือบทุกเคสเพราะถ้อยคำต่างกัน ส่วนเวลาและความยาวไม่ได้วัดคุณภาพเนื้อหา</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีมมีทางเลือก: (1) ตัวอย่าง 60 เคสที่ผู้เชี่ยวชาญตรวจด้วยมือ หรือ (2) 1,500 เคสที่ตรวจอัตโนมัติด้วย exact match จะใช้ชุดไหนเป็นหลักในการเทียบเวอร์ชันที่แก้กันหลายรอบต่อสัปดาห์?</p>
+  <ol type="A">
+    <li>ชุด 60 เคส เพราะผู้เชี่ยวชาญแม่นกว่าเสมอ</li>
+    <li>ชุด 1,500 เคส เพราะปริมาณและการตรวจอัตโนมัติรันซ้ำได้ทุกรอบ</li>
+    <li>ไม่ใช้ทั้งคู่ ไปทำ live A/B test เลย</li>
+    <li>ใช้ชุด 60 เคสแต่ให้โมเดลตรวจแทนผู้เชี่ยวชาญ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ต้นทุนการตรวจเกิดซ้ำทุกรอบ ชุดใหญ่อัตโนมัติจึงใช้งานได้จริงกว่าและให้สัญญาณเสถียรกว่า live A/B test ช้าเกินไปสำหรับการเช็กทุกการแก้</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ทำให้การเปรียบเทียบยุติธรรม</h3>
+<p><strong>เปลี่ยนทีละตัวแปร</strong> ถ้าเปลี่ยนสามอย่างพร้อมกันแล้วคะแนนขึ้น เราไม่รู้เลยว่าอันไหนช่วย อันไหนถ่วง ตัวอย่างที่ดี: ทีมหนึ่งตรวจ prompt ของ support desk โดยสร้าง prompt 6 แบบ แต่ละแบบเพิ่ม pattern เพียงอย่างเดียวบน base ที่สะอาด แล้วรันทั้ง 6 บนชุด ticket เดียวกัน 44 ใบด้วย grader แบบ deterministic ผลคือบอกได้ชัดว่าผลแต่ละอย่างมาจากการเปลี่ยนแปลงไหน</p>
+<p><strong>ระวัง noise</strong> การรัน config เดิมเป๊ะซ้ำหลายรอบก็ยังได้ผลไม่เท่ากัน ต่างกันแค่ข้อเดียวอาจเป็นความบังเอิญ ให้ดูว่า margin ที่ candidate ชนะ <strong>มากกว่าการแกว่งตามปกติของ baseline เอง</strong> หรือเปล่า</p>
+<p><strong>Pin ทุกอย่างยกเว้นสิ่งที่ทดสอบ:</strong> eval set, grader, model, ค่า effort และ <strong>เวอร์ชันของ prompt</strong> ที่ระบุชัด</p>
+<div class="box key"><span class="tag">Managed Agents: bare ID กับ version</span>
+  <p>ใน Managed Agents ถ้าส่งแค่ agent ID เปล่าๆ (bare ID) ระบบจะ resolve เป็น <strong>เวอร์ชันล่าสุด</strong> เสมอ ถ้าเพื่อนร่วมทีม publish เวอร์ชันใหม่ระหว่างที่เรากำลังรัน eval ผลจะปนกันโดยไม่รู้ตัว ทางแก้คือส่งเป็น object ที่มี field <code>version</code> เพื่อ pin session ไว้ที่เวอร์ชันนั้นเป๊ะ</p>
+</div>
+<pre><code># bare ID: ได้เวอร์ชันล่าสุด ณ ตอนนั้น (เปลี่ยนได้ตลอด)
+agent = "agent_support_router"
+
+# pinned: ได้เวอร์ชัน 4 เสมอ
+agent = {"id": "agent_support_router", "version": 4}</code></pre>
+<p>ส่วนการทดสอบ <strong>โมเดล</strong> ให้เอา prompt และข้อมูลของเราเองรันกับโมเดลแต่ละตัว อย่าอาศัยแค่ benchmark สาธารณะ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เปลี่ยนทีละอย่าง · ชนะต้องเกิน noise ของ baseline · pin eval set, grader, model, effort และเวอร์ชัน prompt · bare ID = ล่าสุดเสมอ ใช้ <code>version</code> เพื่อ pin</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>harness ของทีม eval เรียก Managed Agent ด้วย agent ID เปล่าๆ ขณะที่ทีมอื่น publish เวอร์ชันใหม่วันละหลายครั้ง ผล eval เลยแกว่งไม่มีเหตุผล ควรแก้อย่างไร?</p>
+  <ol type="A">
+    <li>รัน eval ตอนกลางคืนที่ไม่มีใคร publish</li>
+    <li>ส่ง agent ID พร้อม <code>version</code> ที่ระบุชัดในทุก session</li>
+    <li>เพิ่มจำนวนเคสใน eval เพื่อลด noise</li>
+    <li>เปลี่ยน grader เป็นแบบ deterministic</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ต้นเหตุคือ bare ID resolve เป็นเวอร์ชันล่าสุด การ pin version ทำให้ตัวแปรนี้นิ่ง ข้ออื่นแค่อ้อมปัญหาหรือแก้ผิดจุด</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เมื่อไหร่ควรทำ live A/B test</h3>
+<p>Live A/B test คือการแบ่ง traffic จริงแบบสุ่มระหว่างเวอร์ชันเก่าและใหม่ ข้อดีคือการสุ่มช่วยคุมตัวแปรแทรกซ้อน (confound) และวัดผลลัพธ์จริงทางธุรกิจได้ เช่น อัตราการทำ task สำเร็จ แต่ข้อเสียก็ชัด: <strong>ช้า</strong> (เป็นวันถึงสัปดาห์) <strong>ต้องมี traffic</strong> พอ และ <strong>ผู้ใช้จริงต้องเจอเวอร์ชันที่ยังไม่พิสูจน์</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>วิธี</th><th>บทบาท</th><th>ข้อจำกัด</th></tr>
+  <tr><td>Offline eval อัตโนมัติ</td><td>ด่านแรกของ <strong>ทุก</strong> การเปลี่ยนแปลง</td><td>วัดได้แค่สิ่งที่อยู่ใน dataset</td></tr>
+  <tr><td>Live A/B test</td><td>ยืนยันการเปลี่ยนแปลงที่สำคัญด้วยผลลัพธ์จริง</td><td>ช้า ต้องมี traffic ผู้ใช้เจอ candidate</td></tr>
+  <tr><td>Production monitoring</td><td>จับปัญหาหลังเกิด (reactive)</td><td>รู้ตัวเมื่อมีผลกระทบแล้ว</td></tr>
+  <tr><td>ปล่อยให้ทุกคนแล้วดู metric</td><td>ไม่ใช่ A/B test</td><td>ไม่มี control group จึงบอกไม่ได้ว่าผลมาจาก prompt หรือจากอย่างอื่น</td></tr>
+</table></div>
+<p>อีกข้อที่ควรทำคู่กันเสมอ: เมื่อ metric ใน A/B test ขยับ ให้ <strong>อ่าน transcript</strong> ประกอบด้วย ตัวเลขบอกว่า "อะไร" เปลี่ยน transcript บอกว่า "ทำไม"</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"อยากเช็ก prompt ที่แก้ใหม่ให้เร็วที่สุด ให้ทำ live A/B test"</strong> ไม่ใช่ live test เป็นวิธีที่ช้าที่สุด เริ่มที่ offline eval ก่อนเสมอ</p>
+  <p><strong>"ปล่อยเวอร์ชันใหม่ให้ทุกคน แล้ว CSAT ขึ้น แปลว่า prompt ใหม่ดีกว่า"</strong> ไม่ใช่ ไม่มี control group อาจเป็นฤดูกาล โปรโมชั่น หรืออย่างอื่นก็ได้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>offline eval ทุกครั้ง → live A/B เฉพาะการเปลี่ยนสำคัญ → monitoring คอยจับหลังปล่อย · ไม่มี control group ไม่ใช่ A/B · อ่าน transcript คู่กับตัวเลข</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6 (จับคู่)</span>
+  <p>จับคู่วิธีกับบทบาท:</p>
+  <ol>
+    <li>Offline eval อัตโนมัติ</li>
+    <li>Live A/B test</li>
+    <li>Production monitoring</li>
+    <li>เปลี่ยนให้ทุกคนแล้วดู metric ตัวแทน</li>
+  </ol>
+  <p>ตัวเลือก: A) จับปัญหาหลังเกิดขึ้นแล้ว · B) ระบุไม่ได้ว่าผลมาจาก prompt เพราะไม่มี control · C) ด่านแรกของทุกการแก้ · D) ยืนยันการเปลี่ยนสำคัญด้วยผลจริง แต่ช้า</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-A, 4-B</strong> แต่ละวิธีมีที่ทางของมัน ไม่ได้แทนกัน</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. อ่านผลแยกตาม segment</h3>
+<p>ค่าเฉลี่ยรวมซ่อน regression ได้เก่งมาก การแก้ที่ตั้งใจช่วย segment หนึ่ง อาจไปทำให้ segment ข้างเคียงแย่ลง ขณะที่คะแนนรวมกลับขึ้น ดังนั้นให้แยกผลตาม <strong>หมวด, ประเภท input หรือทีมปลายทาง</strong> ทุกครั้ง นอกเหนือจากดูคะแนนรวม</p>
+<h3>ตัวอย่าง: กฎ routing ที่กว้างเกินไป</h3>
+<p>ทีมเพิ่มกฎ "ticket ที่พูดถึง API ให้ส่งไปทีม platform" ฟังดูสมเหตุสมผล แต่ ticket เรื่อง billing จำนวนมากก็พูดถึงการใช้งาน API (เช่น ค่าใช้จ่ายของ API) เลยถูกดึงออกจากทีม billing ไปด้วย</p>
+<div class="table-wrap"><table>
+  <tr><th>Segment</th><th>ก่อน</th><th>หลัง</th></tr>
+  <tr><td>Billing</td><td>4/5</td><td>2/5</td></tr>
+  <tr><td>ทีมอื่นๆ (3 ทีม)</td><td>5/5 ทุกทีม</td><td>5/5 ทุกทีม</td></tr>
+  <tr><td>รวม (20 ticket)</td><td>19</td><td>17</td></tr>
+</table></div>
+<p>ในตัวอย่างนี้คะแนนรวมก็ลดด้วย แต่หลักเดียวกันใช้ได้แม้กรณีที่คะแนนรวม <strong>เพิ่มขึ้น</strong> ถ้า gain ใน segment ใหญ่มากพอ มันจะกลบ segment ที่พังได้มิด</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"คะแนนรวมเท่าเดิมหรือดีขึ้น แปลว่า promote ได้อย่างปลอดภัย"</strong> ไม่ใช่ ต้องดูทุก segment ก่อน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อ่านผลรวม + แยกตาม segment เสมอ กฎที่กว้างเกินมักดึงเคสของ segment ข้างเคียงไปด้วย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>prompt จัดหมวดคำร้อง v5 ทำคะแนนรวมจาก 79% เป็น 84% แต่หมวด "คืนเงิน" ตกจาก 45/50 เหลือ 33/50 เพราะกฎใหม่ที่ส่งคำว่า "ยกเลิก" ไปหมวดยกเลิกสมาชิก ควรทำอย่างไร?</p>
+  <ol type="A">
+    <li>Promote เลย เพราะคะแนนรวมขึ้น 5 จุด</li>
+    <li>Promote แล้วให้ทีมคืนเงินโอนเคสเองไปก่อน</li>
+    <li>ยังไม่ promote แก้กฎให้แคบลง แล้วรันเทียบแยกตามหมวดอีกรอบ</li>
+    <li>ตัดเคสคืนเงินที่มีคำว่า "ยกเลิก" ออกจาก eval</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> คะแนนรวมกลบ regression ใน segment หนึ่ง ต้องแก้ต้นเหตุแล้ววัดซ้ำแยกหมวด D คือการแก้ข้อสอบแทนการแก้ระบบ</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Promote, canary และ rollback ตามเวอร์ชัน</h3>
+<p>Managed Agents เก็บ prompt ไว้ฝั่ง server ทุกครั้งที่เรียก <code>agents.update</code> จะได้ <strong>เวอร์ชันใหม่ที่แก้ไขไม่ได้ (immutable)</strong> แล้ว session เลือกใช้เวอร์ชันด้วยหมายเลข ดูรายการเวอร์ชันทั้งหมดได้ด้วย <code>client.beta.agents.versions.list(AGENT_ID)</code></p>
+<ol class="steps">
+  <li><strong>สร้างเวอร์ชัน</strong> (<code>agents.update</code>) เป็นงานสำรวจ ถ้าผู้เรียกทุกตัว pin ไว้ จะไม่มีผลกับ production เลย</li>
+  <li><strong>Canary</strong> ส่ง traffic ส่วนหนึ่งไปเวอร์ชันใหม่ แล้วเทียบกับเวอร์ชันเดิมก่อนขยายเต็ม</li>
+  <li><strong>Promote</strong> แก้ production config ที่ระบุว่าผู้เรียกต้องส่งเวอร์ชันไหน <strong>การแก้ config นี้คือขั้น release ที่ต้องผ่านการรีวิว</strong></li>
+  <li><strong>Rollback</strong> ให้ผู้เรียกกลับไปใช้หมายเลขเวอร์ชันเดิม ไม่ต้อง deploy ใหม่</li>
+</ol>
+<pre><code>PROD = {"router": 7}            # config ที่ผ่าน code review = ตัว release
+
+def agent_ref(name, canary=None, pct=0.0):
+    v = canary if canary and random.random() &lt; pct else PROD[name]
+    return {"id": AGENT_IDS[name], "version": v}
+
+# canary 10%:  agent_ref("router", canary=8, pct=0.10)
+# promote:     PROD["router"] = 8   (ผ่านรีวิว)
+# rollback:    PROD["router"] = 7   (ไม่ต้อง deploy prompt ใหม่)</code></pre>
+<div class="box key"><span class="tag">ทำไม pin ถึงสำคัญด้านความปลอดภัย</span>
+  <p><code>agents.update</code> <strong>ไม่มี approval workflow ในตัว</strong> และ API key ใดก็ได้ใน workspace เรียกได้ ถ้าผู้เรียกใช้ bare ID เวอร์ชันที่ยังไม่ผ่านรีวิวจะเข้าสู่ production ทันทีที่มีคน update การ pin เวอร์ชันอย่างชัดเจนคือสิ่งที่กันเวอร์ชันใหม่ออกจาก production จนกว่าจะถูก promote</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ผู้เรียกที่ใช้ bare ID ปลอดภัย เพราะทีมรีวิว prompt ก่อน update อยู่แล้ว"</strong> ไม่ใช่ ระบบไม่ได้บังคับการรีวิว ใครถือ key ก็ update ได้ bare ID จะรับเวอร์ชันนั้นทันที</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>update = สร้างเวอร์ชัน immutable (ยังไม่ใช่ release) · canary = แบ่ง traffic บางส่วน · promote = แก้หมายเลขที่ pin (ผ่านรีวิว) · rollback = pin กลับ ไม่ต้อง deploy</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>สมมติผู้เรียกทุกตัว pin เวอร์ชันไว้ จับคู่การกระทำกับผลที่เกิด:</p>
+  <ol>
+    <li>เรียก <code>agents.update</code> สร้าง v9</li>
+    <li>ส่ง 5% ของ traffic ไป v9</li>
+    <li>เปลี่ยนเลขใน production config จาก 8 เป็น 9 ผ่าน PR ที่รีวิวแล้ว</li>
+    <li>เปลี่ยนเลขกลับเป็น 8</li>
+  </ol>
+  <p>ตัวเลือก: A) Rollback โดยไม่ต้อง deploy · B) ไม่มีผลกับ production · C) Canary · D) Promote</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-B, 2-C, 3-D, 4-A</strong> การสร้างเวอร์ชันเป็นงานสำรวจ ส่วนการเปลี่ยนเลขที่ pin คือ release</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>นักพัฒนาคนหนึ่งเรียก <code>agents.update</code> เพื่อลองไอเดียใหม่ แล้วลูกค้าเริ่มได้คำตอบแปลกๆ ทันที ข้อไหนอธิบายสาเหตุและวิธีป้องกันได้ถูกที่สุด?</p>
+  <ol type="A">
+    <li>เวอร์ชันเก่าถูกเขียนทับ ต้องเปิด backup ของ prompt</li>
+    <li>production ใช้ bare ID จึงรับเวอร์ชันล่าสุดทันที ควร pin <code>version</code> และให้การเปลี่ยนเลขเป็นขั้น release ที่ผ่านรีวิว</li>
+    <li><code>agents.update</code> มี approval ในตัว แต่ถูกปิดไว้ ต้องไปเปิด</li>
+    <li>ต้องเปลี่ยนไปเก็บ prompt ในโค้ดแทน server</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> เวอร์ชันเป็น immutable ไม่ได้ถูกเขียนทับ (A ผิด) และไม่มี approval workflow ในตัว (C ผิด) ปัญหาคือ bare ID ที่ resolve เป็นล่าสุด</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Claude Docs: Develop tests</a></li>
+  <li><a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">Anthropic Engineering: Demystifying evals for AI agents</a></li>
+  <li><a href="https://platform.claude.com/cookbook/misc-building-evals">Claude Cookbook: Building evals</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Claude Docs: Optimizing for cost and intelligence</a></li>
+  <li><a href="https://platform.claude.com/cookbook/managed-agents-cma-prompt-versioning-and-rollback">Claude Cookbook: Managed Agents prompt versioning and rollback</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude Docs: Choosing a model</a></li>
+</ul>
+</section>

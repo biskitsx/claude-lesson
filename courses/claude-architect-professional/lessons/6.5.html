@@ -1,0 +1,328 @@
+<section class="lesson" id="l-6-5">
+<h2>6.5 AI solution lifecycle: ตั้งแต่ discovery จนถึง retirement</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/ai-solution-lifecycle-discovery-design-and-handoff">CertSafari 6.5</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เรียก 6 phase ของ lifecycle ได้ และบอกได้ว่าแต่ละ phase ต้องส่งอะไรให้ phase ถัดไป</li>
+    <li>แยกได้ว่างานไหนเป็นของ discovery และงานไหนยังไม่ถึงเวลา</li>
+    <li>เลือก build surface (Client SDK, Agent SDK, Managed Agents) จากคำถามว่า "ใครดูแล agent loop และ runtime"</li>
+    <li>เขียน acceptance test ที่คนไม่มี context ก็ตัดสินผ่าน/ไม่ผ่านได้</li>
+    <li>อ่าน usage และตั้ง budget ของ Managed Agents ได้ถูกจังหวะ และตัดสิน ship / fix / stop จากผล eval</li>
+    <li>วางแผน retire ทั้งงานของเราเองและโมเดลที่เราใช้ รวมถึงรู้ว่าอะไรหายไปเมื่อลบ session</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ทุก phase ส่งมอบของที่จับต้องได้</span>
+  <p>Solution หนึ่งตัวเดินผ่าน 6 phase: <strong>discovery, design, handoff, monitoring, iteration และ retirement</strong> แต่ละ phase ต้องส่ง <strong>artifact ที่เป็นรูปธรรม</strong> ให้ phase ถัดไป และสถาปนิกเป็นเจ้าของผลลัพธ์ตลอดทุก phase ไม่ใช่แค่ช่วงออกแบบ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. หก phase และสิ่งที่ส่งต่อกัน</h3>
+<div class="table-wrap"><table>
+  <tr><th>Phase</th><th>คำถามหลัก</th><th>ส่งอะไรให้ phase ถัดไป</th></tr>
+  <tr><td><strong>Discovery</strong></td><td>แก้ปัญหาอะไร ให้ใคร และแบบไหนเรียกว่าสำเร็จ</td><td>success criteria, acceptance tests, evaluation set</td></tr>
+  <tr><td><strong>Design</strong></td><td>architecture และ build surface แบบไหนทำให้ผ่านเกณฑ์</td><td>design ที่พฤติกรรมตรวจได้ด้วย test</td></tr>
+  <tr><td><strong>Handoff</strong></td><td>ทีมวิศวกรสร้างและแก้ไขได้อย่างปลอดภัยไหม</td><td>test ที่นิยามคำว่า "เสร็จ" + design</td></tr>
+  <tr><td><strong>Monitoring</strong></td><td>ใช้ได้จริงกับผู้ใช้จริงในต้นทุนที่รับได้ไหม</td><td>ผลที่วัดได้ เทียบกับ criteria</td></tr>
+  <tr><td><strong>Iteration</strong></td><td>ship, fix หรือ stop</td><td>เวอร์ชันใหม่ หรือการตัดสินใจ retire</td></tr>
+  <tr><td><strong>Retirement</strong></td><td>จะปิดงานของเรา หรือย้ายออกจากโมเดลที่ใช้อยู่ยังไง</td><td>migration ไปสู่ตัวแทน พร้อมเก็บบันทึกไว้</td></tr>
+</table></div>
+<p>Phase เหล่านี้ <strong>เป็นวงวน</strong> ไม่ใช่เส้นตรง iteration แต่ละรอบวนกลับไปที่ design และ handoff ของเวอร์ชันใหม่ ส่วน monitoring ทำต่อเนื่องตลอดที่ระบบยังใช้งาน และ retirement อาจถูกกระตุ้นจาก <strong>ภายนอก</strong> ได้ด้วย เช่น โมเดลที่เราใช้ถูกประกาศวัน retire</p>
+<p>เรื่องที่เกี่ยวกับการ ship อย่าง migration, versioning, rate limit และ feature flag ต้องถูกวางแผนอย่างตั้งใจไว้ใน phase ที่เป็นเจ้าของเรื่องนั้น ไม่ใช่ปล่อยให้โผล่มาเองตอนจะขึ้น production</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Discovery → Design → Handoff → Monitoring → Iteration → (วนกลับ หรือ) Retirement ทุกขั้นส่ง artifact ที่ตรวจได้ และ retirement มาจากนอกวงได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>โปรเจกต์ผู้ช่วยตอบคำถามประกันภัย จับคู่ artifact กับ phase ที่ผลิตมัน:</p>
+  <ol>
+    <li>"ต้องตอบถูก ≥ 90% บนชุดคำถาม 500 ข้อ และมีคำถามกำกวม 50 ข้อในชุด"</li>
+    <li>แผนภาพระบบที่บอกว่าแต่ละขั้นตรวจด้วย test ไหนได้</li>
+    <li>dashboard สัปดาห์นี้: ความแม่น 87%, ต้นทุนต่อคำถามเกินเป้า 15%</li>
+    <li>มติประชุม: "แก้ retrieval ก่อน ship เวอร์ชันถัดไป"</li>
+    <li>แผนย้ายไปโมเดลรุ่นใหม่ พร้อม export log เก่าเก็บไว้</li>
+  </ol>
+  <p>ตัวเลือก: (a) Discovery (b) Design (c) Monitoring (d) Iteration (e) Retirement</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-d, 5-e</strong> สังเกตว่า monitoring กับ iteration ใช้เกณฑ์จาก discovery เป็นตัวเทียบ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Discovery: ตกลงกันว่า "สำเร็จ" หน้าตาเป็นยังไง</h3>
+<ul>
+  <li><strong>Success criteria ต้องเป็นตัวเลข</strong> ไม่ใช่ "ตอบได้ดี" ตัวอย่างในบท: F1 อย่างน้อย 0.85 บน held-out set ขนาด 10,000 โพสต์ และ 95% ของคำตอบต้องกลับมาภายใน 200 ms</li>
+  <li><strong>Evaluation set ต้องสะท้อนการกระจายของงานจริง</strong> รวมถึง edge case อย่าง input ว่าง หรือ input ยาวมาก</li>
+  <li>Eval set ที่เป็นรูปธรรมช่วย <strong>ยุติข้อถกเถียงเรื่อง edge case ตั้งแต่ต้น</strong> ก่อนที่วิศวกรแต่ละคนจะเขียนโค้ดตามความเข้าใจของตัวเองจนเข้ากันไม่ได้</li>
+</ul>
+<p>เปรียบง่ายๆ discovery คือการตกลงว่าข้อสอบมีข้ออะไรบ้างและได้กี่คะแนนถึงผ่าน ก่อนจะเริ่มติวเลือกว่าจะอ่านหนังสือเล่มไหน</p>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>Discovery = <strong>use case, เกณฑ์ที่วัดได้ และ eval set</strong> เท่านั้น การเลือกโมเดลและ prompt เป็นงาน <strong>design</strong> caching และ batching เป็นการ <strong>จูนต้นทุน</strong> ของ design ที่มีอยู่แล้ว ส่วน runbook เป็นงาน <strong>handoff</strong></p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"สัปดาห์แรกของ discovery ให้ตั้ง caching และเขียน runbook ไว้ก่อนเลย"</strong> ไม่ใช่ ของพวกนี้ขึ้นกับ design ที่ยังไม่มี</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Discovery ส่งมอบเกณฑ์เป็นตัวเลข + eval set ที่มี edge case เรื่องโมเดล, caching, runbook ยังไม่ถึงคิว</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>สัปดาห์แรกของโปรเจกต์คัดกรองใบสมัครงานอัตโนมัติ ผู้จัดการถามว่าทีมควรส่งมอบอะไรเมื่อจบสัปดาห์?</p>
+  <ol type="A">
+    <li>เลือกโมเดลและล็อก prompt สุดท้าย</li>
+    <li>เกณฑ์ความสำเร็จที่เป็นตัวเลข พร้อม eval set ที่รวมเคสยาก เช่น ใบสมัครว่างเปล่าหรือยาวผิดปกติ</li>
+    <li>Runbook สำหรับทีม on-call</li>
+    <li>แผน caching และ batching เพื่อลดค่าใช้จ่าย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A เป็นงาน design ที่ต้องมีเกณฑ์ก่อน C เป็นงาน handoff และ D เป็นการจูนต้นทุนของ design ที่ยังไม่มี</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ข้อใดเป็นกิจกรรมของ discovery?</p>
+  <ol type="A">
+    <li>นิยาม use case, ตั้งเกณฑ์ที่วัดได้ และสร้าง eval set</li>
+    <li>เลือกโมเดลและ prompt ให้เสร็จก่อนคุย requirement</li>
+    <li>ตั้งค่า prompt caching</li>
+    <li>เขียนขั้นตอนรับมือเหตุขัดข้องให้ทีม support</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B ข้าม discovery ไปเลย C เป็นงานหลังมี solution แล้ว และ D เป็นงาน handoff</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Design: เลือก build surface</h3>
+<p>หลายครั้ง constraint ที่ได้จาก discovery ก็ตัดสิน build surface ให้แล้ว คำถามที่ชี้ขาดคือ <strong>ใครเป็นคนดูแล agent loop และ runtime</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>Surface</th><th>ได้อะไร</th><th>ใครดูแล loop และ runtime</th><th>เลือกเมื่อ</th></tr>
+  <tr><td><strong>Client SDK</strong> (Messages API)</td><td>เข้าถึง API ตรงๆ เราเขียน tool loop เอง</td><td>เราทั้งหมด</td><td>ต้องการ loop แบบ custom และคุมละเอียด</td></tr>
+  <tr><td><strong>Agent SDK</strong></td><td>library ที่รัน Claude Code binary มี built-in tool (ไฟล์, คำสั่ง, ค้นหา), permissions, sessions และ hooks</td><td>เรา ใน process ที่เราดูแล</td><td>อยากได้ tool อ่านไฟล์/รันคำสั่ง/ค้นหาโดยไม่ต้องเขียน loop</td></tr>
+  <tr><td><strong>Managed Agents</strong></td><td>harness ที่ host ไว้รัน agent loop ให้ sandbox เป็นแบบ Anthropic ดูแลบน cloud หรือ self-hosted บน infrastructure ของเราก็ได้</td><td>Anthropic host ตัว harness</td><td>งานยาวแบบ async และไม่อยากดูแล agent infrastructure เอง</td></tr>
+</table></div>
+<p>จุดที่ต้องจำ: Agent SDK ยังรันบนเซิร์ฟเวอร์ของเรา ดังนั้นถ้า requirement คือ "ไม่ต้องดูแล infrastructure" คำตอบคือ <strong>Managed Agents</strong> และถ้าต้องการให้ข้อมูลของ tool อยู่ในบ้าน แต่ก็ไม่อยากดูแล loop ให้ใช้ Managed Agents กับ <strong>self-hosted sandbox</strong></p>
+
+<div class="box key"><span class="tag">ลองเดาก่อน</span>
+  <p>ลูกค้าอยากรันงานสืบสวนยาวๆ แบบ async และไม่อยากดูแล infrastructure เลย เลือกอะไร? <strong>Managed Agents</strong> เพราะ Agent SDK ยังรันใน process ที่ลูกค้าต้องดูแล และ Client SDK ต้องเขียน loop เอง</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ลูกค้าไม่อยากดูแล infra ก็ใช้ Agent SDK สิ เพราะมี loop ให้แล้ว"</strong> Agent SDK มี loop ให้จริง แต่ยังรันใน process ที่ลูกค้าต้องดูแล คำตอบที่ถูกคือ Managed Agents</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เขียน loop เอง = Client SDK / มี tool และ loop ให้แต่รันบนเครื่องเรา = Agent SDK / ไม่อยากรัน infra = Managed Agents (sandbox บน cloud หรือ self-hosted)</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>โรงพยาบาลต้องการ agent ที่จับคู่ใบแจ้งหนี้กับเวชระเบียน ทีม IT ไม่อยากดูแล agent loop เอง แต่ข้อมูลที่ tool เข้าถึงต้องอยู่บนเครื่องของโรงพยาบาลเท่านั้น ควรเลือกอะไร?</p>
+  <ol type="A">
+    <li>Managed Agents กับ sandbox ที่ Anthropic ดูแลบน cloud</li>
+    <li>Managed Agents กับ self-hosted sandbox บน infrastructure ของโรงพยาบาล</li>
+    <li>Agent SDK รันใน process ของโรงพยาบาล</li>
+    <li>Client SDK แล้วเขียน loop เอง เพราะเป็นทางเดียวที่ข้อมูลอยู่ในบ้าน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A ทำให้ tool รันนอกโรงพยาบาล C และ D ทำให้ทีม IT ต้องดูแล loop/runtime เอง และไม่มีอะไรบอกว่า Messages API เป็นทางเดียวที่เก็บข้อมูลในบ้านได้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>สตาร์ทอัพอยากให้ agent ไล่วิเคราะห์ incident ย้อนหลังครั้งละหลายชั่วโมงแบบ async โดยไม่มีทีม ops มาดูแล runtime ควรเลือกอะไร?</p>
+  <ol type="A">
+    <li>Messages API กับ loop ที่เขียนเอง</li>
+    <li>Agent SDK บนเซิร์ฟเวอร์ของสตาร์ทอัพ</li>
+    <li>Managed Agents</li>
+    <li>Files API ร่วมกับ prompt caching</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> Anthropic รัน loop และ sandbox ให้ A ต้องสร้างและดูแล orchestration เอง B ต้องมีคนดูแล runtime และ D จัดการเอกสารกับต้นทุน ไม่ใช่ orchestration</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีม platform อยากได้ agent ภายในที่อ่านไฟล์ใน repo, รัน test และแก้โค้ดได้ โดยไม่ต้องเขียน tool loop เอง และไม่ติดที่จะรันบนเซิร์ฟเวอร์ตัวเอง ควรเลือกอะไร?</p>
+  <ol type="A">
+    <li>Agent SDK</li>
+    <li>Client SDK</li>
+    <li>เรียก Messages API ครั้งเดียวต่อไฟล์</li>
+    <li>Usage and Cost Admin API</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> มี built-in tool, loop และการจัดการ context ให้ B ต้องเขียน loop เอง C ทำงานแบบอิสระหลายขั้นไม่ได้ และ D แค่รายงานการใช้งานและค่าใช้จ่าย ไม่ได้รัน tool</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Handoff: ส่งมอบให้ทีมวิศวกรแบบที่ "เสร็จ" มีความหมายเดียว</h3>
+<ul>
+  <li><strong>Acceptance test ต้องชัดพอที่คนไม่มี context ก็ตัดสินได้</strong> ว่าผ่านหรือไม่ผ่าน "ตอบสุภาพ" ตรวจไม่ได้ แต่ "เมื่อลูกค้าพิมพ์ X ระบบต้องตอบ Y และถ้าขาดข้อมูล Z ต้องถามกลับ" ตรวจได้</li>
+  <li>Test พวกนี้ <strong>ปกป้องระบบต่อหลัง launch</strong> ทำให้การแก้ไขภายหลังปลอดภัย</li>
+  <li>ถ้าไม่มี test ตั้งแต่ตอนส่งมอบ วิศวกรแต่ละคนจะนิยามคำว่า "เสร็จ" ไม่เหมือนกัน</li>
+</ul>
+<pre><code>Given ลูกค้ามีนัดพรุ่งนี้ 10:00 และมีเบอร์โทรในระบบ
+When  ถึงเวลา 18:00 ของวันนี้
+Then  ส่ง SMS เตือนนัด 1 ข้อความ ระบุวัน เวลา สาขา
+
+Given ลูกค้ามีนัดพรุ่งนี้ แต่ไม่มีเบอร์โทร
+Then  ไม่ส่ง SMS และสร้างงานให้เจ้าหน้าที่โทรตามแทน</code></pre>
+
+<h3>Readiness gate ก่อนส่งมอบ</h3>
+<div class="table-wrap"><table>
+  <tr><th>ด่าน</th><th>คำถาม</th></tr>
+  <tr><td>Understanding</td><td>ทีมอธิบายได้ไหมว่าโค้ดทำอะไร</td></tr>
+  <tr><td>Testing</td><td>acceptance test ผ่านไหม รวมถึง edge case เช่น ข้อมูลหาย หรือค่าเป็นศูนย์</td></tr>
+  <tr><td>Access</td><td>build นี้ให้บริการใครได้ไม่ดี</td></tr>
+  <tr><td>Responsibility</td><td>output อาจถูกเข้าใจผิดไหม และเปิดเผยหรือยังว่ามี AI เกี่ยวข้อง</td></tr>
+  <tr><td>Feedback loop</td><td>หลัง launch จะรู้ได้ยังไงว่ามันยังทำงานดี</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Handoff ส่ง test ที่คนนอกตัดสินได้ (มี trigger, ผลที่คาด, edge case) พร้อม design และผ่าน readiness gate 5 ด่าน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ข้อใดเป็น acceptance test ที่พร้อมส่งมอบให้ทีมวิศวกร?</p>
+  <ol type="A">
+    <li>"bot ต้องให้ความรู้สึกเป็นกันเองกับลูกค้า"</li>
+    <li>"ยังไม่ต้องเขียน test ให้แต่ละคนตกลงกันเองหลัง sprint แรก"</li>
+    <li>"เมื่อพัสดุเลยกำหนดส่ง 3 วัน ระบบส่งข้อความขอโทษพร้อมเลขติดตาม ถ้าไม่มีเลขติดตามให้ส่งต่อเจ้าหน้าที่"</li>
+    <li>"ระบบต้องเสถียรและใช้ง่าย"</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> มี trigger ชัด ผลที่คาดชัด และมี edge case ข้อมูลขาด A และ D ตรวจไม่ได้ ส่วน B ทำให้แต่ละคนนิยามคำว่าเสร็จต่างกัน</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Monitoring: วัดของจริงกับผู้ใช้จริง</h3>
+<h3>Usage ของ Managed Agents</h3>
+<p>แต่ละ session มี usage object ที่ <strong>สะสม</strong> ไปเรื่อยๆ และจะ <strong>เป็นค่าสุดท้ายเมื่อ session เข้าสถานะ idle</strong> field ที่มี:</p>
+<ul>
+  <li><code>input_tokens</code>, <code>output_tokens</code></li>
+  <li><code>cache_read_input_tokens</code></li>
+  <li><code>cache_creation</code> ซึ่งแยกเป็น <code>ephemeral_5m_input_tokens</code> และ <code>ephemeral_1h_input_tokens</code></li>
+  <li><code>list_cost</code> มี <code>amount</code> และ <code>currency</code> คิดตามราคา list สาธารณะ หน่วยเป็น <strong>เซนต์</strong></li>
+  <li><code>active_seconds</code></li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>สถานะ session</th><th>ความหมายสำหรับ usage</th></tr>
+  <tr><td><code>running</code></td><td>ตัวเลขยังขึ้นอยู่</td></tr>
+  <tr><td><code>idle</code></td><td>ตัวเลขเป็นค่าสุดท้าย ให้อ่านตอนนี้</td></tr>
+  <tr><td><code>terminated</code></td><td>session จบแล้ว</td></tr>
+</table></div>
+
+<h3>Budget เป็นเพดานแข็ง</h3>
+<p>Session budget คือ <strong>hard cap</strong> เมื่อ list cost ถึงเพดาน platform จะ <strong>หยุดแต่ละ thread ไว้ก่อนการเรียกโมเดลครั้งถัดไป</strong> อย่าไปเขียนระบบ poll usage แล้วสั่งหยุด session เอง เพราะมันช้ากว่าและพลาดได้</p>
+
+<h3>สัญญาณที่ต้องเฝ้า</h3>
+<div class="table-wrap"><table>
+  <tr><th>Webhook event</th><th>ความหมาย</th></tr>
+  <tr><td><code>session.status_idled</code></td><td>session เข้า idle เช่น รอการอนุมัติ</td></tr>
+  <tr><td><code>session.budget_reached</code></td><td>session ชน budget</td></tr>
+  <tr><td><code>session.status_terminated</code></td><td>session จบ</td></tr>
+  <tr><td><code>deployment_run.failed</code></td><td>scheduled run เริ่ม session ไม่สำเร็จ</td></tr>
+  <tr><td><code>deployment.paused</code></td><td>deployment ถูก pause</td></tr>
+</table></div>
+<ul>
+  <li>Webhook อาจหลุดได้ จึงต้อง <strong>list session ตามรอบเวลา</strong> ควบคู่ไปด้วย</li>
+  <li>จะรีวิว session events แบบ offline เพื่อหาพฤติกรรมที่เกินสิทธิ์ที่ให้ไว้ก็ได้ (ไม่บังคับ)</li>
+  <li>การรีวิว transcript เจอปัญหาได้ <strong>หลังจาก call เกิดไปแล้วเท่านั้น</strong> การป้องกันจริงต้องมาจาก limit ที่ตั้งไว้ตอน design</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อ่าน usage ตอน <code>idle</code>, <code>list_cost</code> หน่วยเซนต์, budget เป็น hard cap ที่ platform บังคับให้ เฝ้า webhook แต่ list session สำรองด้วย และป้องกันด้วย limit ตั้งแต่ design</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ระบบ billing ภายในอยากบันทึกต้นทุนของแต่ละ session ของ Managed Agents ให้เป็นตัวเลขสุดท้าย ควรอ่าน usage เมื่อ session อยู่ในสถานะไหน?</p>
+  <ol type="A">
+    <li><code>running</code></li>
+    <li><code>idle</code></li>
+    <li><code>budget_reached</code></li>
+    <li>ทุกๆ 5 วินาทีระหว่างทำงาน แล้วเอาค่าสูงสุด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ตอน <code>running</code> ตัวเลขยังขึ้นอยู่ <code>budget_reached</code> เป็นชื่อ event ไม่ใช่สถานะ และการ poll เองไม่จำเป็นเพราะ usage สะสมและเป็นค่าสุดท้ายตอน idle</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. Iteration: ship, fix หรือ stop</h3>
+<div class="table-wrap"><table>
+  <tr><th>การตัดสิน</th><th>เมื่อไหร่</th></tr>
+  <tr><td><strong>Ship it</strong></td><td>เวอร์ชันนี้ผ่านเกณฑ์ และรักษาเกณฑ์ไว้ได้ใน production</td></tr>
+  <tr><td><strong>Fix it</strong></td><td>มีช่องว่างที่วัดได้ชัด และแก้ได้ด้วยการปรับงาน (rollback ก็นับเป็น fix แบบเร็ว)</td></tr>
+  <tr><td><strong>Stop it</strong></td><td>solution ไม่คุ้มที่จะเก็บไว้แล้ว ส่งไป retirement</td></tr>
+</table></div>
+<h3>Capability eval กับ regression eval</h3>
+<ul>
+  <li><strong>Capability eval</strong> เริ่มต้นด้วย pass rate ต่ำ บอกว่าควรพัฒนาอะไรต่อ</li>
+  <li><strong>Regression eval</strong> ควรผ่านเกือบ 100% เสมอ ถ้าตกเมื่อไหร่ แปลว่ามีอะไรพัง</li>
+  <li>เมื่อ capability eval ตัวไหนผ่านได้สม่ำเสมอแล้ว ให้ <strong>ย้ายเข้า regression suite</strong> และรันต่อเนื่อง ไม่ใช่ทิ้งหรือขยับเกณฑ์ขึ้น เพราะจะมองไม่เห็น drift</li>
+  <li>ถ้า regression ตก ต้อง <strong>fix</strong> แม้ capability จะดีขึ้นก็ตาม</li>
+</ul>
+<p>หลักคิด: <strong>prototype ได้อิสระ แต่ ship อย่างเลือกสรร</strong></p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"capability eval ผ่านหมดแล้ว ลบทิ้งได้"</strong> ไม่ใช่ ย้ายเข้า regression suite</p>
+  <p><strong>"capability ขึ้นเยอะ regression ตกนิดหน่อย ship ไปก่อนแล้วตั้ง baseline ใหม่"</strong> เท่ากับซ่อนสิ่งที่พัง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Ship = ผ่านและคงอยู่ใน prod, Fix = gap ที่วัดได้ (รวม rollback), Stop = ไม่คุ้ม regression ตกเมื่อไหร่ = fix capability eval ที่อิ่มตัวย้ายเข้า regression</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>เวอร์ชันใหม่ของ agent จองห้องประชุม: capability eval ขึ้นจาก 35% เป็น 70% แต่ regression eval ตกจาก 99% เหลือ 92% และผู้บริหารชอบ demo มาก ควรตัดสินอย่างไร?</p>
+  <ol type="A">
+    <li>Ship แล้วตั้ง 92% เป็น baseline ใหม่</li>
+    <li>Ship เพราะ capability ที่เพิ่มขึ้นคุ้มกว่า</li>
+    <li>Fix: regression ที่ตกบอกว่ามีของพัง ต้องแก้ก่อน ship</li>
+    <li>Stop แล้วส่งไป retirement</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> A ซ่อนสิ่งที่พัง B ให้ demo ชนะข้อมูล และ D ใช้กับ solution ที่ไม่คุ้มเก็บแล้ว ไม่ใช่ gap ที่แก้ได้</p></details>
+</div>
+
+<!-- ============ 7 ============ -->
+<h3>7. Retirement: ปิดงานของเรา หรือย้ายออกจากโมเดล</h3>
+<p>Retirement มีสองแบบ: <strong>ปิดงานของเราเอง</strong> (ผลจากการตัดสิน stop it) และ <strong>โมเดลที่เราใช้ถูก retire</strong> ซึ่งเป็นไปตามปฏิทินของผู้ให้บริการ เมื่อโมเดล retire แล้ว request ไปหาโมเดลนั้นจะล้มเหลว ต้อง migrate ให้เสร็จก่อนวัน retire</p>
+<p>ตัวอย่าง lifecycle ของโมเดลที่บทยกมา:</p>
+<div class="table-wrap"><table>
+  <tr><th>API model name</th><th>สถานะ</th><th>Deprecated</th><th>วัน retire</th><th>ตัวแทนที่แนะนำ</th></tr>
+  <tr><td><code>claude-sonnet-4-5-20250929</code></td><td>Deprecated</td><td>30 ก.ย. 2026</td><td>30 พ.ย. 2026</td><td><code>claude-sonnet-5-5</code></td></tr>
+  <tr><td><code>claude-opus-4-1-20250805</code></td><td>Retired</td><td>5 มิ.ย. 2026</td><td>5 ส.ค. 2026</td><td><code>claude-opus-4-8</code></td></tr>
+  <tr><td><code>claude-sonnet-4-20250514</code></td><td>Retired</td><td>14 เม.ย. 2026</td><td>15 มิ.ย. 2026</td><td><code>claude-sonnet-5-5</code></td></tr>
+</table></div>
+
+<h3>ลบ session ของ Managed Agents แล้วอะไรหายบ้าง</h3>
+<div class="table-wrap"><table>
+  <tr><th>ข้อมูล</th><th>ลบไปพร้อม session ไหม</th><th>ต้องทำอะไรก่อน/หลัง</th></tr>
+  <tr><td>Session history (events)</td><td>ลบ</td><td>copy event ไปเก็บใน log ของเราผ่าน events API ก่อนลบ</td></tr>
+  <tr><td>ไฟล์ที่ session สร้างขึ้น</td><td>ลบ</td><td>ดาวน์โหลดไฟล์ที่ต้องใช้ก่อนลบ</td></tr>
+  <tr><td>ไฟล์ที่อัปโหลด, memory stores, vaults</td><td><strong>ไม่ลบ</strong></td><td>ต้องลบแยกเอง</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"integration เดิมยังใช้ได้หลังโมเดล retire"</strong> ไม่ใช่ request จะล้มเหลว ต้อง migrate ให้เสร็จก่อนวัน retire</p>
+  <p><strong>"ลบ session แล้วข้อมูลทุกอย่างของ agent หายหมด"</strong> ไม่ใช่ ไฟล์ที่อัปโหลด memory store และ vault ยังอยู่จนกว่าจะลบแยก</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Retirement = stop it ของเราเอง หรือปฏิทินโมเดลของผู้ให้บริการ migrate ก่อนวัน retire ก่อนลบ session ให้ export events และดาวน์โหลดไฟล์ที่สร้างขึ้น และอย่าลืมลบ uploaded files / memory stores / vaults แยก</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 10 (จับคู่)</span>
+  <p>ทีมกำลังปิดโปรเจกต์ agent วิเคราะห์สัญญาบน Managed Agents และจะลบ session ทั้งหมด จับคู่ข้อมูลกับสิ่งที่ต้องทำ:</p>
+  <ol>
+    <li>ลำดับ event ของการวิเคราะห์ที่ฝ่ายกฎหมายต้องเก็บ 7 ปี</li>
+    <li>รายงาน PDF ที่ agent สร้างไว้ใน session</li>
+    <li>สัญญาต้นฉบับที่ทีมอัปโหลดเข้าไป</li>
+    <li>memory store ที่เก็บข้อสรุปจากหลาย session</li>
+  </ol>
+  <p>ตัวเลือก: (a) export ผ่าน events API ก่อนลบ เพราะจะหายไปกับ session (b) ดาวน์โหลดก่อนลบ เพราะจะหายไปกับ session (c) ไม่หายไปกับ session ต้องลบแยกเอง</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-a, 2-b, 3-c, 4-c</strong> history และไฟล์ที่ session สร้างหายพร้อม session ส่วนไฟล์ที่อัปโหลด memory store และ vault ไม่หาย</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://academy.claude.com/courses/ai-fluency-for-builders/stand-behind-what-you-build">Anthropic Academy: Stand behind what you build</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Claude Docs: Develop tests</a></li>
+  <li><a href="https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents">Anthropic Engineering: Demystifying evals for AI agents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Code Docs: Agent SDK overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/overview">Claude Docs: Managed Agents overview</a></li>
+  <li><a href="https://academy.claude.com/courses/ai-fluency-for-builders/delegation-the-builder-s-toolkit">Anthropic Academy: Delegation, the builder's toolkit</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/session-observability">Claude Docs: Managed Agents session observability</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/secure-deployment-monitoring">Claude Docs: Managed Agents secure deployment monitoring</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/model-deprecations">Claude Docs: Model deprecations</a></li>
+  <li><a href="https://platform.claude.com/docs/en/release-notes/overview">Claude Docs: Release notes</a></li>
+  <li><a href="https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide">Claude Docs: Haiku 5.5 migration guide</a></li>
+</ul>
+</section>

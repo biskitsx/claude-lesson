@@ -1,0 +1,277 @@
+<section class="lesson" id="l-7-2">
+<h2>7.2 Explore, plan, implement, commit: the Claude Code loop</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/prompting-claude-code-verification-context-and-the-explore-plan-implement-loop">CertSafari 7.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แบ่งงานใน Claude Code เป็น 4 ช่วง: <strong>explore → plan → implement → commit</strong> และอธิบายได้ว่าทำไมต้องอ่านและวางแผนก่อนลงมือแก้</li>
+    <li>เลือก <strong>permission mode</strong> ให้ตรงกับว่ายอมให้ Claude เปลี่ยนอะไรได้เองแค่ไหนโดยไม่ต้องถามเรา</li>
+    <li>เขียน prompt ที่ระบุชัดว่าไฟล์ไหน แหล่งข้อมูลไหน อาการเป็นยังไง แทนคำสั่งกว้างๆ</li>
+    <li>คุม session ให้สะอาดด้วยการขัดจังหวะ (interrupt), ย้อน (rewind), ล้าง context และโยนงานรีเสิร์ชให้ subagent</li>
+    <li>ให้ Claude มี "วิธีตรวจงานตัวเอง" ที่รันได้จริง เช่น test, screenshot หรือ build</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: แยกการอ่านออกจากการแก้</span>
+  <p>ลูปนี้ตั้งใจแยกช่วง <strong>อ่านและคิด</strong> ออกจากช่วง <strong>แก้ไฟล์</strong> ให้ Claude ทำความเข้าใจโค้ดก่อน เสนอแผนที่เรารีวิวได้ แล้วค่อยเขียนโค้ด รันเทสต์ และ commit ทีหลัง เหมือนช่างที่ต้องสำรวจหน้างานและให้ลูกค้าเซ็นแบบก่อน ถึงจะเริ่มทุบผนัง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. สี่ช่วง: explore, plan, implement, commit</h3>
+<p>ปัญหาที่เจอบ่อยเวลาสั่ง Claude Code ว่า "ทำฟีเจอร์ X ให้หน่อย" ทีเดียวจบ คือมันอาจรีบแก้โค้ดก่อนเข้าใจว่าระบบเดิมทำงานยังไง ผลคือแก้ผิดที่ หรือสร้างของซ้ำกับที่มีอยู่แล้ว วิธีแก้คือแบ่งงานเป็น 4 ช่วง และ <strong>ส่ง prompt แยกกันในแต่ละช่วง</strong></p>
+<p>ลองนึกถึงงานเพิ่มการล็อกอินผ่าน OAuth (การให้ผู้ใช้ล็อกอินด้วยบัญชีจากผู้ให้บริการภายนอก) จะออกมาประมาณนี้:</p>
+<ol class="steps">
+  <li><strong>Explore</strong> ให้ Claude อ่านและอธิบายว่าระบบ auth, session และการเก็บ secret ตอนนี้ทำงานยังไง <em>ห้ามแก้อะไร</em></li>
+  <li><strong>Plan</strong> ให้ระบุว่าต้องแก้ไฟล์ไหนบ้าง และ flow ของ session ใหม่จะเป็นยังไง แล้วเขียนออกมาเป็นแผน</li>
+  <li><strong>Implement</strong> ให้ทำตามแผนที่ตกลงกันแล้ว เขียนเทสต์ให้ callback handler รันชุดเทสต์ แล้วแก้จนผ่าน</li>
+  <li><strong>Commit</strong> ให้ commit พร้อมข้อความที่อธิบายชัดเจน แล้วเปิด PR</li>
+</ol>
+<p>จุดที่ต้องสังเกตคือช่วง implement <strong>ต่อยอดจากแผน</strong> ที่ผ่านการรีวิวในช่วงก่อนหน้า ไม่ได้เริ่มคิดใหม่จากศูนย์ ถ้าแผนผิด เราจับได้ตั้งแต่ตอนที่ยังไม่มีโค้ดสักบรรทัดถูกแก้ ซึ่งแก้ง่ายกว่ามาก</p>
+
+<h3>บังคับให้ "ห้ามแก้" ด้วยโหมด ไม่ใช่ด้วยคำขอร้อง</h3>
+<p>การเขียนใน prompt ว่า "อย่าเพิ่งแก้นะ" เป็นแค่คำขอ Claude อาจยังแก้ได้อยู่ดี ถ้าต้องการการันตีว่าช่วงสำรวจและวางแผนจะไม่มีการเขียนไฟล์ ให้เปิด session ด้วย plan mode:</p>
+<pre><code>claude --permission-mode plan</code></pre>
+<p>ในโหมดนี้ Claude อ่านโค้ด ค้นหา และเสนอการเปลี่ยนแปลงได้ แต่ <strong>เขียนไฟล์ source ไม่ได้</strong> จนกว่าเราจะอนุมัติให้ออกจาก plan mode ไปลงมือ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>สี่ช่วง สี่ prompt: อ่าน → วางแผน → ทำตามแผน + เทสต์ → commit/PR และถ้าอยากให้ "ไม่แก้ไฟล์" เป็นกฎจริง ให้ใช้ <code>--permission-mode plan</code> ไม่ใช่แค่เขียนขอใน prompt</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>หลังจาก Claude สำรวจโค้ดระบบแจ้งเตือนแล้วเสนอแผนเพิ่มช่องทาง LINE ที่ทีมรีวิวผ่าน ทีมส่ง prompt ถัดไปว่า "ลงมือทำ เขียนเทสต์ แล้วรันจนผ่าน" ช่วงนี้ Claude ควรยึดอะไรเป็นหลัก?</p>
+  <ol type="A">
+    <li>ออกแบบโครงสร้างใหม่ทั้งหมด เพราะตอนนี้รู้จักโค้ดดีขึ้นแล้ว</li>
+    <li>แผนที่ตกลงกันไว้ในช่วงก่อนหน้า</li>
+    <li>ข้อความ commit ที่จะเขียนตอนจบ</li>
+    <li>ผลเทสต์ชุดเดิมก่อนเริ่มงาน โดยไม่ต้องเขียนเทสต์ใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ช่วง implement คือการทำตามแผนที่ผ่านการรีวิวแล้ว ถ้าเริ่มออกแบบใหม่ก็เท่ากับข้ามขั้นรีวิวที่เพิ่งทำไป ส่วนการเขียนเทสต์ใหม่และรันให้ผ่านเป็นส่วนหนึ่งของช่วงนี้ด้วย</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>หัวหน้าทีมอยากให้ Claude วิเคราะห์ระบบ billing แล้วเสนอวิธี refactor โดย <strong>การันตี</strong> ว่าจะไม่มีไฟล์ไหนถูกแก้จนกว่าเขาจะอ่านแผน วิธีไหนตรงที่สุด?</p>
+  <ol type="A">
+    <li>เขียนตัวใหญ่ใน prompt ว่า "ห้ามแก้ไฟล์เด็ดขาด"</li>
+    <li>ข้ามช่วง explore ไปเลย เพื่อให้ Claude ไม่มีโอกาสแตะไฟล์</li>
+    <li>เปิด session ด้วย <code>claude --permission-mode plan</code></li>
+    <li>เปิดด้วยโหมด Accept edits แล้วค่อย revert ถ้าไม่ชอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> plan mode บังคับที่ระดับเครื่องมือว่าห้ามเขียนไฟล์ source คำขอใน prompt ไม่ได้บังคับอะไร การข้าม explore ก็ไม่ได้กันการแก้ และ Accept edits คือแก้ได้ทันที ตรงข้ามกับที่ต้องการ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. เลือก permission mode ให้ตรงกับงาน</h3>
+<p>Permission mode คือตัวตั้งว่า Claude ทำอะไรได้เองโดยไม่ต้องถาม และอะไรต้องรอเรากดอนุมัติ ยิ่งไว้ใจงานมาก ก็ยิ่งปล่อยให้ทำเองได้มาก</p>
+
+<div class="table-wrap"><table>
+  <tr><th>โหมด</th><th>ทำเองได้เลย</th><th>ต้องรอเรา</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Manual</strong> (default, ถามทุกครั้ง)</td><td>อ่านไฟล์ ค้นหา</td><td>ทุกการแก้ไฟล์และทุกคำสั่ง shell</td><td>โค้ดที่ยังไม่ไว้ใจ เช่น รีวิว PR จากคนนอก</td></tr>
+  <tr><td><strong>Accept edits</strong></td><td>แก้ไฟล์ และคำสั่งจัดการไฟล์พื้นฐาน เช่น <code>mkdir</code>, <code>mv</code></td><td>คำสั่ง shell อื่นๆ</td><td>งาน implement ที่ไว้ใจได้</td></tr>
+  <tr><td><strong>Plan</strong></td><td>สำรวจอย่างเดียว ไม่แก้ source</td><td>การออกจาก plan mode เพื่อไปลงมือ</td><td>ช่วง explore และ plan</td></tr>
+  <tr><td><strong>Auto</strong></td><td>เกือบทุกอย่าง มี classifier ทำงานเบื้องหลังคอยบล็อกสิ่งที่เสี่ยง</td><td>ไม่มีเรื่องที่ทำเป็นประจำ</td><td>session ยาวๆ</td></tr>
+</table></div>
+<p>เรื่องที่ต้องจำเพิ่ม:</p>
+<ul>
+  <li><strong>Permission allowlist</strong> ใช้อนุมัติล่วงหน้าเฉพาะคำสั่งที่ปลอดภัย เช่น <code>npm run lint</code> หรือ <code>git commit</code> วิธีนี้ปลอดภัยกว่าการเปลี่ยนทั้ง session ไปเป็นโหมดที่หลวมกว่า เพราะเปิดแค่ช่องที่ต้องใช้</li>
+  <li><strong><code>bypassPermissions</code></strong> ข้ามการถามทุกอย่าง โหมดนี้ <strong>ไม่อยู่ในรอบการกด Shift+Tab ปกติ</strong> จะเลือกได้ก็ต่อเมื่อเปิด Claude Code ด้วย flag <code>--allow-dangerously-skip-permissions</code></li>
+  <li>ใน Claude Code เวอร์ชันใหม่ๆ <strong>Auto เป็นโหมดเริ่มต้น</strong> ของ session แบบ interactive โดย classifier จะบล็อกการกระทำเสี่ยงแทนการถามเรา</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Accept edits ยังถามก่อนแก้ไฟล์ทุกครั้ง"</strong> ไม่ใช่ Accept edits แก้ไฟล์ (และคำสั่งจัดการไฟล์พื้นฐาน) ได้เลยโดยไม่ถาม โหมดที่ถามก่อนทุกการแก้ไฟล์และทุกคำสั่งคือ Manual</p>
+  <p><strong>"Accept edits อนุมัติทุกคำสั่ง shell ด้วย"</strong> ก็ไม่ใช่ คำสั่งอย่าง <code>npm install</code> ยังต้องรอเรากดอนุมัติ เพราะไม่ใช่การแก้ไฟล์หรือคำสั่งจัดการไฟล์พื้นฐาน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ไม่ไว้ใจ → Manual · อ่านและวางแผน → Plan · ลงมือกับงานที่ไว้ใจ → Accept edits · session ยาว → Auto · อยากปลดล็อกแค่บางคำสั่ง → allowlist ส่วน bypassPermissions ต้องเปิดด้วย flag พิเศษเท่านั้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>Claude อยู่ในโหมด Accept edits กำลังเพิ่มฟีเจอร์ใหม่ แล้วต้องติดตั้งแพ็กเกจด้วย <code>pnpm add dayjs</code> จะเกิดอะไรขึ้น?</p>
+  <ol type="A">
+    <li>รันทันที เพราะ Accept edits อนุมัติทุกอย่าง</li>
+    <li>หยุดรอให้เรากดอนุมัติ</li>
+    <li>ถูกบล็อกถาวร ไม่มีทางรันได้ในโหมดนี้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> Accept edits ปล่อยเฉพาะการแก้ไฟล์และคำสั่งจัดการไฟล์พื้นฐาน คำสั่งติดตั้งแพ็กเกจเป็น shell command อื่น จึงยังต้องถามเรา (แต่ไม่ได้ถูกห้าม แค่ต้องอนุมัติ)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับ permission mode (Manual / Accept edits / Plan / Auto):</p>
+  <ol>
+    <li>อยากให้ Claude ไล่อ่านโค้ด legacy แล้วเขียนข้อเสนอ โดยยังไม่แก้อะไร</li>
+    <li>ปล่อย Claude ทำ migration ยาวทั้งบ่าย ให้ตัวคัดกรองเบื้องหลังจับเรื่องเสี่ยงแทน</li>
+    <li>ลองรันสคริปต์ที่ได้มาจาก repo ที่ไม่รู้จัก อยากเห็นทุกคำสั่งก่อนรัน</li>
+    <li>ไว้ใจการแก้ไฟล์ของ Claude ในงานนี้ แต่อยากกดอนุมัติเองตอนมันจะติดตั้ง dependency</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-Plan, 2-Auto, 3-Manual, 4-Accept edits</strong> Plan สำหรับสำรวจและเสนอ, Auto มี classifier สำหรับ session ยาว, Manual สำหรับของที่ไม่ไว้ใจ, Accept edits ปล่อยการแก้ไฟล์แต่ยังถามคำสั่ง shell อื่น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีม security ต้องตรวจ PR ที่ contributor ภายนอกส่งมา ระหว่างให้ Claude ช่วยไล่โค้ด เขาต้องการเห็นและอนุมัติ <strong>ทุก</strong> การแก้ไฟล์และ <strong>ทุก</strong> คำสั่งก่อนเกิดขึ้น ควรใช้โหมดไหน?</p>
+  <ol type="A">
+    <li>Auto เพราะ classifier จะบล็อกของที่อันตรายให้อยู่แล้ว</li>
+    <li>Accept edits แล้วค่อยรีวิว diff ทีหลัง</li>
+    <li>bypassPermissions เพื่อให้เร็วที่สุด</li>
+    <li>Manual (default)</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> Manual คือโหมดเดียวที่ถามก่อนทุกการแก้ไฟล์และทุกคำสั่ง Auto ให้ classifier ตัดสินแทนเรา Accept edits แก้ไฟล์ไปก่อนเลย และ bypassPermissions ข้ามการถามทั้งหมด</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ชี้ Claude ไปที่ context ที่แม่นยำ</h3>
+<p>Prompt กว้างๆ ทำให้ Claude ต้องเดาว่าเราหมายถึงอะไร วิธีทำให้ prompt คมขึ้นมี 4 แบบ คือระบุ <strong>ขอบเขต</strong>, <strong>แหล่งข้อมูล</strong>, <strong>แพทเทิร์นที่มีอยู่</strong> หรือ <strong>อาการ</strong> ให้ชัด</p>
+<div class="table-wrap"><table>
+  <tr><th>เทคนิค</th><th>แบบกว้าง</th><th>แบบเจาะจงต้องบอกอะไรเพิ่ม</th></tr>
+  <tr><td>กำหนดขอบเขตงาน</td><td>"เขียนเทสต์ให้ไฟล์นี้"</td><td>ไฟล์ไหน, edge case ไหน (เช่น ตอนผู้ใช้ยังไม่ล็อกอิน), และเงื่อนไข เช่น "ไม่ใช้ mock"</td></tr>
+  <tr><td>ชี้ไปที่แหล่งข้อมูล</td><td>"ทำไม API ของคลาสนี้ถึงแปลกๆ"</td><td>ให้ไปดู git history ของคลาสนั้น แล้วสรุปว่า API เปลี่ยนมายังไง</td></tr>
+  <tr><td>อ้างแพทเทิร์นที่มีอยู่</td><td>"เพิ่ม widget ปฏิทิน"</td><td>ให้ดู widget ที่มีอยู่แล้วในหน้าแรก โดยยกไฟล์ใดไฟล์หนึ่งเป็นตัวอย่างให้ทำตาม</td></tr>
+  <tr><td>บอกอาการ</td><td>"แก้บั๊กล็อกอิน"</td><td>อาการ (เช่น ล็อกอินพังหลัง session หมดอายุ), ตำแหน่ง (โฟลเดอร์ไหน), ให้เขียนเทสต์ที่ fail เพื่อจำลองบั๊กก่อน แล้วค่อยแก้</td></tr>
+</table></div>
+<p>ตัวอย่าง prompt ที่ใช้เทคนิค "บอกอาการ":</p>
+<pre><code>ผู้ใช้กดชำระเงินซ้ำได้ถ้ากดปุ่มเร็วๆ สองครั้ง โค้ดอยู่ใน src/checkout/
+เขียนเทสต์ที่จำลองการกดซ้ำแล้ว fail ก่อน จากนั้นแก้ให้เทสต์ผ่าน</code></pre>
+
+<h3><code>@file</code> กับ <code>@directory</code> ไม่เหมือนกัน</h3>
+<ul>
+  <li><code>@ไฟล์</code> เช่น <code>@src/api/orders.ts</code> จะดึง <strong>เนื้อหาทั้งไฟล์</strong> เข้า context</li>
+  <li><code>@โฟลเดอร์</code> เช่น <code>@src/api</code> ได้แค่ <strong>รายชื่อไฟล์</strong> ไม่ได้เนื้อหา ถ้าอยากให้ Claude อ่านจริง ต้องอ้างไฟล์ที่ต้องการทีละตัว</li>
+</ul>
+
+<h3>ช่องทางป้อน context อื่นๆ</h3>
+<ul>
+  <li>วางหรือลาก <strong>screenshot</strong> เข้ามาในแชท</li>
+  <li><strong>pipe ข้อมูล</strong> เข้า Claude โดยตรง เช่น</li>
+</ul>
+<pre><code>tail -n 200 server.log | claude -p "สรุปว่า error นี้เกิดจากอะไร"</code></pre>
+<ul>
+  <li>ให้ <strong>URL ของเอกสาร</strong> ที่เกี่ยวข้อง</li>
+  <li>ให้ Claude <strong>ไปหาข้อมูลเอง</strong> ผ่าน Bash, MCP tool หรือการอ่านไฟล์</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ใส่ <code>@src/services</code> แล้ว Claude ได้อ่านทุกไฟล์ในโฟลเดอร์นั้น"</strong> ไม่ใช่ ได้แค่รายชื่อไฟล์ ถ้าต้องการเนื้อหา ให้อ้างไฟล์เจาะจง เช่น <code>@src/services/payment.ts</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>prompt ที่ดีบอก "ตรงไหน ดูจากอะไร ทำตามแบบไหน อาการคืออะไร" และจำไว้ว่า @ไฟล์ = เนื้อหา, @โฟลเดอร์ = แค่รายชื่อ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>นักพัฒนาพิมพ์ว่า "อ่าน <code>@lib/parsers</code> แล้วหาว่าทำไม CSV ที่มี quote ซ้อนถึงพัง" Claude จะได้อะไรจาก <code>@lib/parsers</code> และควรทำอะไรต่อ?</p>
+  <ol type="A">
+    <li>ได้เนื้อหาทุกไฟล์ในโฟลเดอร์ จึงใช้ prompt นี้ได้เลย</li>
+    <li>ได้เฉพาะไฟล์ที่ใหญ่ที่สุดที่พอดีกับ context</li>
+    <li>ได้แค่รายชื่อไฟล์ ควรอ้างไฟล์ที่เกี่ยว เช่น <code>@lib/parsers/csv.ts</code> เพิ่ม</li>
+    <li>ไม่ได้อะไรเลย เพราะ @ ใช้กับโฟลเดอร์ไม่ได้ ต้อง copy โค้ดมาวางเอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> การอ้างโฟลเดอร์ให้แค่รายชื่อไฟล์ ไม่ได้โหลดเนื้อหาและไม่มีการเลือกไฟล์ใหญ่ให้อัตโนมัติ ส่วน @ ใช้กับโฟลเดอร์ได้ แค่ผลที่ได้เป็นรายชื่อ</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. หักเลี้ยว ล้าง context และโยนงานให้ subagent</h3>
+<p>ถ้าเห็นว่า Claude เริ่มออกนอกทาง <strong>ให้แก้ทันที</strong> ยิ่งรอนาน งานที่ต้องทิ้งก็ยิ่งเยอะ เครื่องมือที่ใช้มีดังนี้:</p>
+<div class="table-wrap"><table>
+  <tr><th>คำสั่ง / ปุ่ม</th><th>ทำอะไร</th><th>ใช้เมื่อ</th></tr>
+  <tr><td><code>Esc</code></td><td>หยุด Claude กลางคัน ยกเลิก tool call ที่กำลังรัน แต่ <strong>context ยังอยู่</strong></td><td>เห็นว่าผิดทาง อยากสั่งใหม่ทันที</td></tr>
+  <tr><td>พิมพ์คำแก้แล้วกด Enter (ไม่ต้องหยุด)</td><td>ข้อความถูกต่อคิว Claude จะอ่านหลัง tool call ปัจจุบันเสร็จ ใน turn เดียวกัน</td><td>อยากเพิ่มคำแนะนำโดยไม่ขัดงานที่ทำอยู่</td></tr>
+  <tr><td><code>Esc</code> สองครั้ง หรือ <code>/rewind</code></td><td>ย้อนกลับไปสถานะก่อนหน้า ทั้ง <strong>บทสนทนาและโค้ด</strong></td><td>เดินผิดทางไปหลายขั้นแล้ว อยากเริ่มจากจุดเดิม</td></tr>
+  <tr><td><code>/clear</code></td><td>ล้าง context ทั้งหมด</td><td>เปลี่ยนไปทำงานที่ไม่เกี่ยวกับงานเดิม (context ยาวๆ ที่ไม่เกี่ยวทำให้ประสิทธิภาพตก)</td></tr>
+  <tr><td><code>/btw</code></td><td>ตอบคำถามแทรก โดย <strong>ไม่บันทึกลงประวัติบทสนทนา</strong></td><td>ถามเรื่องเล็กๆ ข้างทางโดยไม่อยากให้ context รก</td></tr>
+  <tr><td><code>/compact &lt;คำสั่ง&gt;</code></td><td>สรุป session ให้สั้นลง โดยเน้นตามที่เราบอก</td><td>session ยาวแต่ยังอยากทำงานเดิมต่อ</td></tr>
+</table></div>
+<p>ตัวอย่าง: <code>/compact เก็บรายละเอียดการเปลี่ยน schema ของตาราง orders ไว้</code> สรุปที่ได้จะรักษาเรื่องนั้นไว้เป็นหลัก</p>
+
+<h3>โยนงานรีเสิร์ชให้ subagent</h3>
+<p>การอ่านไฟล์เยอะๆ เพื่อหาคำตอบทำให้ context ของ session หลักบวม วิธีเลี่ยงคือสั่งประมาณว่า "ใช้ subagent ไปสืบว่า…" subagent จะอ่านไฟล์ใน context ของมันเอง แล้วส่งกลับมาแค่ <strong>ข้อสรุป</strong> เหมือนส่งเด็กฝึกงานไปค้นเอกสารในห้องเก็บของ แล้วกลับมารายงานแค่สิ่งที่เจอ</p>
+<p>Subagent นิยามเป็นไฟล์ที่มี frontmatter 4 field คือ <code>name</code>, <code>description</code>, <code>tools</code>, <code>model</code> แล้วตามด้วยคำสั่งการทำงาน ตัวอย่าง:</p>
+<pre><code>---
+name: perf-investigator
+description: ไล่หาจุดที่ทำให้ระบบช้า โดยไม่แก้โค้ด
+tools: Read, Grep, Glob, Bash
+model: sonnet
+---
+คุณคือวิศวกร performance ไล่หา query ที่ไม่มี index,
+loop ที่เรียก API ซ้ำ และการโหลดข้อมูลเกินจำเป็น
+รายงานพร้อมเลขบรรทัดและข้อเสนอวิธีแก้</code></pre>
+<p>field <code>tools</code> คือรายชื่อ tool <strong>เท่านั้น</strong> ที่ subagent ตัวนี้ใช้ได้ ถ้าไม่ใส่ Edit/Write ไว้ มันก็แก้ไฟล์ไม่ได้</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Esc = หยุดแต่จำไว้ · Esc Esc หรือ /rewind = ย้อนทั้งแชทและโค้ด · /clear = เริ่มงานใหม่ · /btw = ถามแทรกไม่บันทึก · /compact = ย่อแบบมีโฟกัส · subagent = ไปอ่านแทน ส่งกลับแค่ข้อสรุป</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมอยากได้ subagent "dep-auditor" ที่อ่านไฟล์และรันคำสั่งอย่าง <code>npm ls</code> ได้ แต่ <strong>ห้าม</strong> แก้ไฟล์ ต้องจำกัดสิทธิ์ที่ field ไหนใน frontmatter?</p>
+  <ol type="A">
+    <li><code>description</code></li>
+    <li><code>model</code></li>
+    <li><code>tools</code></li>
+    <li><code>name</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> <code>tools</code> กำหนดรายชื่อ tool ที่ subagent ใช้ได้ เช่น <code>Read, Grep, Glob, Bash</code> โดยไม่ใส่ Edit หรือ Write ส่วน description แค่อธิบายว่าเมื่อไหร่ควรเรียกใช้ ไม่ได้จำกัดสิทธิ์</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>Claude กำลังรัน refactor อยู่ คุณเห็นว่ามันเริ่มแก้ไฟล์ผิดโมดูล แต่ context ที่คุยกันมาทั้งหมดยังมีประโยชน์ อยากหยุดทันทีแล้วสั่งใหม่ ควรทำอะไร?</p>
+  <ol type="A">
+    <li>กด <code>Esc</code> ครั้งเดียว แล้วพิมพ์คำสั่งที่ถูก</li>
+    <li>พิมพ์ <code>/clear</code></li>
+    <li>พิมพ์ <code>/btw</code> ตามด้วยคำแก้</li>
+    <li>ปิด terminal แล้วเปิด session ใหม่</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> Esc หยุด tool call ที่กำลังรันโดยเก็บ context ไว้ /clear กับการเปิด session ใหม่ทิ้ง context ที่ยังมีประโยชน์ ส่วน /btw เป็นคำถามแทรกที่ไม่เข้าประวัติ ไม่ได้ใช้หักเลี้ยวงาน (ถ้าอยากย้อนโค้ดที่แก้ผิดไปแล้วด้วย ให้ใช้ Esc สองครั้งหรือ /rewind)</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ให้ Claude มีวิธีตรวจงานตัวเอง</h3>
+<p>ถ้าเราไม่ให้เกณฑ์ว่า "เสร็จ" หมายถึงอะไร คนที่ต้องมานั่งตรวจก็คือเรา ทางที่ดีกว่าคือให้ <strong>เกณฑ์ความสำเร็จที่จับต้องได้</strong> เช่น:</p>
+<ul>
+  <li>ตัวอย่าง input พร้อม output ที่คาดหวัง</li>
+  <li>เทสต์ที่ตอนนี้ fail อยู่ และต้องทำให้ผ่าน</li>
+  <li>screenshot ของหน้าตาที่ต้องการ ให้เทียบกับผลจริง</li>
+  <li>ข้อความ error จริง ไม่ใช่คำบรรยายว่า "มันพัง"</li>
+</ul>
+<p>ตัวอย่าง prompt ที่ให้ทั้งงานและวิธีตรวจในข้อความเดียว:</p>
+<pre><code>เขียนฟังก์ชัน isValidThaiPhone แล้วทดสอบกับ:
+  "0812345678"  → true
+  "081-234-5678" → true
+  "12345"       → false
+รันเทสต์ ถ้าไม่ผ่านให้แก้จนผ่านทั้งหมด</code></pre>
+
+<h3>4 วิธีผูกการตรวจเข้ากับงาน</h3>
+<p>เลือกตาม 2 คำถาม: การตรวจนี้ต้องอยู่ <strong>นานแค่ไหน</strong> และต้อง <strong>แน่นหนาแค่ไหน</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>วิธี</th><th>ทำงานยังไง</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>ใน prompt เดียว</strong></td><td>บอกให้รันการตรวจและแก้วนจนผ่าน ภายในข้อความนั้น</td><td>งานชิ้นเดียวจบ เช่น ฟังก์ชันที่มีตัวอย่าง input/output</td></tr>
+  <tr><td><strong>เงื่อนไข <code>/goal</code></strong></td><td>มี evaluator แยกต่างหากตรวจซ้ำหลังทุก turn ตลอดทั้ง session Claude ทำต่อจนกว่าเป้าจะสำเร็จ</td><td>เงื่อนไขที่ต้องจริงตลอด session</td></tr>
+  <tr><td><strong>Stop hook</strong></td><td>สคริปต์รันการตรวจแล้ว <strong>บล็อกไม่ให้ turn จบ</strong> จนกว่าจะผ่าน เป็นด่านแบบ deterministic (ผลแน่นอน ไม่ขึ้นกับการตีความของโมเดล)</td><td>กฎที่ต้องบังคับด้วยสคริปต์ ห้ามหลุด</td></tr>
+  <tr><td><strong>Verification subagent</strong></td><td>โมเดลตัวใหม่ที่ไม่ได้ทำงานชิ้นนั้น พยายามหาข้อโต้แย้งว่าผลลัพธ์ผิด</td><td>งานที่ไม่ควรให้คนทำเป็นคนให้คะแนนตัวเอง</td></tr>
+</table></div>
+
+<div class="box key"><span class="tag">ลองใช้กับงานตัวเอง</span>
+  <p>นึกถึงการเปลี่ยนแปลงล่าสุดที่คุณให้ AI ช่วยทำ มีเทสต์ build หรือการเทียบ screenshot อะไรบ้างที่มันน่าจะรันเองได้ เพื่อที่คุณจะได้ไม่ต้องมานั่งตรวจเองทีหลัง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ให้เกณฑ์ที่รันได้เสมอ แล้วเลือกวิธีผูก: งานเดียว → prompt เดียว · ทั้ง session → /goal · ต้องบังคับแน่นอน → Stop hook · ไม่อยากให้ตรวจงานตัวเอง → verification subagent</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับวิธีผูกการตรวจ (A: ใน prompt เดียว, B: <code>/goal</code>, C: Stop hook, D: verification subagent):</p>
+  <ol>
+    <li>อยากได้ฟังก์ชันแปลงวันที่ พร้อมตัวอย่าง 3 คู่ input/output ในข้อความเดียว</li>
+    <li>ทั้ง session นี้ coverage ต้องไม่ต่ำกว่าเดิม ให้มีตัวตรวจซ้ำหลังทุก turn</li>
+    <li>ทีมกำหนดว่า turn จะจบไม่ได้ถ้า <code>make lint</code> ยัง fail และต้องบังคับด้วยสคริปต์ ไม่ใช่ขึ้นกับโมเดล</li>
+    <li>รายงานวิเคราะห์ความเสี่ยงที่ agent เขียน ไม่ควรให้ agent ตัวเดิมเป็นคนตัดสินว่าถูก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-A, 2-B, 3-C, 4-D</strong> งานจบในข้อความเดียวใช้ prompt, เงื่อนไขทั้ง session ใช้ /goal, ด่านที่ต้องแน่นอนใช้ Stop hook, งานที่ผู้ทำไม่ควรตรวจเองใช้ verification subagent</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/how-claude-code-works">Claude Code docs: How Claude Code works</a></li>
+  <li><a href="https://code.claude.com/docs/en/common-workflows">Claude Code docs: Common workflows</a></li>
+  <li><a href="https://code.claude.com/docs/en/cli-reference">Claude Code docs: CLI reference</a></li>
+  <li><a href="https://code.claude.com/docs/en/best-practices">Claude Code docs: Best practices</a></li>
+</ul>
+</section>

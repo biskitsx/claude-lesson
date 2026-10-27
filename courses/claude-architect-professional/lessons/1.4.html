@@ -1,0 +1,240 @@
+<section class="lesson" id="l-1-4">
+<h2>1.4 Multi-agent design: when to split and how to brief subagents</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/multi-agent-system-design-when-to-split-and-how-to-decompose">CertSafari 1.4</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ตัดสินได้ว่างานไหนคุ้มที่จะใช้หลาย agent พร้อมบอกเหตุผลที่จับต้องได้และต้นทุน token</li>
+    <li>อธิบายว่า coordinator ส่งงานให้ subagent ที่มี context แยกยังไง และได้อะไรกลับมา</li>
+    <li>ขีดเส้นแบ่ง agent ตาม <strong>context</strong> ไม่ใช่ตาม <strong>บทบาท</strong></li>
+    <li>เขียน brief ให้ subagent ที่ครบในตัว: objective, output format, tools, boundaries</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: subagent มองไม่เห็น context ของเรา</span>
+  <p>Subagent ทำงานในบทสนทนาของตัวเอง ไฟล์ที่มันอ่านและ tool call ที่มันทำอยู่ในนั้นทั้งหมด coordinator ได้กลับมาแค่ <strong>ข้อความสุดท้าย</strong> และในทางกลับกัน subagent ก็ไม่เห็นสิ่งที่ coordinator คุยมาก่อน ดังนั้น brief ต้องครบในตัว</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. เริ่มจาก agent ตัวเดียว แยกเมื่อมีเหตุผลที่จับต้องได้</h3>
+<p>Multi-agent ไม่ฟรี การทดสอบของ Anthropic พบว่าระบบหลาย agent มักใช้ token <strong>ประมาณ 3–10 เท่า</strong> ของ agent ตัวเดียวในงานเดียวกัน และเวลารวมก็มักนานขึ้นด้วย สิ่งที่การรันขนานซื้อได้คือ <strong>ความครอบคลุม ไม่ใช่ความเร็ว</strong></p>
+<p><strong>ลองเดา:</strong> งานที่ agent ตัวเดียวทำ 10 นาที ถ้าแบ่งให้ subagent 5 ตัวรันขนาน จะเป็นยังไง? ส่วนใหญ่ใช้ token มากขึ้น และเวลารวมมักนานขึ้น ไม่ใช่เหลือ 2 นาที</p>
+
+<p>มีแค่ 3 เหตุผลที่คุ้มจะแยก:</p>
+<div class="table-wrap"><table>
+  <tr><th>เหตุผล</th><th>สัญญาณใน agent ตัวเดียว</th><th>ต้นทุนหลัก</th></tr>
+  <tr><td><strong>Context pollution</strong></td><td>งานย่อยดึงข้อมูลเข้ามาเกินประมาณ 1,000 token ที่งานหลักแทบไม่ได้ใช้</td><td>ส่งต่องานแล้วรายละเอียดหายได้ ถ้าไม่บอกชัดว่าต้องดึงอะไรกลับมา</td></tr>
+  <tr><td><strong>Parallel breadth</strong></td><td>งานแตกเป็นมุมที่อิสระต่อกัน เช่น ค้นข้อมูลจากหลายแหล่ง</td><td>token เพิ่มมาก และเวลารวมมักนานขึ้น</td></tr>
+  <tr><td><strong>Specialisation</strong></td><td>tool 20+ ตัว, tool คนละโดเมนที่ไม่เกี่ยวกัน, หรือโหมดพฤติกรรมที่ขัดกัน</td><td>ความซับซ้อนของการ route ถ้าส่งผิดตัว ผลก็แย่</td></tr>
+</table></div>
+<p>ตัวอย่าง context pollution: ให้ subagent ไปดึงประวัติคำสั่งซื้อหลายพัน token แล้วส่งกลับมาแค่สรุป 50–100 token ที่งานหลักต้องใช้จริง</p>
+<p>ถ้าไม่มีสัญญาณไหนในสามข้อนี้ ให้เก็บ agent ตัวเดียวไว้ แล้วไปปรับ prompt ให้ดีขึ้นแทน</p>
+
+<h3>ขีดเส้นตาม context ไม่ใช่ตามบทบาท</h3>
+<p>การแบ่งเป็น planner / implementer / tester / reviewer ดูเป็นระเบียบเหมือนผังองค์กร แต่ได้ผลเหมือน <strong>เกมกระซิบต่อกัน</strong>: ส่งต่อทีละทอด รายละเอียดหายทีละนิด agent ที่สร้างฟีเจอร์ควรเป็นคนเขียนเทสต์ของมันเองด้วย เพราะมันรู้ว่าตัวเองตัดสินใจอะไรไปบ้าง</p>
+<div class="table-wrap"><table>
+  <tr><th>เส้นแบ่งที่ดี</th><th>เส้นแบ่งที่แย่</th></tr>
+  <tr><td>เส้นทางรีเสิร์ชที่อิสระต่อกัน</td><td>ช่วงต่อเนื่องของฟีเจอร์เดียวกัน (วางแผน → ทำ → เทสต์)</td></tr>
+  <tr><td>component ที่มี API contract ชัดเจน</td><td>component ที่ผูกกันแน่น</td></tr>
+  <tr><td>การตรวจแบบ black-box (ตรวจผลจากภายนอกโดยไม่ต้องรู้ไส้ใน)</td><td>งานที่แชร์ state ที่แก้ไขได้ร่วมกัน</td></tr>
+</table></div>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>ตัวเลือกที่แบ่ง agent ตามบทบาท (planner, implementer, tester, reviewer) มักเป็นคำตอบผิด ให้แยกเฉพาะจุดที่ context แยกขาดจากกันได้จริง</p>
+</div>
+
+<p><strong>ลองกับงานตัวเอง:</strong> ดู subagent ที่คุณมีอยู่ มันอิสระต่อกันจริง หรือเป็นแค่ช่วงต่อเนื่องของงานเดียวที่ควรอยู่ใน agent ตัวเดียว?</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แบ่งให้หลาย agent ขนานกันแล้วจะเสร็จเร็วกว่าและถูกกว่า"</strong> ไม่ใช่ มักใช้ token มากกว่าและเวลารวมนานกว่า สิ่งที่ได้คือความละเอียดครอบคลุม</p>
+  <p><strong>"ให้งานแต่ละประเภทมี agent ของตัวเอง"</strong> ไม่ใช่ แบ่งตามบทบาททำให้ context หายทุกครั้งที่ส่งต่อ ให้แบ่งตามขอบเขต context</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>แยกเมื่อเจอ context pollution, parallel breadth หรือ specialisation เท่านั้น จ่าย token 3–10 เท่า และขีดเส้นตาม context ไม่ใช่ตามตำแหน่งงาน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่สัญญาณกับการตัดสินใจ (A = แยกเพราะ context pollution, B = แยกเพราะ parallel breadth, C = แยกเพราะ specialisation, D = เก็บ agent ตัวเดียว แล้วปรับ prompt):</p>
+  <ol>
+    <li>agent ซัพพอร์ตมี tool 28 ตัว ครอบทั้ง HR, การเงิน และ IT แล้วเริ่มเรียก tool ผิดโดเมน</li>
+    <li>ต้องสรุปกฎหมายคุ้มครองข้อมูลของ 8 ประเทศ แต่ละประเทศค้นแยกกันได้</li>
+    <li>ก่อนตอบ agent ต้องอ่าน log 15,000 token แต่ใช้จริงแค่บรรทัด error ไม่กี่บรรทัด</li>
+    <li>agent ตอบคำถามสินค้าได้ช้านิดหน่อย แต่ไม่มีอาการข้างบนเลย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-B, 3-A, 4-D</strong> มีแค่สามสัญญาณนี้ที่คุ้มกับต้นทุนที่เพิ่ม ถ้าไม่มีเลยให้ปรับ agent ตัวเดียว</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ทีมออกแบบระบบสร้างฟีเจอร์ "ระบบคูปองส่วนลด" ด้วย 4 agent: planner → implementer → tester → reviewer ผลคือเทสต์ไม่ครอบเงื่อนไขที่ implementer ตั้งใจไว้ ควรแนะนำอะไร?</p>
+  <ol type="A">
+    <li>รวม planner กับ reviewer เป็นตัวเดียว เหลือ 3 agent</li>
+    <li>ให้ทั้ง 4 agent รันขนานกันเพื่อลดเวลา</li>
+    <li>คง 4 agent ไว้ แต่ให้ส่งต่อบ่อยขึ้น</li>
+    <li>ให้ agent ตัวเดียวสร้างและเขียนเทสต์ของฟีเจอร์ แยกเฉพาะงานที่อิสระจริง เช่น ตัวตรวจแบบ black-box</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A ยังแบ่งตามบทบาทอยู่ C คือเกมกระซิบเหมือนเดิม B ยังแบ่งตามบทบาทและเพิ่มต้นทุน</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Coordinator pattern และ context ที่แยกขาด</h3>
+<p>Coordinator วางแผน แบ่งชิ้นงานให้ subagent แล้วรวมผล subagent แต่ละตัวเริ่มจาก context ว่างเปล่า และมีแค่ข้อความสุดท้ายที่กลับไปหาตัวแม่</p>
+
+<h3>แยกแค่บทสนทนา ไม่ได้แยกสภาพแวดล้อม</h3>
+<p>ใน <strong>Managed Agents</strong> agent ตัวหนึ่งสามารถประสาน agent ตัวอื่นภายใน session เดียวกันได้ โดย:</p>
+<ul>
+  <li>ทุก agent ใน session <strong>แชร์ sandbox, filesystem และ vault credentials เดียวกัน</strong></li>
+  <li>แต่ละ agent มี <strong>session thread</strong> ของตัวเอง ซึ่งเป็น event stream ที่ context แยกขาดจากกัน</li>
+  <li>thread ของ subagent ยังเปิดอยู่หลังจบงาน coordinator ถามต่อได้ และ subagent จำสิ่งที่ทำไปก่อนหน้าได้</li>
+</ul>
+<p>ผลที่ตามมา: ถ้า subagent เขียนผลละเอียดลงไฟล์ เช่น <code>findings.md</code> coordinator จะเห็นแค่สรุปในข้อความ แต่เปิดไฟล์นั้นอ่านเองได้เพราะ filesystem เป็นของกลาง</p>
+
+<h3>Subagent vs agent team vs workflow</h3>
+<div class="table-wrap"><table>
+  <tr><th>กลไก</th><th>คืออะไร</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Subagent</strong></td><td>ทำงานข้างเคียงหนึ่งชิ้นใน context ของตัวเอง ส่งกลับแค่ข้อความสุดท้าย</td><td>ซ่อนงานสืบค้นหนึ่งชิ้นไม่ให้รกบทสนทนาหลัก</td></tr>
+  <tr><td><strong>Agent team</strong></td><td>หลาย session ที่ประสานกัน แชร์ task list และส่งข้อความหากันได้ มี lead คอยจัดการ (ยังเป็น experimental และปิดไว้โดย default)</td><td>ให้ worker หลายตัวทำงานสอดคล้องกันแบบเพื่อนร่วมทีม</td></tr>
+  <tr><td><strong>Workflow</strong> (scripted)</td><td>สคริปต์ที่รันหลาย agent เบื้องหลังแล้วรวมผล มี session budget คุมค่าใช้จ่ายรวม</td><td>งานใหญ่เกินกว่า subagent ไม่กี่ตัวจะรับไหว</td></tr>
+</table></div>
+<p>การ "ส่งกลับแค่สรุป" เป็นคุณสมบัติของ subagent เอง ไม่ใช่สิ่งที่ hook หรือ workflow ทำให้ภายหลัง</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Context แยก แต่ไฟล์ร่วม subagent ส่งสรุป ไฟล์ละเอียดยังอ่านได้ และถามต่อใน thread เดิมได้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ใน session ของ Managed Agents coordinator ส่ง subagent ไปวิเคราะห์ไฟล์ metrics 60 ไฟล์ subagent เขียนผลละเอียดลง <code>analysis.md</code> แล้วตอบกลับเป็นสรุป 5 บรรทัด ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>Coordinator ได้เนื้อหาทั้ง 60 ไฟล์เข้ามาใน context ด้วย</li>
+    <li>Thread ของ subagent ปิดทันทีที่ส่งสรุป ถามต่อไม่ได้</li>
+    <li>Subagent มี sandbox แยกของตัวเอง coordinator จึงเปิดไฟล์นั้นไม่ได้</li>
+    <li>Coordinator เห็นแค่สรุป แต่เปิด <code>analysis.md</code> อ่านได้เพราะ filesystem แชร์กัน และถาม subagent ต่อได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> แยกแค่บทสนทนา sandbox และไฟล์ใช้ร่วมกัน และ thread ของ subagent ยังเปิดให้ถามต่อ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>คุณกำลังคุยกับ agent หลักเรื่องออกแบบ API แล้วต้องไล่หาสาเหตุ memory leak ที่ต้องอ่านไฟล์และ heap dump เยอะมาก แต่ไม่อยากให้ของพวกนั้นรก context หลัก ใช้อะไร?</p>
+  <ol type="A">
+    <li>Subagent ที่ทำงานใน context ของตัวเองและส่งกลับแค่ข้อสรุป</li>
+    <li>Agent team ให้หลายตัวช่วยกันคุย</li>
+    <li>Hook <code>PostToolUse</code> เพื่อย้ายผล tool ออกไป</li>
+    <li>Workflow script</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B เหมาะกับการร่วมงานแบบเพื่อน ไม่ใช่งานสืบค้นชิ้นเดียว C hook สังเกตหรือบล็อก tool call ได้ แต่ไม่ได้ย้ายผลไป context อื่น D ไม่ใช่กลไกแยก context และไม่ได้เข้าถึง filesystem โดยตรง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Fan-out subagent ที่อิสระต่อกันแบบขนาน</h3>
+<p>Subagent ที่ไม่พึ่งกันรันพร้อมกันได้ ทั้งชุดจะเสร็จในเวลาประมาณ <strong>เท่ากับตัวที่ช้าที่สุด</strong> เงื่อนไขคือ coordinator ต้อง <strong>เรียกทุกตัวใน turn เดียวกัน</strong></p>
+<ul>
+  <li>เรียกทีละตัว (ตัวที่สองรอผลตัวแรก) = เสียความขนาน เวลารวมเท่ากับผลบวกของทุกตัว</li>
+  <li>รวมเป็น subagent ตัวเดียวที่ทำทุกอย่าง = เสียทั้งความขนานและคำสั่งที่โฟกัสเฉพาะทาง</li>
+</ul>
+<p>เหมือนสั่งอาหารในร้าน: บอกพนักงานทีเดียวทั้ง 3 จาน ครัวทำพร้อมกัน ได้ครบเมื่อจานที่ช้าที่สุดเสร็จ แต่ถ้าสั่งทีละจานหลังกินจานก่อนหมด ก็รอนานเป็นสามเท่า</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อยากได้เวลาเท่าตัวที่ช้าสุด ต้องเรียกทุก subagent ใน turn เดียว</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Coordinator มี subagent รีวิวเอกสาร 3 ตัว (ไวยากรณ์ / ความถูกต้องทางเทคนิค / ลิงก์เสีย) ตอนนี้ส่งผลของตัวแรกไปให้ตัวที่สอง แล้วต่อไปตัวที่สาม อยากให้เสร็จในเวลาเท่าตัวที่ช้าสุด ต้องทำยังไง?</p>
+  <ol type="A">
+    <li>เรียกทั้ง 3 ตัวใน turn เดียวกันเพื่อให้รันพร้อมกัน</li>
+    <li>ให้ส่งผลต่อกันเหมือนเดิม แต่ตั้ง timeout สั้นลง</li>
+    <li>รวมทั้ง 3 งานเป็น subagent ตัวเดียว</li>
+    <li>ยกเลิก subagent แล้วให้ agent ตัวเดียวทำ เพราะเร็วกว่าเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> C เสียความขนานและความเฉพาะทาง B ยังเป็นลำดับต่อกัน D agent ตัวเดียวไม่ได้เร็วกว่าเสมอ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ระบบตรวจ pull request มี subagent ตรวจ performance, accessibility และ i18n ต้องการให้ทั้ง 3 รันพร้อมกัน ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>Coordinator เรียกทั้ง 3 subagent ใน turn เดียว</li>
+    <li>เรียกทีละตัว พอตัวหนึ่งเสร็จค่อยเรียกตัวถัดไป</li>
+    <li>รวมเป็น reviewer ตัวเดียวที่ตรวจครบ 3 เรื่อง</li>
+    <li>ใช้ agent ตัวเดียว แต่สลับโมเดลในแต่ละรอบตรวจ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B เวลารวมเป็นผลบวก C เสียความขนานและผสมความเชี่ยวชาญคนละด้าน D การสลับโมเดลยังเป็นลำดับต่อกันอยู่ดี</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เขียน brief ให้ subagent ที่มองไม่เห็น context ของเรา</h3>
+<p>นึกภาพว่าคุณส่งงานให้ฟรีแลนซ์ที่ไม่เคยเข้าประชุมกับทีมเลย brief ที่ครบในตัวมี 4 ส่วน:</p>
+<ol class="steps">
+  <li><strong>Objective:</strong> งานที่ต้องทำแบบเจาะจง รวมข้อเท็จจริงจาก context ของ coordinator ที่ subagent ต้องรู้</li>
+  <li><strong>Output format:</strong> ระบุว่าต้องส่งอะไรกลับมาเป๊ะๆ เพราะข้อความสุดท้ายคือทั้งหมดที่ coordinator จะเห็น</li>
+  <li><strong>Tools:</strong> ชุด tool น้อยที่สุดที่จำเป็น ตั้งไว้ในนิยามของ subagent</li>
+  <li><strong>Boundaries:</strong> อะไรห้ามแตะ และเมื่อไหร่ควรหยุด</li>
+</ol>
+
+<h3>Brief ที่แย่ กับ brief ที่ดี</h3>
+<pre><code># แย่
+"หาสาเหตุให้หน่อย"
+
+# ดี
+"เป้าหมาย: หาสาเหตุที่ webhook ส่งซ้ำ 2 ครั้งหลังจ่ายเงินสำเร็จ
+ อาการ: เกิดเฉพาะเมื่อ gateway ตอบช้ากว่า 5 วินาที
+ ตัดออกแล้ว: payment_client.py, queue_worker.py (ตรวจแล้วปกติ)
+ ดูที่: โมดูล retry ใน webhooks/
+ เครื่องมือ: อ่านอย่างเดียว ห้ามแก้ไฟล์
+ ส่งกลับ: สาเหตุ 1 ประโยค พร้อมชื่อไฟล์และเลขบรรทัด"</code></pre>
+<p>Brief แบบแรกทำให้ subagent เริ่มจากศูนย์ ไม่รู้ว่าบั๊กคืออะไร ไม่รู้ว่าไฟล์ไหนตรวจแล้ว อาจไล่ทั้ง codebase ใหม่ แล้วส่งกลับมาในรูปแบบที่เอาไปใช้ต่อไม่ได้</p>
+
+<h3>Field ในนิยาม subagent (<code>AgentDefinition</code>)</h3>
+<ul>
+  <li><code>description</code>: coordinator ใช้อ่านเพื่อตัดสินว่าจะเรียก subagent ตัวนี้เมื่อไหร่ ถ้าเขียนกว้างๆ จะ route ผิด</li>
+  <li><code>prompt</code>: system prompt ของ subagent</li>
+  <li><code>tools</code>: allowlist ของชื่อ tool <strong>ถ้าไม่ใส่ subagent จะได้ทุก tool ที่ subagent ใช้ได้</strong></li>
+</ul>
+<pre><code>agents = {
+  "doc-reviewer": AgentDefinition(
+    description="ตรวจความถูกต้องของเอกสาร API เทียบกับโค้ด ไม่แก้ไฟล์",
+    prompt="คุณคือผู้ตรวจเอกสาร ...",
+    tools=["Read", "Grep"],      # อ่านกับค้นเท่านั้น ไม่มี Edit/Write/Bash
+  )
+}</code></pre>
+<p>การเขียนใน prompt ว่า "ห้ามแก้ไฟล์" แค่ <em>ขอร้อง</em> ส่วนการตัด tool ออกจาก <code>tools</code> คือ <em>ถอดความสามารถ</em> ทิ้งจากต้นทาง</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ไม่ใส่ field <code>tools</code> แปลว่า subagent ถูกจำกัด"</strong> ไม่ใช่ มันจะได้ทุก tool ที่ subagent ใช้ได้ รวม Edit, Write, Bash ถ้าต้องการ read-only ต้องระบุแค่ Read และ Grep</p>
+  <p><strong>"subagent อ่าน CLAUDE.md แล้วจะรู้ว่าเราคุยอะไรกันมา"</strong> ไม่ใช่ CLAUDE.md ไม่ได้พกบทสนทนาของ coordinator ไปด้วย ต้องใส่ข้อมูลที่จำเป็นไว้ใน brief</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Brief = objective + output format + tools + boundaries เขียน <code>description</code> ให้ชัด และจำกัด <code>tools</code> เสมอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>หลังคุยกับผู้ใช้เรื่องคู่มือ 3 ฉบับ coordinator ส่ง subagent ด้วย brief ว่า "ช่วยรีวิวเอกสารที่เราคุยกันหน่อย ห้ามแก้ไฟล์นะ" และนิยาม subagent ไม่มี field <code>tools</code> ประเมินยังไง?</p>
+  <ol type="A">
+    <li>ใช้ได้ เพราะ subagent อ่าน CLAUDE.md และคำว่า "ห้ามแก้ไฟล์" ก็กันได้แล้ว</li>
+    <li>ใช้ได้ เพราะไม่ใส่ <code>tools</code> แปลว่า read-only</li>
+    <li>ใช้ได้ เพราะ subagent เห็นบทสนทนาก่อนหน้าของ coordinator และ tool ถูกปิดไว้โดย default</li>
+    <li>Brief กว้างเกิน subagent ไม่รู้ว่าเอกสารไหน และการไม่ใส่ <code>tools</code> ให้ทุก tool ควรระบุแค่ Read และ Grep</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> Subagent ไม่เห็นบทสนทนาก่อนหน้า CLAUDE.md ไม่ได้พกมันไป คำขอใน prompt แค่ลดโอกาสแก้ไฟล์ และการไม่ใส่ <code>tools</code> คือได้ทุก tool</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ต้องการ subagent ตรวจ changelog ที่อ่านและค้นไฟล์ได้ แต่ห้ามแก้ไฟล์และห้ามรันคำสั่งใดๆ ควรตั้งค่ายังไง?</p>
+  <ol type="A">
+    <li>ตั้ง <code>tools</code> เป็น <code>["Read", "Grep"]</code></li>
+    <li>ไม่ใส่ <code>tools</code> เลย</li>
+    <li>ให้ <code>Edit</code> และ <code>Write</code> แล้วใช้ hook บล็อกทีหลัง</li>
+    <li>ตั้ง <code>tools</code> เป็น <code>["Read", "Grep", "Bash"]</code> เพื่อให้ค้นได้เร็วขึ้น</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ถอดความสามารถเขียนและรันออกตั้งแต่ต้นทาง B ได้ทุก tool รวม Edit/Write/Bash C เปราะกว่าการไม่ให้ตั้งแต่แรก D Bash รันคำสั่งอะไรก็ได้ ขัดกับข้อกำหนด</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration">Claude docs: Managed Agents multiagent orchestration</a></li>
+  <li><a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Claude blog: Building multi-agent systems: when and how to use them</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/subagents">Agent SDK: Subagents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agents">Claude Code docs: Agents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">Agent SDK: Agent loop</a></li>
+</ul>
+</section>

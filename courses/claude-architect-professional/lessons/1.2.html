@@ -1,0 +1,307 @@
+<section class="lesson" id="l-1-2">
+<h2>1.2 End-to-end agent architecture: the loop, tool execution and feedback</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/end-to-end-claude-architecture-input-processing-output-and-feedback-loops">CertSafari 1.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ไล่ request หนึ่งตัวผ่าน agent loop ตั้งแต่ input ที่ประกอบเสร็จจนได้ผลลัพธ์สุดท้าย และบอกได้ว่าอะไรคือเงื่อนไขที่ทำให้ loop หยุด</li>
+    <li>แยกได้ว่า tool แต่ละตัว <strong>โค้ดของเรา</strong> หรือ <strong>Anthropic</strong> เป็นคนรัน และมันเปลี่ยนหน้าที่ของ loop เรายังไง</li>
+    <li>ตัดสินได้ว่าเมื่อไหร่ควรใส่ tool, MCP หรือโมเดลที่แรงขึ้นในขั้น processing</li>
+    <li>ออกแบบ feedback (tool result, hook, graded outcome) ให้ระบบแก้ตัวเองระหว่างรันได้</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: loop ที่วนจนไม่มี tool call</span>
+  <p>Agent loop คือ: ประกอบ input → Claude ตอบเป็นข้อความหรือขอเรียก tool → รัน tool → ส่งผลกลับเข้าไป แล้ววนซ้ำ <strong>จนกว่า Claude จะตอบโดยไม่ขอ tool อีก</strong> คำตอบสุดท้ายนั้นคือ output ของระบบ</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. Agent loop ตั้งแต่ input จนถึง output</h3>
+<p><strong>Input</strong> ไม่ได้มีแค่ข้อความของผู้ใช้ แต่รวมถึง system prompt, นิยาม tool ทั้งหมด และประวัติบทสนทนา ใน Agent SDK การรันจะเริ่มด้วย <code>SystemMessage</code> ที่มี subtype <code>init</code> ซึ่งพก metadata ของ session มาด้วย</p>
+<p><strong>Processing</strong> ทำงานเป็น <em>turn</em> แต่ละ turn คือรอบ "ประเมินแล้วลงมือ" หนึ่งรอบ งานหนึ่งอาจใช้หลาย turn</p>
+<p><strong>Output</strong> คือคำตอบที่ไม่มี tool call ใน Agent SDK ข้อความสุดท้ายมาเป็น <code>AssistantMessage</code> ตามด้วย <code>ResultMessage</code> ที่บรรจุข้อความสุดท้าย, token usage, ค่าใช้จ่าย และ session ID ต้องเช็ก field <code>subtype</code> ทุกครั้ง เพราะการรันอาจจบเพราะชน limit ไม่ได้จบเพราะสำเร็จ</p>
+
+<h3>ตัวอย่าง: แก้เทสต์ที่พัง</h3>
+<ol class="steps">
+  <li>Turn 1: Claude ขอรันเทสต์ผ่าน Bash เห็นว่าเทสต์ไหนพัง</li>
+  <li>Turn 2: อ่านไฟล์ที่เกี่ยวข้อง</li>
+  <li>Turn 3: แก้ไฟล์แล้วรันเทสต์ซ้ำ</li>
+  <li>Turn สุดท้าย: ตอบเป็นข้อความสรุปโดยไม่มี tool call → loop จบ</li>
+</ol>
+<p>ทุกขั้น Claude เลือกเองจากผลของขั้นก่อนหน้า ไม่มีใครเขียนลำดับนี้ไว้ในโค้ด</p>
+
+<h3>ถ้าเขียน loop เองบน Messages API</h3>
+<p>เราต้องเขียน <code>while</code> loop ที่ตัดสินจาก <code>stop_reason</code>:</p>
+<pre><code>while True:
+    resp = client.messages.create(model=MODEL, tools=TOOLS, messages=msgs)
+    msgs.append({"role": "assistant", "content": resp.content})
+    if resp.stop_reason == "tool_use":
+        msgs.append({"role": "user", "content": run_client_tools(resp)})
+    elif resp.stop_reason == "pause_turn":
+        continue                      # ส่งบทสนทนา (รวม response ที่ pause) กลับไปใหม่
+    else:
+        break                         # end_turn หรือหยุดด้วยเหตุผลอื่น</code></pre>
+
+<div class="table-wrap"><table>
+  <tr><th>stop_reason</th><th>ความหมาย</th><th>โค้ดเราต้องทำอะไรต่อ</th></tr>
+  <tr><td><code>tool_use</code></td><td>มี tool ที่ต้องรัน</td><td>รัน tool, ส่ง block <code>tool_result</code> กลับ, เรียก API อีกรอบ</td></tr>
+  <tr><td><code>end_turn</code></td><td>คำตอบสุดท้าย</td><td>ออกจาก loop แล้วส่งผลให้ผู้ใช้</td></tr>
+  <tr><td><code>max_tokens</code>, <code>stop_sequence</code>, <code>refusal</code></td><td>หยุดด้วยเหตุผลอื่น ไม่ใช่งานเสร็จ</td><td>ออกจาก loop และจัดการกรณีนั้นแบบชัดเจน</td></tr>
+  <tr><td><code>pause_turn</code></td><td>loop ของ server tool ชนเพดานจำนวนรอบ</td><td>ส่งบทสนทนากลับไปใหม่ โดยรวม response ที่ถูก pause ไว้ด้วย</td></tr>
+</table></div>
+
+<p><strong>เลือกที่ host:</strong> Messages API เหมาะเมื่อต้องการ loop แบบ custom ที่ควบคุมละเอียด ส่วน Claude Managed Agents ให้ harness สำเร็จรูป (loop + การรัน tool + runtime) เหมาะกับงานยาวแบบ asynchronous</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>มีแค่ <code>tool_use</code> ที่ทำให้ loop ฝั่ง client วนต่อ <code>end_turn</code> คือเสร็จ ค่าอื่นคือหยุดก่อนเวลาที่ต้องจัดการ และ <code>pause_turn</code> คืองานฝั่ง server ยังไม่จบ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จับคู่)</span>
+  <p>จับคู่ <code>stop_reason</code> กับสิ่งที่โค้ดควรทำ:</p>
+  <ol>
+    <li><code>pause_turn</code></li>
+    <li><code>tool_use</code></li>
+    <li><code>max_tokens</code></li>
+    <li><code>end_turn</code></li>
+  </ol>
+  <p>A. ส่งผลให้ผู้ใช้ได้เลย · B. รัน tool แล้วส่ง <code>tool_result</code> พร้อมเรียกอีกรอบ · C. ส่งบทสนทนาเดิมรวม response ที่ค้างกลับไปให้ทำต่อ · D. ถือว่ายังไม่ใช่คำตอบสมบูรณ์ ต้องจัดการกรณีถูกตัดเอง</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-B, 3-D, 4-A</strong> จำไว้ว่า <code>max_tokens</code> ไม่ได้แปลว่างานเสร็จ และ <code>pause_turn</code> ไม่ใช่คำตอบสุดท้าย</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ใครเป็นคนรัน tool: client tool กับ server tool</h3>
+<p>Claude <strong>ไม่เคยรัน tool เอง</strong> มันแค่ปล่อย request แบบมีโครงสร้างออกมา แล้วมีอะไรสักอย่างข้างนอกรันให้ ผลค่อยกลับเข้าบทสนทนา คำถามสำคัญคือ "โค้ดรันที่ไหน" เพราะมันกำหนดว่าแอปเราต้องรับผิดชอบอะไร</p>
+<div class="table-wrap"><table>
+  <tr><th>ชนิด tool</th><th>ตัวอย่าง</th><th>ใครรัน</th><th>หน้าที่ของ loop เรา</th></tr>
+  <tr><td>User-defined client tool</td><td>tool ที่เราเขียน schema เอง เช่น <code>get_invoice</code></td><td>แอปของเรา</td><td>รัน, ส่ง <code>tool_result</code>, ขับ loop เอง Claude ไม่เห็น implementation</td></tr>
+  <tr><td>Anthropic-schema client tool</td><td><code>memory</code>, <code>bash</code>, <code>text_editor</code>, <code>computer</code>, <code>browser</code></td><td>แอปของเรา</td><td>เหมือนข้างบน แต่ Claude ถูกเทรนกับ signature พวกนี้มา เลยเรียกแม่นกว่าและฟื้นจาก error ได้ดีกว่า</td></tr>
+  <tr><td>Server tool</td><td><code>web_search</code>, <code>web_fetch</code>, <code>code_execution</code>, <code>tool_search</code></td><td>Anthropic</td><td>เปิดใช้ใน request, อ่านผล, ส่งใหม่เมื่อเจอ <code>pause_turn</code> ไม่ต้องสร้าง <code>tool_result</code> เอง</td></tr>
+</table></div>
+
+<p>ผลต่อ latency:</p>
+<ul>
+  <li><strong>Client tool</strong> เพิ่ม round trip ทุกครั้งที่เรียก เพราะโมเดลต้องถาม แล้วเราต้องตอบ</li>
+  <li><strong>Server tool</strong> รันค้นหาหรือรันโค้ดหลายครั้งได้ภายใน request เดียว ผลกลับมาพร้อม block <code>server_tool_use</code> ที่มีผลแล้ว</li>
+</ul>
+
+<h3>สองทางออกที่ต้องออกแบบรองรับ</h3>
+<ul>
+  <li>ถ้า loop ฝั่ง server ชนเพดานจำนวนรอบ จะได้ <code>pause_turn</code> ให้ส่งบทสนทนา (รวม response ที่ถูก pause) กลับไป โมเดลจะทำต่อจากเดิม</li>
+  <li>ถ้าการเรียกแบบขนานกลุ่มเดียวกัน <strong>ผสม server tool กับ client tool</strong> response จะเป็น <code>tool_use</code> และมี block <code>server_tool_use</code> ที่ยังไม่มีผล API จะรัน server tool นั้นต่อก็ต่อเมื่อเราส่งผลของ client tool กลับไปแล้ว</li>
+</ul>
+
+<p><strong>ลองเดา:</strong> <code>bash</code> ใครรัน? คำตอบคือแอปของเรา เพราะมันเป็น Anthropic-schema <em>client</em> tool Anthropic แค่กำหนด schema ให้</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Anthropic เป็นคนรัน <code>bash</code>, <code>text_editor</code>, <code>computer</code> เพราะเป็น tool ของ Anthropic"</strong> ไม่ใช่ พวกนี้เป็น client tool โค้ดเราต้องรันเอง มีแค่ server tool ที่รันฝั่ง Anthropic</p>
+  <p><strong>"<code>pause_turn</code> คือ response ที่เสร็จแล้ว"</strong> ไม่ใช่ มันแปลว่า loop ฝั่ง server ชนเพดาน ต้องส่งกลับไปให้ทำต่อ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Schema เป็นของใครไม่สำคัญ สำคัญที่ว่าโค้ดรันที่ไหน client tool = เรารันและตอบ <code>tool_result</code>, server tool = Anthropic รันให้</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>Agent ของร้านค้าออนไลน์เปิดใช้ tool 4 ตัว ตัวไหนที่แอปของเรา <strong>ไม่ต้อง</strong> รันและไม่ต้องส่ง <code>tool_result</code> กลับเอง?</p>
+  <ol type="A">
+    <li><code>text_editor</code></li>
+    <li><code>check_stock</code> ที่ทีมเขียน schema เอง</li>
+    <li><code>memory</code></li>
+    <li><code>web_search</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>web_search</code> เป็น server tool ที่ Anthropic รัน ส่วน <code>text_editor</code> กับ <code>memory</code> เป็น Anthropic-schema client tool และ <code>check_stock</code> เป็น user-defined client tool ซึ่งแอปเราต้องรันทั้งหมด</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เมื่อไหร่ควรมี tool ในงานออกแบบ</h3>
+<p>ใส่ tool เฉพาะเมื่อ <strong>ข้อความอย่างเดียวทำงานนั้นไม่ได้</strong> มี 4 กรณีหลัก:</p>
+<ul>
+  <li>ต้องทำ action ที่มีผลข้างเคียง เช่น ส่งอีเมล อัปเดต record</li>
+  <li>ต้องใช้ข้อมูลสดหรือข้อมูลภายนอก</li>
+  <li>output ต้องมีโครงสร้างที่ <strong>บังคับ</strong> ได้</li>
+  <li>ต้องเรียกระบบที่มีอยู่ เช่น internal API, database, filesystem</li>
+</ul>
+<p>งานสรุป แปล หรือถามตอบทั่วไปไม่ต้องมี tool และถ้างานเล็กมาก latency ของ tool อาจนานกว่าตัวงานเองด้วยซ้ำ</p>
+
+<div class="box key"><span class="tag">กลิ่นของการออกแบบผิด</span>
+  <p>ถ้าคุณกำลังเขียน <strong>regex เพื่อดึง "การตัดสินใจ" ออกจากข้อความของโมเดล</strong> นั่นแปลว่าการตัดสินใจนั้นควรเป็น tool call ตั้งแต่แรก ให้ schema เป็นตัวบังคับโครงสร้าง แทนการ parse ข้อความอิสระ</p>
+</div>
+
+<h3>เชื่อมหลายระบบ: MCP</h3>
+<p>ถ้าต้องเชื่อม wiki, database, chat ฯลฯ การเขียน handler เองแปลว่าต้องดูแล integration ทีละระบบ <strong>MCP server</strong> เปิดแต่ละระบบผ่าน protocol มาตรฐานเดียว และ Claude ยังเป็นคนเลือกว่าจะเรียกเมื่อไหร่ ใน Managed Agents MCP server ถูกประกาศไว้บนตัว agent ส่วน credential ส่งเข้ามาตอนเริ่มแต่ละ session (การเทียบ protocol แบบละเอียดอยู่ในบท 3.7)</p>
+<p>ทางลัดสองแบบที่ <strong>ใช้ไม่ได้</strong>:</p>
+<ul>
+  <li>แปะข้อมูลจากระบบลงใน prompt: ข้อมูลเก่า และทำ action ไม่ได้</li>
+  <li>ทำ decision tree ตายตัวไม่มีโมเดล: ตัดความสามารถของโมเดลในการเลือกขั้นต่อไปทิ้ง</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tool สำหรับ action, ข้อมูลสด, โครงสร้างที่ต้องบังคับ, และระบบเดิม หลายระบบใช้ MCP อย่าใช้ regex parse การตัดสินใจ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>Agent ตรวจคำขอเบิกค่าใช้จ่ายตอบเป็นข้อความยาว แล้วโค้ดใช้ regex หาคำว่า "APPROVE" หรือ "REJECT" ซึ่งพังบ่อยเมื่อโมเดลเขียนว่า "ไม่ควร approve" วิธีแก้ที่ถูกต้องคือ?</p>
+  <ol type="A">
+    <li>เขียน prompt ให้ย้ำว่าต้องพิมพ์ APPROVE/REJECT ตัวใหญ่บรรทัดสุดท้าย แล้วใช้ regex เดิม</li>
+    <li>เปลี่ยนเป็น decision tree ตามยอดเงินโดยไม่ใช้โมเดล</li>
+    <li>แปะนโยบายการเบิกทั้งหมดลงใน prompt</li>
+    <li>ให้ agent เรียก tool <code>submit_decision</code> ที่มี field <code>decision</code> เป็น enum <code>approve</code>/<code>reject</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ให้ schema บังคับโครงสร้าง A ยังคง parse ข้อความอิสระ C ไม่ได้บังคับโครงสร้างเลย B ตัดการตัดสินใจของโมเดลทิ้ง</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>ทีม IT อยากให้ agent ค้น Confluence, query Postgres และโพสต์ลง Slack ได้เองตามต้องการ โดยไม่อยากเขียนและดูแลโค้ดเรียกแต่ละระบบเอง ควรใช้อะไร?</p>
+  <ol type="A">
+    <li>เขียน flowchart ตายตัวว่าคำถามแบบไหนไประบบไหน</li>
+    <li>เขียน loop เองบน Client SDK แล้วทำ handler ทีละระบบ</li>
+    <li>ดึงเนื้อหาทุกระบบมาใส่ system prompt ทุกเช้า</li>
+    <li>MCP server ของแต่ละระบบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> MCP ให้ protocol เดียวและโมเดลยังเลือกเรียกเอง B คือภาระดูแลที่ทีมอยากหลีก C ข้อมูลเก่า ไม่ scale และโพสต์ Slack ไม่ได้ A ตัดการตัดสินใจอิสระของ agent</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เลือกขนาดของขั้น processing</h3>
+<p>โมเดลในขั้น processing คือตัวที่กินค่าใช้จ่ายและ latency มากที่สุด การเลือกโมเดลจึงเป็นการตัดสินใจเชิงสถาปัตยกรรม ไม่ใช่รายละเอียดปลีกย่อย</p>
+<ol class="steps">
+  <li>เริ่มจากโมเดล Haiku ที่เร็วและถูก</li>
+  <li>benchmark กับ input จริง ไม่ใช่ตัวอย่างที่แต่งขึ้น</li>
+  <li>ขยับขึ้นไปโมเดลที่แรงกว่า <strong>เฉพาะจุด</strong> ที่ผลทดสอบชี้ว่ามีช่องว่าง</li>
+</ol>
+<p>การจัดโมเดลใหญ่เกินจำเป็นถือเป็น <strong>ความผิดพลาดในการออกแบบ</strong> ไม่ใช่ "ค่าเผื่อที่ปลอดภัย" ส่วนการสุ่มสลับโมเดล หรือเอา classifier แยกมาแทน Claude ทั้งหมด ก็ไม่ตอบโจทย์ (รายละเอียด trade-off ของโมเดลอยู่ในบท 2.1)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Haiku ก่อน → benchmark ด้วยข้อมูลจริง → ส่งเฉพาะเคสยากขึ้นไปโมเดลใหญ่</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>บริษัทประกันต้องอ่านใบเคลมวันละหลายพันใบ มีเพดานงบต่อเดือน เคสส่วนใหญ่ตรงไปตรงมา มีบางส่วนกำกวม ควรออกแบบขั้น processing ยังไง?</p>
+  <ol type="A">
+    <li>ส่งทุกใบไปโมเดลใหญ่สุดเพื่อความปลอดภัย</li>
+    <li>ใช้ classifier ธรรมดาแทน Claude ทั้งหมด</li>
+    <li>สุ่มส่งครึ่งหนึ่งไป Haiku อีกครึ่งไปโมเดลใหญ่</li>
+    <li>เริ่มจาก Haiku, benchmark กับใบเคลมจริง แล้วส่งเฉพาะเคสที่ Haiku ทำไม่ได้ขึ้นไปโมเดลที่แรงกว่า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A ไม่สนเพดานงบ C ไม่มีหลักการ คุณภาพคาดเดาไม่ได้ B เสียความสามารถในการตีความเคสกำกวม</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมซัพพอร์ตจะทำระบบคัดแยก ticket ภายใต้เพดานต้นทุน ข้อเสนอไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>ใช้ classifier ภายนอกตัวเดียว ตัด LLM ออก</li>
+    <li>ใช้โมเดล Opus ตั้ง effort สูงสุดตั้งแต่วันแรก</li>
+    <li>สลับโมเดลแบบสุ่มทุกวันแล้วดูว่าวันไหนดี</li>
+    <li>เริ่มด้วย Haiku, benchmark กับ ticket จริง แล้วอัปเกรดเมื่อมีหลักฐานว่าไม่พอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> B ละเลยเพดานต้นทุน C ไม่มีพื้นฐานการประเมิน A ทิ้ง reasoning ที่งานนี้ต้องใช้</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Feedback loop ที่แก้ทิศทางระหว่างรัน</h3>
+<p>Feedback เข้าสู่การรันได้ 3 ระดับ:</p>
+
+<h3>ระดับ 1: Tool result ที่ตรวจได้</h3>
+<p>ออกแบบ tool ให้รายงาน <strong>ข้อเท็จจริงที่ตรวจได้</strong> เช่น ผลเทสต์ ผ่าน/ไม่ผ่าน, error จาก validator, schema ไม่ตรงตรงไหน ถ้า tool ตอบแค่ "done" โมเดลก็ไม่มีอะไรให้เทียบเพื่อแก้ตัว</p>
+
+<h3>ระดับ 2: Hooks</h3>
+<p>Hook คือโค้ดที่รัน <strong>ทุกครั้ง</strong> ที่มี tool call ตรงเงื่อนไข ไม่ว่าโมเดลจะคิดอะไร ใน Agent SDK:</p>
+<ul>
+  <li><code>PreToolUse</code> รันก่อน tool ทำงาน ดักจับ แก้ หรือบล็อกการเรียกได้</li>
+  <li><code>PostToolUse</code> รันหลัง tool ทำงานแล้ว</li>
+  <li>แต่ละ <code>HookMatcher</code> จับคู่ pattern (เช่น <code>"Bash"</code> หรือ <code>"Write|Edit"</code>) กับรายการ callback และ timeout (ไม่ใส่ก็ได้)</li>
+</ul>
+<pre><code>async def audit(input_data, tool_use_id, context):
+    print("edited:", input_data.get("tool_name"))
+    return {}
+
+options = ClaudeAgentOptions(hooks={
+    "PreToolUse": [
+        HookMatcher(matcher="Bash", hooks=[check_command], timeout=120),
+        HookMatcher(hooks=[log_all]),          # ไม่มี matcher = ทุก tool
+    ],
+    "PostToolUse": [
+        HookMatcher(matcher="Edit|Write", hooks=[audit]),
+    ],
+})</code></pre>
+<p>Matcher ที่ไม่ระบุ pattern จะครอบทุก tool และใช้ timeout ค่าเริ่มต้นของ event นั้น</p>
+
+<h3>ระดับ 3: Graded outcomes (Managed Agents)</h3>
+<p>ส่ง event <code>user.define_outcome</code> พร้อม:</p>
+<ul>
+  <li><code>description</code> ผลงานที่ต้องการ</li>
+  <li><code>rubric</code> เกณฑ์ตรวจ (เช่น <code>{"type": "file", "file_id": ...}</code>)</li>
+  <li><code>max_iterations</code> ไม่บังคับใส่ ค่าเริ่มต้น <strong>3</strong> สูงสุด <strong>20</strong></li>
+</ul>
+<pre><code>{
+  "type": "user.define_outcome",
+  "description": "สร้างรายงานยอดขายรายไตรมาสเป็น .xlsx",
+  "rubric": {"type": "file", "file_id": "file_..."},
+  "max_iterations": 4
+}</code></pre>
+<p>Harness จะตั้ง <strong>grader แยก</strong> ที่ตรวจผลงานเทียบ rubric ใน <strong>context window ของตัวเอง</strong> แล้วส่ง feedback กลับให้ agent ทำรอบถัดไป grader ให้คะแนนแต่ละเกณฑ์แยกกัน เกณฑ์ที่เจาะจงและตรวจได้จึงให้ผลชัดกว่าเกณฑ์ลอยๆ นี่ก็คือ pattern evaluator-optimizer ที่ฝังมาใน harness</p>
+<div class="table-wrap"><table>
+  <tr><th>ผลของ outcome</th><th>เกิดอะไรต่อ</th></tr>
+  <tr><td><code>satisfied</code></td><td>session เข้าสู่ idle</td></tr>
+  <tr><td><code>needs_revision</code></td><td>agent เริ่มรอบใหม่พร้อม feedback ของ grader</td></tr>
+  <tr><td><code>max_iterations_reached</code></td><td>มี turn สุดท้ายเพื่อรับทราบหนึ่งรอบ แล้ว idle โดยไม่ตรวจอีก</td></tr>
+  <tr><td><code>failed</code></td><td>session idle เพราะ rubric ใช้กับผลงานนั้นไม่ได้</td></tr>
+  <tr><td><code>interrupted</code></td><td>session ถูกขัดจังหวะระหว่างที่ outcome ยัง active</td></tr>
+</table></div>
+
+<p><strong>ลองกับงานตัวเอง:</strong> ใน agent ที่คุณเคยสร้าง มีการตรวจไหนบ้างที่พึ่งพาให้โมเดล "จำคำสั่งได้" และอันไหนย้ายไปเป็น tool result, hook หรือเกณฑ์ใน rubric ได้</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"เขียนคำสั่งใน system prompt ไว้ก็พอ"</strong> ไม่ใช่ ในการรันยาวๆ คำสั่งไม่รับประกันพฤติกรรม แต่ hook รันทุกครั้งที่ match</p>
+  <p><strong>"ให้ agent ตัวหลักตรวจงานตัวเอง"</strong> ไม่ใช่ harness ใช้ grader แยกใน context ของตัวเอง เพื่อไม่ให้เป็นการให้คะแนนตัวเอง</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tool result บอกข้อเท็จจริง, hook บังคับทุกครั้ง, graded outcome ให้ grader แยกตรวจเทียบ rubric และวนแก้ไม่เกิน <code>max_iterations</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ใน Managed Agents เมื่อกำหนด outcome ไว้แล้ว ใครเป็นคนตรวจไฟล์ผลงานเทียบกับ rubric?</p>
+  <ol type="A">
+    <li>Hook <code>PostToolUse</code> ที่ตรวจทุก tool call</li>
+    <li>Agent ตัวหลักอ่านงานตัวเองอีกรอบ</li>
+    <li>แอปของเรา parse ข้อความสุดท้ายแล้วแปลงเป็น tool result</li>
+    <li>Grader ที่ harness ตั้งขึ้น ทำงานใน context window แยก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> A ทำงานระดับ tool call ไม่ใช่ผลงานทั้งชิ้น B คือให้คะแนนตัวเอง C ไม่ใช่กลไกของ outcome</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>อยากจำกัดให้ agent แก้งานตาม feedback ของ grader ได้ไม่เกิน 6 รอบ ต้องตั้ง field ไหนใน <code>user.define_outcome</code>?</p>
+  <ol type="A">
+    <li><code>max_turns</code></li>
+    <li><code>max_tokens</code></li>
+    <li><code>max_retries</code></li>
+    <li><code>max_iterations</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> <code>max_iterations</code> (ค่าเริ่มต้น 3 สูงสุด 20) ตัวอื่นไม่ใช่ field ของ outcome</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ฝ่าย security ต้องการ log ทุกครั้งที่ agent แก้หรือสร้างไฟล์ โดยไม่หยุดการทำงานอิสระของ agent ควรทำยังไง?</p>
+  <ol type="A">
+    <li>ให้คนกดยืนยันก่อนทุกการแก้ไข</li>
+    <li>เขียนใน system prompt ว่า "ทุกครั้งที่แก้ไฟล์ให้รายงาน"</li>
+    <li>รัน cron ทุก 5 นาทีเพื่อดูว่าไฟล์ไหนเปลี่ยน</li>
+    <li>ลงทะเบียน hook <code>PostToolUse</code> ที่ match <code>Edit|Write</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> Hook รันทุกครั้งที่ match B ขึ้นกับว่าโมเดลจะทำตามไหม C เดาและพลาดการเปลี่ยนแปลงได้ A เป็น approval gate ไม่ใช่ audit log และทำลายความอิสระ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">Agent SDK: Agent loop</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/how-tool-use-works">Claude docs: How tool use works</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/overview">Claude docs: Managed Agents overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/mcp-connector">Claude docs: Managed Agents MCP connector</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude docs: Choosing a model</a></li>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://code.claude.com/docs/en/agent-sdk/python">Agent SDK: Python reference</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/define-outcomes">Claude docs: Define outcomes</a></li>
+</ul>
+</section>

@@ -1,0 +1,276 @@
+<section class="lesson" id="l-1-1">
+<h2>1.1 Translating business problems into Claude solutions</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/from-business-problem-to-claude-solution-design">CertSafari 1.1</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ไล่ดู process ทางธุรกิจที่มีอยู่ หาว่าขั้นไหนเจ็บจริง แล้วแตกงานใหญ่ออกเป็น task ย่อยที่วัดผลแยกกันได้</li>
+    <li>ตัดสินได้ว่าขั้นไหนควรให้ Claude ทำ ขั้นไหนควรปล่อยเป็นโค้ดหรือระบบเดิม และขั้นไหนต้องมี retrieval / tool / คนตรวจ</li>
+    <li>เลือกรูปร่างโซลูชันที่ง่ายที่สุด (augmented LLM, workflow, agent) และเลือกทางสร้าง (Messages API, Agent SDK, Managed Agents, Claude Code, Claude apps)</li>
+    <li>จับคู่ model tier (Haiku, Sonnet, Opus, Fable) กับแต่ละงาน และรู้ว่า effort เป็นคันโยกอีกตัวที่ถูกกว่าการเปลี่ยนโมเดล</li>
+    <li>ผูก task metric เข้ากับ business metric ที่เจ้าของ process สนใจจริง</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เริ่มจาก process ไม่ใช่เริ่มจากโมเดล</span>
+  <p>ออกแบบโดย <strong>ดู process ก่อน</strong>: วาดว่างานทุกวันนี้ทำกันยังไง หาจุดที่เจ็บ แล้วยกให้ Claude เฉพาะขั้นที่ช่วยได้ชัดๆ หลังจากนั้นค่อยเลือกรูปร่างที่ง่ายที่สุด ทางสร้าง และโมเดล ไม่ใช่เริ่มจาก "เราจะใช้ Opus ทำ agent" แล้วค่อยหางานมาใส่</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. วาด process ทางธุรกิจก่อนเลือกโมเดล</h3>
+<p>โจทย์ที่ทีมธุรกิจยื่นมามักมาในรูปของ "อาการ" เช่น "ticket ไปผิดทีมบ่อย" หรือ "ลูกค้ารอนาน" งานแรกของสถาปนิกคือย้อนจากอาการไปหาว่า <strong>ขั้นไหนใน process</strong> เป็นต้นเหตุ เหมือนหมอที่ไม่จ่ายยาจากอาการไข้อย่างเดียว แต่ต้องหาว่าติดเชื้อที่ไหน</p>
+<p>คำถามที่ควรถามตอนวาด process (ยกตัวอย่างจากงาน ticket routing):</p>
+<ul>
+  <li>ทุกวันนี้ route ticket กันยังไง ใช้คน ใช้ keyword rule หรือใช้ ML ตัวเก่า</li>
+  <li>อะไรเป็นตัวกำหนด SLA ของแต่ละ ticket</li>
+  <li>การ route คือเลือก <em>ระดับ</em> ซัพพอร์ต (tier 1/2/3) หรือเลือก <em>ผู้เชี่ยวชาญ</em> ตามผลิตภัณฑ์</li>
+  <li>rule หรือ workflow เดิม <strong>พังตรงไหน</strong> และคนแก้เคสขอบ (edge case) ด้วยมือยังไง</li>
+</ul>
+<p>จุดที่คนต้องแก้มือคือทองคำ เพราะมัน <strong>วัดเป็นต้นทุนได้</strong> ตัวอย่างคลาสสิก: rule เขียนว่า "ticket ไหนมีคำว่า payment ส่งไป billing" ผลคือบั๊กของหน้า payment ที่ควรไปทีม engineering กลับไปโผล่ที่ billing แล้วต้องมีคนมาย้ายเองทีละใบ</p>
+
+<h3>แตกงานใหญ่เป็น task ย่อย</h3>
+<p>อย่ามอง "แชทบอทซัพพอร์ต" เป็นก้อนเดียว ลองนึกถึงบอทของบริษัทประกันรถ จริงๆ มันทำหลายงานปนกัน:</p>
+<ul>
+  <li>ทักทายและรับเรื่อง</li>
+  <li>ตอบข้อมูลผลิตภัณฑ์ (ความคุ้มครอง เงื่อนไข)</li>
+  <li>คุมบทสนทนาให้อยู่ในเรื่อง ไม่หลุดไปคุยเรื่องอื่น</li>
+  <li>ออกใบเสนอราคา (quote) ผ่าน API</li>
+</ul>
+<p>แต่ละงานควรมี <strong>prompt ของตัวเองและ evaluation ของตัวเอง</strong> เพราะถ้ารวมเป็นคะแนนเดียว งานออกใบเสนอราคาอาจพังเงียบๆ ในขณะที่คะแนนรวมยังดูดีเพราะการทักทายทำได้ดีมาก</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"แชทบอทซัพพอร์ตคือ task เดียว ใช้ prompt เดียว วัดด้วยคะแนนเดียว"</strong> ไม่ใช่ ต้องแยกเป็นหลาย task แต่ละอันมี prompt และ eval ของตัวเอง คะแนนรวมก้อนเดียวจะซ่อนจุดที่พังไว้</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เริ่มจากอาการ → หาขั้นที่เป็นต้นเหตุ → ดูว่าคนแก้มือตรงไหน (นั่นคือต้นทุนที่วัดได้) → แตกงานใหญ่เป็น task ย่อยที่มี prompt และ eval แยกกัน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>โรงพยาบาลเอกชนอยากได้ LINE bot ที่ทำได้ทั้ง ทักทาย ตอบคำถามแพ็กเกจตรวจสุขภาพ จองคิวผ่าน API ของระบบนัดหมาย และกันไม่ให้บอทตอบคำถามวินิจฉัยโรค ทีมเสนอให้เขียน prompt ใหญ่ prompt เดียวแล้ววัดด้วยคะแนนความพึงพอใจหลังแชท ควรแนะนำอะไร?</p>
+  <ol type="A">
+    <li>ใช้ prompt เดียวเหมือนเดิม แต่เปลี่ยนไปใช้โมเดลที่เก่งที่สุด</li>
+    <li>ใช้ prompt เดียว แต่เพิ่มแบบสอบถามความพึงพอใจให้ละเอียดขึ้น</li>
+    <li>เปลี่ยนเป็น agent อิสระให้มันตัดสินใจเองว่าจะทำอะไร</li>
+    <li>แยกเป็น task (ทักทาย, ข้อมูลแพ็กเกจ, จองคิว, คุมขอบเขตเรื่อง) แต่ละ task มี prompt และชุดทดสอบของตัวเอง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> งานจองคิวกับงานคุมขอบเขตเรื่องการวินิจฉัยมีเกณฑ์ผ่านคนละแบบ ต้องวัดแยก A และ B ยังคงเป็นคะแนนก้อนเดียวที่ซ่อนจุดพัง ส่วน C เพิ่มความซับซ้อนโดยไม่มีเหตุผล</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ตัดสินว่าขั้นไหนควรให้ Claude ทำ</h3>
+<p>Claude เก่งกับขั้นที่เกี่ยวกับ <strong>ภาษา การใช้วิจารณญาณ และความหลากหลายของ input</strong> สัญญาณที่บอกว่า Claude น่าจะดีกว่า ML แบบดั้งเดิม (เช่น classifier ที่ต้องเทรนเอง):</p>
+<ul>
+  <li>ข้อมูลที่ติด label มีน้อย (Claude ใช้ตัวอย่างแค่ไม่กี่สิบตัวใน prompt ก็จัดหมวดได้)</li>
+  <li>หมวดหมู่เปลี่ยนบ่อย แก้ prompt ง่ายกว่าเทรนโมเดลใหม่</li>
+  <li>input ไม่มีโครงสร้าง หรือหมวดถูกนิยามด้วยเงื่อนไขที่เป็นภาษาคน</li>
+  <li>ต้องอธิบายได้ว่าทำไมตัดสินแบบนั้น (explainable)</li>
+  <li>ต้องรองรับหลายภาษาด้วยโมเดลตัวเดียว</li>
+</ul>
+
+<h3>ข้อจำกัดที่ต้องออกแบบรองรับ</h3>
+<p>โมเดลสร้างข้อความที่ "น่าจะเป็น" ที่สุด ไม่ได้ค้นข้อเท็จจริงจากฐานข้อมูล จึงอาจแต่งอ้างอิง ตัวเลข หรือข้อมูลเฉพาะของบริษัทขึ้นมาได้ ดังนั้น:</p>
+<ul>
+  <li>ขั้นที่ต้องการข้อมูล <strong>ปัจจุบัน</strong> หรือ <strong>ข้อมูลภายในบริษัท</strong> ต้องมี retrieval, search หรือ tool ป้อนข้อมูลให้</li>
+  <li>output ที่ตรวจไม่ได้ด้วยตัวมันเอง ต้องมีคนตรวจ หรือมีการตรวจด้วยโค้ด</li>
+  <li>ขั้นที่เป็น deterministic และทำงานดีอยู่แล้ว (เช่น lookup SLA จากตาราง) ไม่ต้องเอา LLM ไปแตะ</li>
+</ul>
+
+<div class="box key"><span class="tag">ในข้อสอบ</span>
+  <p>มองหาคำตอบที่ <strong>แก้เฉพาะขั้นที่เจ็บ และปล่อยขั้นที่ทำงานดีไว้เหมือนเดิม</strong> คำตอบประเภท "รื้อทั้ง process แล้วสร้างใหม่รอบ LLM" แทบไม่เคยถูก</p>
+</div>
+
+<p><strong>ลองทำกับงานจริง:</strong> หยิบ process ที่คุ้นเคย เช่น การอนุมัติใบแจ้งหนี้ การ onboard พนักงานใหม่ หรือการคัดแยก incident แล้วหาขั้นที่ต้องแก้มือบ่อยที่สุด ถามต่อว่าการแก้นั้นเป็น "การใช้วิจารณญาณ" (Claude ช่วยได้) หรือเป็น "การค้นข้อมูล" (ต้องมี tool หรือ retrieval)</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ให้ Claude ทำขั้นที่ต้องใช้ภาษาและวิจารณญาณ ป้อนข้อเท็จจริงด้วย retrieval/tool ตรวจ output ที่ตรวจตัวเองไม่ได้ และอย่าไปยุ่งกับขั้น deterministic ที่ดีอยู่แล้ว</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ระบบรับเรื่องร้องเรียนของบริษัทขนส่งมี 3 ขั้น: (1) ใช้ keyword rule จัดหมวดเรื่อง (2) เปิดตาราง SLA ตามหมวดและระดับลูกค้า (3) ส่งเข้าคิวทีม ข้อมูลบอกว่าเรื่องที่เขียนกำกวม เช่น "ของมาช้าแถมกล่องบุบ" ถูกจัดหมวดผิดและต้องมีคนย้ายเองทุกวัน ควรเริ่มที่ตรงไหน?</p>
+  <ol type="A">
+    <li>ให้ Claude ทำขั้นที่ 2 แทนตาราง SLA</li>
+    <li>ไม่ต้องแก้อะไร เพราะยังมีคนคอยแก้ให้อยู่แล้ว</li>
+    <li>รื้อทั้ง 3 ขั้นให้โมเดลตัวเดียวทำตั้งแต่ต้นจนจบ</li>
+    <li>เอา Claude มาแทนเฉพาะขั้นที่ 1 ที่เป็นต้นเหตุของการแก้มือ ส่วนขั้น 2 และ 3 เก็บไว้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ขั้นจัดหมวดคือจุดที่เจ็บและต้องการการตีความภาษา A ไปแตะขั้น deterministic ที่ทำงานดีอยู่ C รื้อเกินจำเป็น B มองข้ามต้นทุนการแก้มือที่วัดได้ชัดๆ</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เลือกรูปร่างโซลูชันที่ง่ายที่สุด</h3>
+<p>มี 3 รูปร่างพื้นฐาน เรียงจากง่ายไปซับซ้อน:</p>
+<div class="table-wrap"><table>
+  <tr><th>รูปร่าง</th><th>คืออะไร</th><th>เหมาะกับ</th></tr>
+  <tr><td><strong>Augmented LLM</strong></td><td>เรียกโมเดลครั้งเดียว เสริมด้วย retrieval, tool หรือ memory</td><td>งานที่นิยามชัด เช่น จัดหมวด ticket</td></tr>
+  <tr><td><strong>Workflow</strong></td><td>LLM และ tool ถูกเรียงต่อกันตามเส้นทางที่โค้ดกำหนดไว้</td><td>งานที่ขั้นตอนตายตัว เช่น จัดหมวดแล้วส่งเข้า prompt เฉพาะทาง</td></tr>
+  <tr><td><strong>Agent</strong></td><td>โมเดลเลือกขั้นตอนและ tool เองตอนรัน</td><td>งานที่ขั้นตอนขึ้นกับ input เช่น แก้โค้ดที่ไม่รู้ล่วงหน้าว่าต้องแตะไฟล์ไหน</td></tr>
+</table></div>
+<p>กฎคือ <strong>เพิ่มความซับซ้อนเมื่อมีหลักฐานว่าต้องใช้เท่านั้น</strong> เพราะ agent เพิ่มทั้ง latency และค่าใช้จ่าย</p>
+
+<p><strong>ลองเดา:</strong> ต้องสรุปเอกสารกฎหมายลงฟิลด์ตายตัว โดยใช้นิยามศัพท์จาก glossary ของบริษัท รูปร่างเริ่มต้นที่ดีที่สุดคือ? คำตอบคือ <strong>เรียก Claude ครั้งเดียว</strong> ใส่ entry ของ glossary ที่เกี่ยวข้องและตัวอย่างไม่กี่ตัว ไม่ต้องมี orchestrator หรือ agent อิสระ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"process ที่ต้องแตะหลายระบบต้องใช้ agent อิสระ"</strong> ไม่ใช่ จำนวนระบบไม่ได้เป็นตัวตัดสิน ถ้าขั้นตอนตายตัวก็ใช้ workflow ใช้ agent เมื่อขั้นตอนขึ้นกับ input เท่านั้น</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Augmented LLM → workflow → agent ขยับขึ้นทีละขั้นเมื่อมีหลักฐานว่าขั้นที่ต่ำกว่าไม่พอ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (จับคู่)</span>
+  <p>จับคู่งานกับรูปร่างที่เหมาะที่สุด (A = Augmented LLM, B = Workflow, C = Agent):</p>
+  <ol>
+    <li>ติดแท็กอารมณ์ (บวก/ลบ/กลาง) ให้รีวิวสินค้าทีละรายการ</li>
+    <li>รับเรื่อง → จัดประเภท → ส่งเข้า prompt ที่จูนมาเฉพาะประเภทนั้น ทุกครั้งเหมือนกัน</li>
+    <li>ย้าย config จากระบบเก่าไประบบใหม่ ซึ่งแต่ละ repo มีโครงสร้างต่างกันและไม่รู้ล่วงหน้าว่าต้องแก้ไฟล์ไหน</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-A, 2-B, 3-C</strong> งานจัดหมวดเดี่ยวๆ เรียกครั้งเดียวพอ งานที่ลำดับตายตัวเป็น workflow ส่วนงานที่ไฟล์ที่ต้องแตะขึ้นกับ input ต้องให้โมเดลเลือกเอง</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. จับคู่รูปร่างกับทางสร้าง (build path)</h3>
+<p>พอรู้รูปร่างแล้ว ต้องเลือกว่าจะสร้างบนอะไร ตัวแบ่งหลักคือ <strong>ใครเป็นคนรัน loop และ runtime</strong>:</p>
+<div class="table-wrap"><table>
+  <tr><th>ทางสร้าง</th><th>ได้อะไร</th><th>เหมาะเมื่อ</th></tr>
+  <tr><td><strong>Messages API</strong> (Client SDK)</td><td>เข้าถึง API ตรงๆ เขียน tool loop เอง หรือใช้ tool runner (beta)</td><td>ต้องการควบคุมเต็มที่ และเห็น prompt/response ทุกตัว</td></tr>
+  <tr><td><strong>Agent SDK</strong></td><td>tool ในตัวของ Claude Code, permissions, sessions, hooks, subagents มาในรูป library รันใน process ของเราเอง</td><td>อยากฝัง agent ที่มี tool อ่านไฟล์ / shell / เว็บ ไว้ใน service ของตัวเอง</td></tr>
+  <tr><td><strong>Managed Agents</strong></td><td>Anthropic host ทั้ง loop, การรัน tool และ runtime โดย session รันใน sandbox ที่ Anthropic จัดการ หรือ self-hosted sandbox บน infra ของเรา</td><td>งานยาวเป็นนาทีหรือชั่วโมงที่มี tool call เยอะ และไม่อยากดูแล infra ของ loop เอง</td></tr>
+  <tr><td><strong>Claude Code CLI</strong></td><td>เครื่องมือใน terminal</td><td>งานแบบ interactive ที่นักพัฒนานั่งทำเอง</td></tr>
+  <tr><td><strong>Claude apps (artifacts)</strong></td><td>สร้างเครื่องมือเล็กๆ แบบไม่ต้องเขียนโค้ด</td><td>tool ภายในง่ายๆ</td></tr>
+</table></div>
+<p>Self-hosted sandbox ของ Managed Agents มีไว้สำหรับกรณีที่ต้องทำตาม compliance หรือข้อกำหนดเรื่องที่เก็บข้อมูล (data residency) ให้ทำงานจริงบน infra ของเราได้ แม้ loop จะยังเป็นของ Anthropic</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Managed Agents ก็คือ Agent SDK ที่เปลี่ยนชื่อ"</strong> ไม่ใช่ ต่างกันที่ว่าใครดูแล runtime: Agent SDK รันใน process ที่ <em>เรา</em> ดูแล ส่วน Managed Agents <em>Anthropic</em> เป็นคน host loop และการรัน tool</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>อยากเห็นทุกอย่างเอง → Messages API · อยากได้ agent สำเร็จรูปใน process ตัวเอง → Agent SDK · อยากให้ Anthropic รันงานยาวให้ → Managed Agents</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (จับคู่)</span>
+  <p>จับคู่ความต้องการกับทางสร้าง (A = Messages API, B = Agent SDK, C = Managed Agents):</p>
+  <ol>
+    <li>ทีม data อยากให้ agent วิเคราะห์ dataset ใหญ่ทีละหลายชั่วโมงใน sandbox โดยไม่ต้องเขียนและดูแล loop เอง</li>
+    <li>ทีม backend อยากฝัง agent ที่อ่านไฟล์ รัน shell และค้นเว็บได้ ไว้ใน microservice ที่ตัวเองดูแล</li>
+    <li>ทีม fintech มี flow สั้นๆ 2 ขั้น และต้อง log ทุก prompt กับ response ให้ auditor ดูได้ทั้งหมด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-B, 3-A</strong> จับผิดคู่เมื่อไหร่ จะได้อย่างใดอย่างหนึ่ง: ต้องดูแล infra ที่ไม่ได้อยากดูแล หรือ loop ถูกซ่อนในจุดที่ต้องมองเห็น</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. เลือก model tier ให้ตรงกับแต่ละงาน</h3>
+<p>ตาม lineup ในเนื้อหาบทเรียน:</p>
+<div class="table-wrap"><table>
+  <tr><th>Tier</th><th>จุดเด่น</th><th>เหมาะกับงาน</th></tr>
+  <tr><td><strong>Claude Haiku 5.5</strong></td><td>latency ต่ำสุด ราคาถูกสุด แต่ยังมี reasoning ที่ใช้ได้</td><td>งาน real-time ปริมาณสูง งบจำกัด และใช้เป็น sub-agent</td></tr>
+  <tr><td><strong>Claude Sonnet 5.5</strong></td><td>ค่าเริ่มต้นสำหรับงานทั่วไป</td><td>เขียนโค้ดประจำวัน วิเคราะห์ข้อมูล ร่างเนื้อหา งาน agent ที่ใช้ tool และงาน enterprise</td></tr>
+  <tr><td><strong>Claude Opus 5.5</strong></td><td>ทำงานอิสระต่อเนื่องได้นาน</td><td>coding agent ที่รันหลายชั่วโมง refactor ขนาดใหญ่ งานระบบซับซ้อน computer use</td></tr>
+  <tr><td><strong>Claude Fable 5.1</strong></td><td>tier ที่ความสามารถสูงสุด</td><td>agent session ยาวมากๆ และ deep research ที่หนักที่สุด</td></tr>
+</table></div>
+
+<h3>Effort: คันโยกที่ถูกกว่าการเปลี่ยนโมเดล</h3>
+<p>ค่า <strong>effort</strong> ปรับความลึกของการคิดภายในโมเดลตัวเดียวกัน แลกกับ latency และค่าใช้จ่าย หลายครั้งการลดหรือเพิ่ม effort ได้ผลพอโดยไม่ต้องย้ายไปอีก tier เหมือนปรับเกียร์รถแทนที่จะเปลี่ยนรถทั้งคัน</p>
+
+<h3>สองกลยุทธ์เริ่มต้น</h3>
+<ul>
+  <li><strong>Cost-first:</strong> เริ่มจากโมเดลเล็ก แล้วอัปเกรดเฉพาะเมื่อพิสูจน์ได้ว่ามีช่องว่างด้านความสามารถ</li>
+  <li><strong>Capability-first:</strong> เริ่มจากโมเดลใหญ่เพื่อให้ได้คุณภาพก่อน แล้วค่อยลดลงมาเพื่อประหยัด</li>
+</ul>
+<p>ในระบบจริงมักผสมกัน เช่น Haiku คัดแยก แล้ว Sonnet หรือ Opus รับงานยากต่อ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"งานที่ต้อง reasoning หลายเทิร์นต้องใช้ Sonnet หรือ Opus เสมอ"</strong> ไม่ใช่ Haiku ถูกสร้างมาสำหรับงาน real-time ปริมาณสูงที่ยังต้องคิดเป็น ให้เริ่มจาก Haiku แล้วอัปเกรดเมื่อเจอช่องว่างที่ระบุได้ชัด</p>
+  <p><strong>"context ใหญ่ขึ้น = คิดเก่งขึ้น"</strong> ไม่ใช่ ขนาด context กับความลึกของ reasoning เป็นคนละเรื่องกัน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Haiku = เร็ว/ถูก/ปริมาณมาก · Sonnet = ค่าเริ่มต้นงานทั่วไป · Opus = งานอิสระยาวหลายชั่วโมง · Fable = หนักที่สุด ลองปรับ effort ก่อนเปลี่ยน tier</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>เว็บขายตั๋วคอนเสิร์ตต้องมีแชทตอบคำถามช่วงเปิดขาย คนเข้าพร้อมกันหลายหมื่น ต้องตอบภายในไม่กี่ร้อยมิลลิวินาที งบต่อข้อความต่ำมาก คำถามส่วนใหญ่ต้องคิดนิดหน่อย เช่น เทียบโซนที่นั่ง ควรเริ่มที่ tier ไหน?</p>
+  <ol type="A">
+    <li>Sonnet เพราะงานไหนต้องคิดก็ควรใช้อย่างน้อย Sonnet</li>
+    <li>Fable แต่ตั้ง effort ต่ำสุด</li>
+    <li>Opus แล้วไปขอผ่อนเงื่อนไขเรื่อง latency กับงบ</li>
+    <li>Haiku แล้วทดสอบให้ละเอียด อัปเกรดเฉพาะเมื่อเจอช่องว่างที่ระบุได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> โจทย์ตรงกับจุดแข็งของ Haiku A อิงความเชื่อผิดว่างานคิดต้องใช้ tier ใหญ่ C ไปเปลี่ยนข้อจำกัดที่ตายตัว B แม้ลด effort แล้ว Fable ก็ยังเป็น tier ราคาพรีเมียมที่ไม่ได้ออกแบบมาสำหรับแชทเร็วราคาถูก</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>ทีมแพลตฟอร์มต้องการ agent ที่ย้าย monolith ไปเป็นหลาย service โดยรันอิสระต่อเนื่องหลายชั่วโมง แตะหลายร้อยไฟล์ ควรเลือก tier ไหน?</p>
+  <ol type="A">
+    <li>Haiku รันหลายๆ ตัวขนานกันแทน เพราะถูกกว่า</li>
+    <li>Haiku แต่ให้ context ใหญ่ขึ้น</li>
+    <li>Sonnet เพราะเป็นค่าเริ่มต้น</li>
+    <li>Opus</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> งานอิสระหลายชั่วโมงและ refactor ขนาดใหญ่คือโจทย์ของ Opus A คิดว่าลองถูกๆ หลายครั้งแทน reasoning ต่อเนื่องได้ B สับสนระหว่างขนาด context กับความลึกของการคิด C ใช้ได้แต่ไม่ใช่ตัวเลือกแรกสำหรับงานอิสระระดับนี้</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>บริษัทจะเปิดให้ทุกแผนกใช้ Claude ผ่านเครื่องมือภายใน งานปนกันทั้งร่างอีเมล วิเคราะห์ spreadsheet และเขียน script เล็กๆ ต้องเลือกโมเดล default ตัวเดียว ควรเลือก?</p>
+  <ol type="A">
+    <li>Opus เพราะเก่งที่สุดในกลุ่มงานโค้ด</li>
+    <li>Fable เพราะ tier สูงสุดจะตอบได้ทุกงาน</li>
+    <li>Haiku เพราะถูกที่สุด</li>
+    <li>Sonnet</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> Sonnet คือค่าเริ่มต้นสำหรับงานประจำวันที่หลากหลาย Opus และ Fable แพงเกินไปสำหรับงานทั่วไป Haiku อ่อนเกินไปสำหรับงานผสมข้ามแผนก</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. ผูก success criteria เข้ากับผลทางธุรกิจ</h3>
+<p>Metric มี 2 ชั้น:</p>
+<ul>
+  <li><strong>Task metric</strong> วัดงานของโมเดล เช่น ความแม่นในการจัดหมวด ความถูกต้องของใบเสนอราคา</li>
+  <li><strong>Business metric</strong> วัดผลที่ธุรกิจจ่ายเงินเพื่อให้ได้ เช่น deflection rate (สัดส่วนเรื่องที่จบโดยไม่ต้องถึงคน), CSAT, เวลาจัดการต่อเรื่อง, escalation rate, ต้นทุนต่อ ticket</li>
+</ul>
+<p>ทุก task metric ต้องอธิบายได้ว่า <strong>มันขยับ business metric ตัวไหน</strong> และเป้าหมายควรตั้งร่วมกับทีมที่เป็นเจ้าของ process ไม่ใช่ทีม engineering ตั้งเอง</p>
+
+<div class="table-wrap"><table>
+  <tr><th>ตัวอย่างงาน</th><th>Task metric</th><th>Business metric (ตัวเลขอ้างอิงในบทเรียน)</th></tr>
+  <tr><td>Support chat</td><td>ความแม่นในการจับ intent 95% ขึ้นไป, ใบเสนอราคาถูก 100%</td><td>deflection 70–80%, CSAT 4 จาก 5 ขึ้นไป, เวลาจัดการเฉลี่ยต่ำกว่าคน</td></tr>
+  <tr><td>Ticket routing</td><td>routing accuracy</td><td>ticket ที่ปิดได้ต่อ agent เพิ่ม 10–20%, escalation ต่ำกว่า 20%, ต้นทุนต่อ ticket ลด 10–15%</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>รายงาน task metric คู่กับ business metric เสมอ และตกลงเป้ากับเจ้าของ process ความแม่น 99% ไม่มีความหมายถ้าต้นทุนต่อ ticket ไม่ลด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทีมส่งรายงานว่าระบบจัดหมวดอีเมลลูกค้าแม่น 93% ผู้บริหารฝ่ายบริการลูกค้าถามว่า "แล้วมันช่วยอะไรเรา" ควรปรับรายงานยังไง?</p>
+  <ol type="A">
+    <li>เพิ่ม metric ฝั่ง engineering อีก เช่น latency p99 และ token ต่อคำขอ</li>
+    <li>ตั้งเป้าความแม่นใหม่เป็น 99%</li>
+    <li>ตัดความแม่นทิ้ง แล้วรายงานแค่ CSAT</li>
+    <li>รายงานความแม่นคู่กับ escalation rate และต้นทุนต่อเรื่อง โดยตั้งเป้าร่วมกับทีมบริการลูกค้า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ต้องโยง task metric เข้ากับผลทางธุรกิจ A ยังไม่ผูกกับธุรกิจ B ความแม่นไม่ใช่สิ่งที่ธุรกิจจ่ายเงินซื้อ C ตัด task metric ทิ้งจนไม่รู้ว่าโมเดลทำงานดีแค่ไหน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ข้อไหน <strong>ไม่ใช่</strong> สัญญาณที่บอกว่า Claude น่าจะเหมาะกว่า classifier แบบเทรนเอง?</p>
+  <ol type="A">
+    <li>มีข้อมูลติด label แค่ไม่กี่สิบตัว</li>
+    <li>หมวดหมู่ถูกปรับทุกไตรมาส</li>
+    <li>ต้องอธิบายเหตุผลการตัดสินให้ฝ่าย compliance อ่าน</li>
+    <li>input เป็นรหัสสินค้าแบบตายตัวที่ map ไปหมวดได้ด้วยตาราง lookup</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> ถ้า map ได้ด้วยตาราง ก็เป็นงาน deterministic ที่โค้ดธรรมดาทำได้ดีกว่า ข้ออื่นเป็นสัญญาณคลาสสิกที่ Claude ได้เปรียบ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/use-case-guides/ticket-routing">Claude docs: Ticket routing</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/use-case-guides/customer-support-chat">Claude docs: Customer support chat</a></li>
+  <li><a href="https://academy.claude.com/courses/ai-capabilities-and-limitations">Anthropic Academy: AI capabilities and limitations</a></li>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/use-case-guides/overview">Claude docs: Use case guides overview</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/overview">Claude docs: Managed Agents overview</a></li>
+  <li><a href="https://claude.com/blog/build-artifacts">Claude blog: Build artifacts</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Claude docs: Choosing a model</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/develop-tests">Claude docs: Develop tests</a></li>
+</ul>
+</section>

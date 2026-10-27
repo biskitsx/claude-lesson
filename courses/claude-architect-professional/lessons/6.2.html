@@ -1,0 +1,322 @@
+<section class="lesson" id="l-6-2">
+<h2>6.2 Communicating architecture trade-offs to stakeholders</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/explaining-claude-model-and-cost-trade-offs-to-stakeholders">CertSafari 6.2</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>เสนอการเลือกโมเดลหรือ effort ให้ผู้บริหารที่ไม่ใช่สายเทคนิค เป็นข้อแนะนำเดียวพร้อม "ราคา" ของมัน</li>
+    <li>เทียบ <strong>cost per completed task</strong> แทนราคาต่อ token และแยกได้ว่าการประหยัดไหนไม่เสียคุณภาพเลย</li>
+    <li>บอกได้ว่าความซับซ้อนแต่ละชั้น (รวมถึง multi-agent) ซื้ออะไรและจ่ายอะไร เพื่อให้แบบเรียบง่ายเป็นค่า default</li>
+    <li>หนุนข้อแนะนำด้วย eval ของเราเอง ไม่ใช่ benchmark ของ vendor</li>
+    <li>อธิบาย residual risk แบบเจาะจง มีขอบเขต และมีมาตรการ ไม่ใช่ "ไม่มีความเสี่ยง"</li>
+    <li>อธิบาย context management, thinking mode และทางเลือก hosting ให้วิศวกรฟังโดยไม่ผิดทางเทคนิค</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: trade-off ที่สื่อสารดีมี 4 ส่วน</span>
+  <p><strong>ข้อแนะนำเดียว</strong> + <strong>ราคาที่ต้องจ่าย</strong> (cost, speed, quality หรือ risk) + <strong>หลักฐานจาก eval บน workload ของเราเอง</strong> + <strong>ขอบเขตของสิ่งที่อาจผิดพลาด</strong> ตัวเลขของ vendor บอกว่าควรทดสอบอะไร แต่ไม่ใช่หลักฐานของเรา</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. แปลง trade-off ของโมเดลเป็นข้อแนะนำภาษาคน</h3>
+<p>ทุกการตัดสินใจแลกกันระหว่าง capability, speed, cost และ risk เสมอ แต่คนฟังแต่ละกลุ่มต้องการต่างกัน: <strong>ผู้บริหาร</strong> ต้องการข้อแนะนำเดียว ราคาของมัน และเงื่อนไขที่จะทำให้เปลี่ยนใจ ส่วน <strong>วิศวกร</strong> ต้องการกลไก (รายละเอียด lineup ของโมเดลอยู่ในบท 2.1)</p>
+<p>รูปประโยคสำหรับผู้บริหาร: <strong>โมเดลตั้งต้น + เหตุผล + เงื่อนไขที่จะเปลี่ยน</strong> เช่น</p>
+<pre><code>"เราเริ่มระบบคัดแยก ticket ด้วย Haiku 5.5 เพราะปริมาณสูงและอ่อนไหวเรื่องราคา
+ จะขยับขึ้นรุ่นก็ต่อเมื่อ eval เจอช่องว่างด้าน capability ที่ระบุได้"</code></pre>
+<p>มีสองเส้นทางให้เล่า:</p>
+<ul>
+  <li><strong>Cost-first</strong> เริ่มจากโมเดลถูก ทดสอบ แล้วอัปเกรดเฉพาะจุดที่เจอช่องว่าง</li>
+  <li><strong>Capability-first</strong> สำหรับ reasoning ซับซ้อนหรืองาน agentic ที่มี autonomy สูง เริ่มที่ Opus 5.5 เพราะความแม่นสำคัญกว่าเงิน แล้วค่อยลด effort หรือลดรุ่นเมื่อ workflow นิ่ง</li>
+</ul>
+
+<h3>Effort คือปุ่มแรก</h3>
+<p>หลายโมเดลมี parameter <strong>effort</strong> ที่แลกความฉลาดกับ latency และค่าใช้จ่าย <em>ภายในโมเดลเดิม</em> ดังนั้นเมื่อมีคนบ่นว่าแพง คำตอบแรกควรเป็น <strong>"ลด effort แล้ววัดใหม่"</strong> ก่อน "เปลี่ยนไปโมเดลที่ถูกกว่า" เปรียบเหมือนแอร์ที่ค่าไฟแพง ลองปรับอุณหภูมิขึ้นก่อน ยังไม่ต้องรื้อเครื่องใหม่</p>
+
+<h3>Fast mode คือการจ่ายเงินซื้อเวลา</h3>
+<p><strong>Fast mode</strong> บน Opus 5.5, Opus 5 และ Opus 4.8 ให้ความเร็วในการ output สูงขึ้น <strong>สูงสุด 2.5 เท่า</strong> แต่คิด <strong>ราคาพรีเมียม</strong> ให้เล่ามันว่าเป็นการจ่ายเงินเพิ่มเพื่อแลกกับ response time ไม่ใช่ทางประหยัด</p>
+
+<div class="box key"><span class="tag">ลองใช้กับงานจริง</span><p>เขียนการเลือกโมเดลครั้งที่ผ่านมาของคุณเป็นประโยคเดียว ที่บอกชื่อโมเดล เหตุผล และผลวัดแบบไหนที่จะทำให้เปลี่ยน</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ผู้บริหารต้องการประโยคเดียว: โมเดล + เหตุผล + exit condition บ่นว่าแพง → ลด effort แล้ววัดใหม่ก่อนเปลี่ยนโมเดล fast mode แพงขึ้นเพื่อเร็วขึ้น</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>ระบบสรุปเคสลูกค้าของบริษัทประกันรันบน Opus 5.5 คุณภาพดีจนทีมพอใจ แต่ CFO บอกว่าค่าใช้จ่ายสูงเกินไป ควรเสนออะไรเป็นอย่างแรก?</p>
+  <ol type="A">
+    <li>ย้ายไป Haiku 5.5 ทันทีเพราะราคาต่ำสุด</li>
+    <li>ลดรุ่นลงหนึ่งขั้นก่อน แล้วค่อยปรับ effort ทีหลัง</li>
+    <li>ลด effort บนโมเดลเดิม แล้ววัดทั้งค่าใช้จ่ายและคุณภาพใหม่</li>
+    <li>เปิด fast mode ให้งานจบเร็วขึ้นจะได้ถูกลง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> effort คือคันโยกแรก A ข้ามการวัดและเสี่ยงเสียคุณภาพ B สลับลำดับ D fast mode แพงขึ้น ไม่ใช่ถูกลง</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ทำไมราคาต่อ token หลอกตา และการประหยัดแบบไหน "ฟรี"</h3>
+<p>stakeholder ชอบเอาตารางราคามาเทียบกัน แต่ตัวเลขที่ถูกคือ <strong>cost per completed task</strong> (ต้นทุนต่องานที่เสร็จจริง) โมเดลที่ถูกกว่าต่อ token แต่ต้องคุยหลายรอบกว่า คิดนานกว่า หรือต้อง retry บ่อยกว่า อาจแพงกว่าต่อ ticket ที่ปิดได้ ในทางกลับกัน โมเดลที่เก่งกว่ามักใช้ turn และ thinking น้อยกว่า ต้นทุนต่องานจึงอาจต่ำกว่า โดยเฉพาะเมื่อใช้ effort ต่ำ</p>
+<p>เหมือนจ้างช่างสองคน คนหนึ่งค่าแรงต่อชั่วโมงถูกกว่าแต่ใช้เวลาสามวันและต้องมาแก้ซ้ำ อีกคนแพงกว่าต่อชั่วโมงแต่จบในวันเดียว ที่ต้องเทียบคือค่าซ่อมทั้งงาน</p>
+<p>การประหยัดแบ่งเป็นสองประเภท และต้องเล่าต่างกัน:</p>
+<ul>
+  <li><strong>Free wins</strong> ลดเงินโดยไม่แตะคุณภาพ เล่าเป็นงานที่ "ทำอยู่แล้ว"</li>
+  <li><strong>Trade-offs</strong> แลกคุณภาพหรือ capability กับเงิน ต้องบอกราคาด้านคุณภาพไว้ข้างๆ ตัวเลขที่ประหยัดได้</li>
+</ul>
+<div class="table-wrap"><table>
+  <tr><th>คันโยก</th><th>เสียคุณภาพไหม</th><th>เล่ายังไง</th></tr>
+  <tr><td>Prompt caching และตัด token ที่ไม่จำเป็น</td><td>ไม่</td><td>ทำอยู่แล้ว ประหยัดล้วนๆ</td></tr>
+  <tr><td>Batch processing (ถูกลงราว 50%)</td><td>ไม่ แต่ผลอาจใช้เวลาถึง 24 ชั่วโมง</td><td>เหมาะกับงานที่รอได้หนึ่งวัน ไม่ใช่ผู้ใช้ live</td></tr>
+  <tr><td>Workspace spend limits</td><td>ไม่</td><td>เพดานงบรายเดือน ไม่ได้เปลี่ยนคุณภาพ</td></tr>
+  <tr><td>ลด effort</td><td>อาจเสีย</td><td>ถูกและเร็วขึ้น ถ้าคุณภาพตกก็คืนค่า effort</td></tr>
+  <tr><td>effort ต่ำ + รันซ้ำด้วย effort สูงเฉพาะงานที่ fail</td><td>pass rate เท่าเดิมในการทดสอบของ Anthropic</td><td>ถูกลงราว 40% ถ้าตรวจ output อัตโนมัติได้ (ต้องมี verifier)</td></tr>
+  <tr><td>บอกโมเดลว่าใช้เวลาไปเท่าไรแล้ว</td><td>เสียคะแนนไม่กี่จุด</td><td>agent จบเร็วขึ้น แลกกับต้นทุนคุณภาพเล็กน้อยที่วัดได้</td></tr>
+  <tr><td>ใช้โมเดลเล็กลง</td><td>อาจเสีย</td><td>ทำเฉพาะเมื่อ eval ยืนยันว่ายังผ่านเกณฑ์</td></tr>
+</table></div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"โมเดลที่ราคาต่อ token ต่ำสุดคือตัวเลือกที่ถูกที่สุด" ผิด ต้องเทียบ cost per completed task บน workload จริง</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เทียบต้นทุนต่องานที่เสร็จ ไม่ใช่ต่อ token caching, ตัด token, spend limit, batch (สำหรับงานรอได้) คือ free wins ส่วนลด effort/โมเดลเล็ก/บอกเวลา คือ trade-off ต้องบอกราคาด้านคุณภาพด้วย</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>ฝ่ายจัดซื้อเห็นว่ามีโมเดลอีกตัวที่ราคาต่อ token ถูกกว่าตัวที่ใช้อยู่เกือบครึ่ง และขอให้เปลี่ยนเลย ควรตอบยังไง?</p>
+  <ol type="A">
+    <li>เปลี่ยนได้เลย ราคาต่อ token คือข้อมูลที่ต้องรู้ทั้งหมดแล้ว</li>
+    <li>คูณราคาต่อ token กับปริมาณ request ต่อเดือนของทั้งสองตัวแล้วเลือกตัวที่ต่ำกว่า</li>
+    <li>วัด cost per completed task ของทั้งสองโมเดลบน workload จริงของเราก่อนตัดสิน</li>
+    <li>เทียบค่าพรีเมียมของ fast mode ระหว่างสองโมเดล</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> ต้นทุนจริงขึ้นกับจำนวน turn, thinking และ retry A และ B ยังมองแค่ราคาต่อ token (B แค่คูณปริมาณ แต่ไม่สนอัตราที่งานเสร็จ) D ไม่ใช่ตัวเปรียบเทียบที่เกี่ยวข้อง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. ติดราคาให้ความซับซ้อนทุกชั้น</h3>
+<p>ทักษะที่ต้องการคือทำให้ราคาของแต่ละชั้นมองเห็นได้ เพื่อให้ stakeholder เลือกแบบเรียบง่ายเป็นค่า default ระบบ agentic มักแลก latency และเงินกับผลงานที่ดีขึ้น capability ที่เพิ่มเป็นของจริง บิลก็เป็นของจริงเหมือนกัน</p>
+<div class="table-wrap"><table>
+  <tr><th>ชั้น</th><th>ได้อะไร</th><th>จ่ายอะไร</th></tr>
+  <tr><td>LLM call เดียว + retrieval + in-context examples</td><td>พอสำหรับแอปจำนวนมาก</td><td>ถูกที่สุดทั้งรันและ debug</td></tr>
+  <tr><td>Workflow (เส้นทางในโค้ดกำหนดไว้ก่อน)</td><td>คาดเดาได้สำหรับงานที่นิยามชัด</td><td>ยืดหยุ่นน้อยลง</td></tr>
+  <tr><td>Agent (เลือกขั้นตอนและ tool เอง)</td><td>ยืดหยุ่น</td><td>latency, ค่าใช้จ่าย, พฤติกรรมคาดเดายากขึ้น</td></tr>
+  <tr><td>Framework ครอบอีกชั้น</td><td>เขียนเร็วขึ้น</td><td>อาจซ่อน prompt และ response ทำให้ debug ยาก</td></tr>
+</table></div>
+
+<h3>Multi-agent ซื้อความครอบคลุม ไม่ใช่ความเร็ว</h3>
+<p>ลองนึกก่อน: product owner ขอ research agent หลายตัวรันขนาน "จะได้เร็วขึ้น" จริงไหม?</p>
+<ul>
+  <li>agent ขนานสำรวจพื้นที่ได้กว้างกว่า agent ตัวเดียวที่ติดข้อจำกัด context window</li>
+  <li>ใช้ token ราว <strong>3 ถึง 10 เท่า</strong> สำหรับงานเทียบเท่า เพราะ context ถูกทำซ้ำ และการประสานงานเพิ่ม message</li>
+  <li>เวลารวมมัก <strong>นานกว่า</strong> agent ตัวเดียว เพราะงานคำนวณรวมเพิ่มขึ้น</li>
+  <li>agent ทุกตัวที่เพิ่ม = จุดพังเพิ่ม, ชุด prompt ที่ต้องดูแลเพิ่ม, แหล่งเซอร์ไพรส์เพิ่ม</li>
+  <li>มีทีมที่ใช้เวลาหลายเดือนสร้าง multi-agent แล้วพบว่า prompt ที่ดีขึ้นของ agent ตัวเดียวให้ผลเท่ากัน</li>
+</ul>
+
+<h3>Multi-model: เกมต้นทุน ไม่ใช่เกมความกว้าง</h3>
+<p>อีกรูปแบบที่ต่างจาก multi-agent คือ <strong>จับคู่โมเดลถูกกับโมเดล frontier</strong> เพื่อให้ token ส่วนใหญ่คิดราคาถูก มีสองแบบ:</p>
+<ul>
+  <li><strong>Executor + advisor</strong> โมเดลถูกทำงานหลัก แล้ว escalate การตัดสินใจยากไปหาโมเดล advisor</li>
+  <li><strong>Orchestrator + workers</strong> orchestrator ส่งงานจำนวนมากให้ worker ราคาถูก</li>
+</ul>
+<p>ใส่ไว้ในข้อเสนอก็ต่อเมื่อวัดแล้วคุ้มเท่านั้น</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"agent ขนานให้ผลเร็วกว่า" ผิด มันให้ความครอบคลุม แลกกับ token ที่มากขึ้นและเวลารวมที่มักนานขึ้น</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>แต่ละขั้นของบันได (call เดียว → workflow → agent → framework) มีราคา ทำให้มองเห็นเพื่อให้แบบง่ายเป็น default multi-agent = ครอบคลุม แพงกว่า 3-10 เท่า multi-model = เกมต้นทุนที่ต้องพิสูจน์ด้วยการวัด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3 (จับคู่)</span>
+  <p>คุณกำลังอธิบายบันไดความซับซ้อนให้คณะกรรมการ จับคู่ชั้นกับคำอธิบาย (A–D)</p>
+  <ol>
+    <li>LLM call เดียวพร้อม retrieval และตัวอย่าง</li>
+    <li>Workflow</li>
+    <li>Agent</li>
+    <li>Framework ครอบอีกชั้น</li>
+  </ol>
+  <p>A: อาจซ่อน prompt/response ทำให้หาสาเหตุความผิดพลาดยาก · B: ยืดหยุ่น แลกกับ latency ค่าใช้จ่าย และความคาดเดาได้ · C: พอสำหรับหลายแอป ถูกที่สุดในการรันและ debug · D: เส้นทางกำหนดในโค้ด คาดเดาได้สำหรับงานที่นิยามชัด</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-B, 4-A</strong></p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. หนุนข้อแนะนำด้วย eval ของเราเอง</h3>
+<p>ตัวเลขจาก vendor เป็นหลักฐานที่อ่อนที่สุด Anthropic เองก็บอกว่าการวัดด้านต้นทุนและคุณภาพของตัวเองเป็นข้อมูลภายในและเป็นแค่ <strong>ทิศทาง</strong> ไม่ใช่คำรับประกัน ตัวอย่าง: มีผลจาก vendor ว่าชุด Sonnet 5 ที่มี Fable 5 เป็น advisor ได้คะแนนห่างจาก Fable 5 ไม่เกิน 10% บน SWE-bench Pro ด้วยราคา 63% ตัวเลขแบบนี้เป็นเหตุผลให้ <em>ทดสอบ</em> pattern นี้ ไม่ใช่เหตุผลให้ <em>ใช้</em> เลย</p>
+<p>ทำไม benchmark สาธารณะใช้ไม่ได้ที่ระดับบนสุด: โมเดลแรงๆ อย่าง Opus หรือ Fable ทำข้อสอบได้เกือบหมด benchmark จึง <strong>saturate</strong> และแยกโมเดลออกจากกันไม่ได้ ส่วน <strong>custom eval</strong> ไม่ saturate เพราะใช้โจทย์จาก production ที่คัดมา รวมเคสที่เครื่องมือปัจจุบันยังทำไม่ได้ และให้คะแนนตามเกณฑ์ที่ทีมตั้งเอง</p>
+
+<h3>วิธี 4 ขั้น</h3>
+<ol class="steps">
+  <li>สร้าง benchmark test เฉพาะ use case ของเรา</li>
+  <li>รันด้วย prompt และข้อมูลจริง</li>
+  <li>เทียบโมเดลที่เป็นตัวเลือกด้าน accuracy, คุณภาพ response และการรับมือ edge case</li>
+  <li>ชั่งผลงานกับ cost per completed task</li>
+</ol>
+<p>ขั้นที่สำคัญที่สุดคือ <strong>evaluation set</strong> เพราะทุกขั้นที่เหลือพึ่งมัน เวลานำเสนอ ให้ผล eval เป็นเหตุผลของการตัดสินใจ โมเดลเล็กที่ผ่านเกณฑ์ชนะทั้งเรื่องราคาและความเร็ว การขยับขึ้น tier ก็ต้องมี eval รองรับเหมือนกัน เช่น ถ้า Opus ยังติดขัดบางงานใน eval ขั้นต่อไปคือ Fable</p>
+<p>eval ยังใช้ <strong>วินิจฉัย</strong> ได้ด้วย: รันแบบ head-to-head บน harness เดียวกัน จะแยกได้ว่าปัญหามาจากโมเดลหรือจาก setup ของเรา</p>
+<p>ลองนึกก่อน: CFO ถามว่าทำไมต้องใช้ Opus แทน Sonnet สำหรับตรวจสัญญา หลักฐานที่ควรเอาไปคือผลของ <strong>ทั้งสองโมเดลบนชุดสัญญาของเราเอง ให้คะแนนตามเกณฑ์ของเรา</strong></p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"ตัวเลขที่ Anthropic เผยแพร่เพียงพอจะยืนยันการเลือกโมเดลสำหรับ workload ของเรา" ผิด มันบอกว่าควรทดสอบอะไร ไม่ใช่หลักฐานแทน eval ของเรา</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>vendor benchmark = ทิศทาง และ saturate ที่ระดับบน หลักฐานจริงมาจาก custom eval: สร้าง test → รันด้วยข้อมูลจริง → เทียบ → ชั่งกับต้นทุนต่องาน</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4 (เรียงลำดับ)</span>
+  <p>คุณต้องเตรียมหลักฐานว่าควรใช้โมเดลไหนในระบบตอบคำถามภาษีของสำนักงานบัญชี เรียงขั้นตอนให้ถูก:</p>
+  <ol>
+    <li>ชั่งผลงานของแต่ละโมเดลกับต้นทุนต่อคำถามที่ตอบเสร็จ</li>
+    <li>รันชุดทดสอบด้วย prompt และคำถามจริงจากลูกค้า</li>
+    <li>สร้างชุดทดสอบเฉพาะงานตอบคำถามภาษี</li>
+    <li>เทียบโมเดลด้านความถูกต้อง คุณภาพคำตอบ และ edge case</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>3 → 2 → 4 → 1</strong> รัน test ที่ยังไม่มีไม่ได้ และต้นทุนต้องชั่งกับคุณภาพที่วัดแล้วเป็นขั้นสุดท้าย</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. ทำให้ residual risk อ่านออกและมีขอบเขต</h3>
+<p>"ไม่มีความเสี่ยง" เป็นประโยคที่ใช้ไม่ได้เลย เพราะไม่จริงสำหรับระบบ LLM และไม่ให้อะไรผู้อนุมัติตรวจสอบ risk statement ที่ดีต้อง <strong>ระบุความล้มเหลวที่เจาะจง</strong>, <strong>กำหนดขอบเขตความรุนแรง</strong> และ <strong>บอกว่าจะตรวจพบได้ยังไง</strong> ผู้อนุมัติยอมรับความเสี่ยงที่มองเห็นขอบได้ แต่ยอมรับสิ่งที่ไม่รู้ไม่ได้</p>
+<p>4 คำถามสำหรับตีกรอบความเสี่ยง:</p>
+<ul>
+  <li><strong>Untrusted content</strong> input ไหนมาจากนอก trust boundary?</li>
+  <li><strong>Actions</strong> ระบบเขียน แก้ ลบ หรือเรียกอะไรได้บ้าง?</li>
+  <li><strong>Blast radius</strong> ผลร้ายที่สุดที่นึกออกคืออะไร?</li>
+  <li><strong>Observability</strong> ถ้ามีอะไรผิดปกติ จะเห็นเร็วแค่ไหน?</li>
+</ul>
+
+<h3>ตัวอย่างของ Anthropic: incident-response agent</h3>
+<ul>
+  <li>input เป็น log ภายในและ Slack ภายใน ดังนั้นการ inject ต้องมาจากคนในหรือ account ที่ถูกเจาะ</li>
+  <li>อ่านได้กว้าง แต่ <strong>สร้างได้แค่เอกสารและข้อความ Slack</strong> แก้ ลบ หรือเปลี่ยน permission ไม่ได้</li>
+  <li>กรณีเลวร้ายสุด: log ที่อ่อนไหวเล็กน้อยถูกโพสต์ลงห้อง incident ที่ล็อกไว้อยู่แล้ว</li>
+  <li>ทุก action ส่งเข้า <strong>SIEM</strong> ความผิดปกติโผล่ภายในไม่กี่นาที</li>
+  <li>สรุป: ไม่ได้ปลอดความเสี่ยง แต่ write surface ที่จำกัดพร้อม audit ครบเป็น profile ที่ยอมรับได้</li>
+</ul>
+
+<h3>อัปเกรดโมเดล = ต้องเช็กขอบเขตใหม่</h3>
+<p>agent ตัวเดียวกันถูกย้ายจาก Opus 4 ไป Opus 4.5 โดย <strong>ไม่เพิ่ม tool, permission หรือ prompt ใดๆ</strong> แต่โมเดลที่ฉลาดขึ้นกลับไปขอให้ agent อีกตัวเขียน fix ลง production ระหว่าง incident ขอบเขตยังรักษาไว้ได้เพราะมี <strong>คนรีวิว pull request</strong> ก่อนขึ้น production บทเรียนคือ การอัปเกรดโมเดลเปลี่ยน risk profile และ control อย่าง human code review เป็นส่วนหนึ่งของ design ไม่ใช่ของแถม</p>
+
+<h3>ความเสี่ยงด้านเงินก็ตีกรอบแบบเดียวกัน</h3>
+<ul>
+  <li><strong>session budget ของ Managed Agents</strong> จำกัดความเสียหายจาก run เดียวที่หลุด</li>
+  <li><strong>workspace spend limits</strong> เป็นด่านสุดท้ายของทั้ง workspace</li>
+</ul>
+<p>"เดือนที่แย่ที่สุดจะไม่เกินเพดานของ workspace" เป็นประโยคที่อนุมัติได้ ส่วน "ค่าใช้จ่ายน่าจะอยู่ในระดับสมเหตุสมผล" อนุมัติไม่ได้</p>
+<p>แบบฝึก: เปลี่ยน "support agent ทำอะไรเสียหายไม่ได้หรอก" เป็นประโยคที่มีขอบเขต เช่น</p>
+<pre><code>support agent อ่านประวัติคำสั่งซื้อได้อย่างเดียว ร่างคำตอบได้แต่ไม่ส่งจนกว่าคนจะรีวิว
+คืนเงินหรือแก้ข้อมูลบัญชีไม่ได้ ทุก tool call ถูก log และมีคนรีวิวทุกวัน
+ค่าใช้จ่ายถูกจำกัดทั้งระดับ session และระดับ workspace</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"ถ้าพูดได้ว่าไม่มีความเสี่ยง แปลว่าพร้อมอนุมัติ" ผิด สิ่งที่ต้องนำเสนอคือ residual risk ที่มีขอบเขต</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ห้ามพูดว่าไม่มีความเสี่ยง ใช้ 4 คำถาม (untrusted input, actions, blast radius, observability) อัปเกรดโมเดลแล้วต้องเช็กขอบเขตใหม่ ความเสี่ยงด้านเงินตีกรอบด้วย session budget + workspace spend limit</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>agent ตรวจ log ความปลอดภัยของคุณได้รับอนุมัติไปแล้วด้วย risk profile ที่มีขอบเขต ทีมจะอัปเกรดไปโมเดลรุ่นใหม่โดยไม่เปลี่ยน tool, permission หรือ prompt ควรนำเสนอต่อผู้อนุมัติยังไง?</p>
+  <ol type="A">
+    <li>เป็นเรื่องต้นทุนอย่างเดียว เพราะไม่มีอะไรเปลี่ยนนอกจากโมเดล</li>
+    <li>แจ้งว่าเป็นการสลับโมเดลเฉยๆ risk profile เหมือนเดิม</li>
+    <li>ถอนสิทธิ์เขียนทั้งหมดของ agent ก่อนอัปเกรดเพื่อความปลอดภัย</li>
+    <li>เป็นการเปลี่ยน risk profile ต้องเช็กขอบเขตใหม่ก่อน ship และคง control อย่าง human code review ไว้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> โมเดลที่ฉลาดขึ้นอาจทำสิ่งที่ไม่เคยทำ (ตัวอย่าง Opus 4 → 4.5) A และ B สมมติว่าพฤติกรรมไม่เปลี่ยน C เกินเหตุ เพราะขอบเขตรักษาได้ด้วย control ที่มีอยู่</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. อธิบายกลไกให้ทีมวิศวกรฟัง</h3>
+<p>กับวิศวกร ความแม่นยำสำคัญมาก ถ้าอธิบาย feature ผิด ทีมก็สร้างผิด</p>
+
+<h3>Compaction กับ context editing</h3>
+<p>ทั้งสองอย่างช่วยให้ session ยาวๆ ไม่ล้น context window แต่ทำงานต่างกัน:</p>
+<div class="table-wrap"><table>
+  <tr><th></th><th>Compaction</th><th>Context editing</th></tr>
+  <tr><td>ทำงานที่ไหน</td><td>ฝั่ง server</td><td>ตั้งค่าฝั่ง client</td></tr>
+  <tr><td>ทำอะไร</td><td>เมื่อบทสนทนาใกล้เต็ม window จะสรุปบทสนทนาทั้งหมดให้อัตโนมัติ client ไม่ต้องจัดการเอง</td><td>ล้างเนื้อหาเฉพาะจุดตามกลยุทธ์ที่ตั้ง เช่น tool result เก่า หรือจัดการ thinking block</td></tr>
+  <tr><td>พูดกับทีมว่า</td><td>"ทำให้ context ที่ active เล็กอยู่เสมอโดยอัตโนมัติ"</td><td>"ทิ้ง tool output เก่าที่เราเลือกทิ้ง"</td></tr>
+</table></div>
+<p>ทั้งคู่ <strong>ไม่ต้องใช้ Batch API</strong> และ <strong>ไม่ผูกกับ tier ของโมเดล</strong> ถ้ามีข้อเท็จจริงที่ต้องอยู่รอดหลังการสรุป ให้จับคู่กับ <strong>memory tool</strong></p>
+
+<h3>Thinking mode ขึ้นกับรุ่นของโมเดล</h3>
+<ul>
+  <li><strong>Extended thinking</strong> โหมดแบบเก่าที่ตั้งเอง กำหนดด้วย token budget</li>
+  <li><strong>Claude 4.7 ขึ้นไป</strong> (รวม Opus 4.8) <strong>ปฏิเสธ extended thinking ด้วย error 400</strong> โหมดเดียวที่มีคือ <strong>adaptive thinking</strong> ซึ่งโมเดลตัดสินเองว่าจะคิดเมื่อไรและมากแค่ไหน</li>
+  <li><strong>Claude 4.5 ลงไป</strong> ที่รองรับ thinking (รวม Haiku 4.5) มีแค่ extended thinking ใช้ adaptive ไม่ได้</li>
+</ul>
+<p>ทีมที่ต้องรองรับทั้งสองกลุ่มต้องมี <strong>สอง code path</strong> และควรวางแผน migration ไว้ก่อน request แรกจะพัง</p>
+<pre><code>def thinking_config(model):
+    if model in OLD_THINKING_MODELS:      # เช่น Haiku 4.5
+        return {"type": "enabled", "budget_tokens": 8000}
+    return {"type": "adaptive"}           # 4.7+ เช่น Opus 4.8, Opus 5.5</code></pre>
+
+<h3>Managed Agents กับ Claude Agent SDK</h3>
+<p>เรื่องนี้คือ <strong>ใครเป็นคนดูแล infrastructure</strong> ไม่ใช่เรื่อง capability ทั้งสองมี agent, tool และ session เหมือนกัน</p>
+<div class="table-wrap"><table>
+  <tr><th></th><th>Claude Agent SDK</th><th>Managed Agents</th></tr>
+  <tr><td>รันที่ไหน</td><td>ใน process ที่เราดูแลเอง</td><td>harness สำเร็จรูปที่ตั้งค่าได้ บน infrastructure ของ Anthropic</td></tr>
+  <tr><td>Tool</td><td>custom tool เขียนในโค้ดเรา (รองรับ MCP)</td><td>ตั้งค่าใน agent definition</td></tr>
+  <tr><td>Sandbox / state</td><td>เราจัดการเอง</td><td>sandbox บน cloud ที่ Anthropic ดูแล (หรือ self-hosted sandbox ที่เราตั้ง) และ event log ต่อ session</td></tr>
+  <tr><td>เหมาะกับ</td><td>ต้องการคุมทุกอย่างใน process</td><td>งานรันยาวและ asynchronous</td></tr>
+</table></div>
+<p>agent definition ของ Managed Agents ถูกเก็บและ version ไว้ฝั่ง server เหตุผลที่ถูกในการเลือก Managed Agents คือ "Anthropic ดูแล sandbox และ session state ให้" ไม่ใช่ "SDK ทำ X ไม่ได้" (เพราะ SDK ก็มี custom tool, MCP, subagent และ hook)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span><p>"ส่ง extended thinking พร้อม budget ไปที่ Opus 4.8 ได้ มันจะใช้ควบคู่กับ adaptive" ผิด รุ่น 4.7 ขึ้นไปปฏิเสธด้วย 400</p></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>compaction = server สรุปให้อัตโนมัติ, context editing = client เลือกล้าง thinking: 4.7+ adaptive อย่างเดียว, 4.5 ลงไป extended อย่างเดียว Managed Agents vs SDK = ใครดูแล infra</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>coding agent ตัวหนึ่งใช้ Haiku 4.5 กับ extended thinking ที่ตั้ง budget ไว้ ทีมจะย้ายไป Opus 5.5 โดยไม่แก้โค้ด ควรบอกทีมว่าอะไร?</p>
+  <ol type="A">
+    <li>ไม่ต้องแก้ เพราะโมเดลระดับ Opus รองรับทั้งสองโหมด</li>
+    <li>วางแผนแก้ตอนนี้: Opus 5.5 ปฏิเสธ extended thinking ด้วย 400 ต้องย้ายไปใช้ adaptive thinking</li>
+    <li>ไม่ต้องแก้ budget จะกลายเป็นเพดานของ adaptive thinking เอง</li>
+    <li>ถ้ากลัวพัง ให้ไปใช้ Opus 4.8 แทนเพราะยังรองรับ extended thinking</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> รุ่น 4.7 ขึ้นไปใช้ได้แต่ adaptive A ผิดเพราะไม่มีรุ่นไหนรองรับทั้งสอง C request ถูกปฏิเสธ ไม่ได้ถูกแปลง D Opus 4.8 ก็เป็นรุ่น 4.7+ เหมือนกัน</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>agent รีแฟกเตอร์โค้ดที่รันนานหลายชั่วโมงเริ่มชน context window วิศวกรถามว่า compaction กับ context editing ต่างกันยังไง ข้อไหนถูก?</p>
+  <ol type="A">
+    <li>compaction ลบ tool result ทิ้งโดยไม่สรุป ส่วน context editing ต้องเรียก API สรุปแยกเอง</li>
+    <li>compaction สรุปบทสนทนาก่อนหน้าให้อัตโนมัติเมื่อใกล้เต็ม window ส่วน context editing ใช้กลยุทธ์ที่ตั้งค่าได้ เช่น ล้าง tool result เก่าหรือจัดการ thinking block</li>
+    <li>ทั้งสองใช้ได้เฉพาะโมเดลระดับ Opus</li>
+    <li>ทั้งสองต้องส่งผ่าน Batch API</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> A สลับและบิดกลไก C ทั้งคู่ไม่ผูกกับ tier D ไม่เกี่ยวกับ Batch API</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทีมหนึ่งใช้ทั้ง Opus 4.8 และ Haiku 4.5 และต้องประเมินเวลาพัฒนาเรื่อง thinking ข้อไหนถูก? (เลือก 2 ข้อ)</p>
+  <ol type="A">
+    <li>Opus 4.8 ใช้ adaptive thinking เป็นโหมดเดียว โมเดลตัดสินเองว่าจะคิดเท่าไร</li>
+    <li>Opus 4.8 ใช้ได้ทั้งสองโหมดใน request เดียว</li>
+    <li>Haiku 4.5 รองรับ extended thinking แต่ไม่รองรับ adaptive thinking</li>
+    <li>adaptive thinking มีเฉพาะใน Haiku 4.5</li>
+    <li>extended thinking ถูกยกเลิกไปแล้วในทุกโมเดล</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, C</strong> B ผิดเพราะ 4.7+ ปฏิเสธ extended D กลับด้านความจริง E ผิดเพราะรุ่น 4.5 ลงไปยังใช้ extended อยู่</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>ทีมเล็กต้องการ agent ที่รันต่อเนื่องหลายวันแบบ asynchronous และไม่มีคนดูแล sandbox หรือ session infrastructure เหตุผลที่ถูกในการเสนอ Managed Agents คือข้อไหน?</p>
+  <ol type="A">
+    <li>Agent SDK สร้าง custom tool หรือต่อ MCP ไม่ได้</li>
+    <li>มีแค่ Managed Agents ที่รองรับ subagent และ hook</li>
+    <li>Managed Agents รันบน infrastructure ที่ Anthropic ดูแล มี sandbox ต่อ session และ event log ให้ ทีมจึงไม่ต้องแบกภาระ ops ส่วนนี้</li>
+    <li>Agent SDK ต้องติดตั้ง CLI แยกต่างหากจึงใช้กับงานยาวไม่ได้</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> การเลือกขึ้นกับว่าใครดูแล infra A, B, D อ้างข้อจำกัดของ SDK ที่ไม่จริง (SDK มี custom tool, MCP, subagent, hook)</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/choosing-a-model">Anthropic: Choosing a model</a></li>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Anthropic: Optimizing for cost and intelligence</a></li>
+  <li><a href="https://claude.com/blog/claude-models-explained-choosing-the-best-model-for-your-use-case">Claude blog: Claude models explained</a></li>
+  <li><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Engineering: Building effective agents</a></li>
+  <li><a href="https://claude.com/blog/building-multi-agent-systems-when-and-how-to-use-them">Claude blog: Building multi-agent systems, when and how to use them</a></li>
+  <li><a href="https://claude.com/blog/ciso-guide-to-agentic-ai">Claude blog: CISO guide to agentic AI</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool">Anthropic: Memory tool</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting">Anthropic: Thinking troubleshooting</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/migration">Anthropic: Managed Agents migration</a></li>
+  <li><a href="https://platform.claude.com/docs/en/managed-agents/overview">Anthropic: Managed Agents overview</a></li>
+</ul>
+</section>

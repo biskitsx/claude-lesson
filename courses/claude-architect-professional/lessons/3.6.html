@@ -1,0 +1,298 @@
+<section class="lesson" id="l-3-6">
+<h2>3.6 Retrieval strategies matched to data shape and query pattern</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/retrieval-strategy-selection-full-context-embeddings-bm25-and-hybrid-search">CertSafari 3.6</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>ตัดสินได้ว่าคลังข้อมูล (corpus) ชุดนี้ <strong>ยัดลง prompt ทั้งก้อน</strong> ได้เลย หรือจำเป็นต้องมีระบบ retrieval</li>
+    <li>เลือกระหว่าง embeddings, BM25 หรือใช้คู่กัน (hybrid) จาก <strong>หน้าตาของคำถาม</strong> ที่ผู้ใช้ส่งมาจริง</li>
+    <li>อธิบาย pipeline ของ hybrid search และรู้ว่าจะจูนน้ำหนัก fusion ไปทางไหนเมื่อเจออาการพลาด</li>
+    <li>เลือก stack ที่เหมาะกับงบและ latency: contextual embeddings, hybrid, reranking</li>
+    <li>รู้ว่าเมื่อไหร่ควรใช้ just-in-time retrieval, tool search และ server-side compaction แทนการ index ล่วงหน้า</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: ดูรูปร่างข้อมูลกับรูปร่างคำถามก่อนเลือกเครื่องมือ</span>
+  <p>ไม่มี retrieval แบบไหนดีที่สุดในทุกกรณี คำถามแรกคือ <strong>ข้อมูลใหญ่แค่ไหน และเปลี่ยนเร็วแค่ไหน</strong> คำถามที่สองคือ <strong>ผู้ใช้ถามด้วยรหัสเป๊ะๆ หรือถามด้วยภาษาของตัวเอง</strong> คำตอบของสองข้อนี้จะบอกเองว่าควรใส่ทั้งก้อน ใช้ BM25 ใช้ embeddings ผสมกัน หรือให้ agent ไปค้นเองตอนต้องใช้</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. ข้อมูลใส่ลง prompt ได้ทั้งก้อนไหม</h3>
+<p>หลายทีมกระโดดไปทำ RAG pipeline (ตัด chunk, ทำ index, ตั้ง vector DB) ทันทีที่ได้ยินคำว่า "knowledge base" ทั้งที่ข้อมูลอาจเล็กพอจะใส่ลง prompt ตรงๆ ได้เลย</p>
+<ul>
+  <li>ถ้า corpus <strong>เล็กกว่าประมาณ 200,000 token</strong> (ราวๆ 500 หน้า) ใส่ทั้งหมดลง prompt ได้ ไม่ต้อง chunk ไม่ต้องมี index</li>
+  <li>ทำให้คุ้มด้วย <strong>prompt caching</strong>: ส่วนที่ซ้ำทุก request ถูก cache ไว้ ต้นฉบับอ้างว่า latency ลดลง <strong>มากกว่า 2 เท่า</strong> และค่าใช้จ่ายลด <strong>ได้ถึง 90%</strong></li>
+  <li>แต่ "ใส่ได้พอดี window" คือ <strong>เพดาน ไม่ใช่เป้าหมาย</strong> ยิ่ง token เยอะ ความแม่นและความสามารถดึงข้อมูลกลับมาใช้ (recall) ยิ่งตก อาการนี้เรียกว่า <strong>context rot</strong></li>
+  <li>ถ้าข้อมูลใหญ่เกินนั้น หรือกำลังโตจนจะเกิน ต้องมีวิธี retrieval ที่ scale ได้</li>
+</ul>
+<p>เปรียบเหมือนสมุดคู่มือพนักงานเล่มบาง ยื่นให้อ่านทั้งเล่มเลยง่ายกว่าทำสารบัญดัชนี แต่ถ้าเป็นห้องสมุดทั้งตึก ยังไงก็ต้องมีระบบค้นหา</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"มี knowledge base สำหรับ grounding เมื่อไหร่ ต้องทำ RAG pipeline เสมอ"</strong> ไม่จริง ถ้า corpus ต่ำกว่าราว 200K token ใส่ลง prompt แล้ว cache ไว้ เป็นทางที่ง่ายและมักถูกกว่า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ข้อมูลเล็กกว่า ~200K token: ใส่ทั้งก้อน + prompt caching ข้อมูลใหญ่หรือกำลังจะใหญ่: วางแผน retrieval ที่ scale ได้ และอย่าลืมว่าใส่เยอะเกินไปก็เจอ context rot</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>ทีม HR มีคู่มือนโยบายบริษัทราว 300 หน้า แก้ปีละครั้ง อยากทำแชตบอตตอบคำถามพนักงาน ทางไหนเหมาะที่สุดตอนนี้?</p>
+  <ol type="A">
+    <li>ใส่คู่มือทั้งเล่มลง prompt และเปิด prompt caching</li>
+    <li>ตัด chunk แล้วทำ vector index พร้อม reranker</li>
+    <li>Fine-tune โมเดลด้วยคู่มือ</li>
+    <li>ให้ agent ใช้ grep ค้นทีละหน้า</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> 300 หน้าอยู่ต่ำกว่าราว 500 หน้า / 200K token ใส่ทั้งก้อนได้ และเนื้อหาแทบไม่เปลี่ยน caching จึงคุ้มมาก ระบบ index เป็นภาระที่ยังไม่จำเป็น</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1</span>
+  <p>สตาร์ตอัปมีเอกสาร API ตอนนี้ 120 หน้า แต่แผนงานบอกว่าจะเพิ่มเป็นราว 2,500 หน้าภายในปีหน้า ควรวางแผนยังไง?</p>
+  <ol type="A">
+    <li>สร้าง hybrid search + reranking ตั้งแต่วันแรก เพราะสุดท้ายก็ต้องใช้</li>
+    <li>ใส่ทั้งหมดลง prompt ตลอดไป เพราะ context window จะใหญ่ขึ้นเรื่อยๆ</li>
+    <li>ใส่ทั้งหมดลง prompt พร้อม caching ไปก่อน แล้วค่อยเพิ่ม retrieval ที่ scale ได้เมื่อ corpus เลยราว 200K token</li>
+    <li>ใช้ BM25 อย่างเดียวตั้งแต่วันแรก</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> วันนี้ข้อมูลเล็ก ทางง่ายที่สุดก็พอแล้ว แต่ต้องรู้ว่าจุดเปลี่ยนอยู่ตรงไหน B ผิดเพราะต่อให้ใส่ได้ก็เจอ context rot และ 2,500 หน้าเกินเพดานแน่นอน</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. Embeddings กับ BM25: จับ "ความหมาย" หรือจับ "คำ"</h3>
+<p>Retriever สองตระกูลหลักจับคนละอย่าง:</p>
+<ul>
+  <li><strong>Embeddings</strong> แปลงข้อความเป็นเวกเตอร์แล้ววัดความใกล้ของ <em>ความหมาย</em> เก่งกับคำถามที่ใช้คำไม่ตรงกับเอกสาร (paraphrase) เช่นถาม "ลาคลอดได้กี่วัน" แต่เอกสารเขียน "สิทธิ์ลาเพื่อดูแลบุตรแรกเกิด" แต่ <strong>อาจพลาดสตริงเป๊ะๆ</strong> อย่างรหัส error <code>ERR-4021</code> หรือเลขชิ้นส่วน</li>
+  <li><strong>BM25</strong> เป็นวิธีจัดอันดับแบบ lexical (ดูตัวคำ) ต่อยอดจาก TF-IDF โดยเพิ่มสองอย่าง: <strong>document-length normalization</strong> (เอกสารยาวไม่ได้เปรียบแค่เพราะมีคำเยอะ) และ <strong>term-frequency saturation</strong> (คำเดิมซ้ำ 50 ครั้งไม่ได้คะแนนมากกว่า 5 ครั้งเป็นสิบเท่า) เก่งเรื่องจับคำตรงตัว แต่ไม่เข้าใจคำพ้องความหมาย</li>
+</ul>
+
+<div class="table-wrap"><table>
+  <tr><th>รูปแบบคำถาม</th><th>Retriever ที่เหมาะ</th><th>เหตุผล</th></tr>
+  <tr><td>รหัสเฉพาะ เช่น error code, SKU, ชื่อฟังก์ชัน</td><td>BM25</td><td>ต้องการตัวอักษรตรงกันเป๊ะ</td></tr>
+  <tr><td>คำถามเชิงแนวคิด พิมพ์ด้วยภาษาของผู้ใช้เอง</td><td>Embeddings</td><td>คำอาจไม่ตรงกับเอกสารเลย แต่ความหมายตรง</td></tr>
+  <tr><td>ปนกันทั้งสองแบบ</td><td>ใช้ร่วมกัน (hybrid)</td><td>แต่ละตัวอุดจุดอ่อนของอีกตัว</td></tr>
+</table></div>
+
+<h3>ตั้ง input_type ให้ถูกตอนเรียก embedding</h3>
+<p>ตอนเรียก embedding model ต้องบอกว่าข้อความนี้เป็นอะไร: ใช้ <code>input_type="query"</code> กับคำถามของผู้ใช้ และ <code>input_type="document"</code> กับเนื้อหาใน corpus <strong>อย่าปล่อยว่างหรือตั้งเป็น <code>None</code></strong> เพราะโมเดลจะเติม prefix ต่างกันให้แต่ละฝั่งเพื่อให้จับคู่กันได้ดีขึ้น</p>
+<pre><code>doc_vecs = vo.embed(chunks, model="voyage-3", input_type="document").embeddings
+q_vec    = vo.embed([question], model="voyage-3", input_type="query").embeddings[0]</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Embeddings ดีๆ หา identifier ตรงตัวได้แม่นพอๆ กับหา paraphrase"</strong> ไม่จริง embeddings มองความหมาย สตริงอย่าง <code>PN-88213-B</code> กับ <code>PN-88213-C</code> อาจได้เวกเตอร์ใกล้กันมากจนแยกไม่ออก งานแบบนี้ BM25 เป็นตัวอุด</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Embeddings = ความหมาย, BM25 = ตัวคำ ดู traffic จริงว่าคนถามแบบไหน แล้วเลือกตาม ถ้าปนกันก็ใช้คู่กัน และอย่าลืมตั้ง <code>input_type</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2 (จับคู่)</span>
+  <p>จับคู่ระบบค้นหากับ retriever ที่เหมาะ (BM25 / Embeddings / ใช้ร่วมกัน):</p>
+  <ol>
+    <li>ช่างซ่อมพิมพ์รหัสอะไหล่อย่าง <code>VX-2290</code> เพื่อหาคู่มือ</li>
+    <li>ลูกค้าพิมพ์ว่า "เครื่องดังแก๊กๆ ตอนปั่นหมาด" แต่เอกสารเขียนว่า "เสียงผิดปกติขณะรอบ spin"</li>
+    <li>พอร์ทัลซัพพอร์ตที่บางคนแปะ error code บางคนเล่าอาการเป็นภาษาพูด</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-BM25, 2-Embeddings, 3-ใช้ร่วมกัน</strong> รหัสต้องการตัวคำตรง คำบรรยายอาการไม่มีคำซ้ำกับเอกสารเลยต้องใช้ความหมาย ส่วน traffic ปนกันต้องใช้ทั้งสอง</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. Hybrid search และการจูน fusion</h3>
+<p>Pipeline ของ hybrid search แบบที่ Anthropic ใช้อ้างอิงมีขั้นตอนดังนี้:</p>
+<ol class="steps">
+  <li>ตัด corpus เป็น chunk</li>
+  <li>encode แต่ละ chunk ทั้งแบบ TF-IDF (สำหรับ BM25) และแบบ embeddings</li>
+  <li>ดึง chunk อันดับต้นๆ จาก retriever แต่ละตัว (reference implementation ใช้ <strong>ตัวละ 150 candidate</strong>)</li>
+  <li>รวมผลด้วย <strong>rank fusion</strong> (ใช้ weighted Reciprocal Rank Fusion หรือ RRF)</li>
+  <li>ตัดตัวซ้ำออก (deduplicate)</li>
+  <li>เอา top-K chunk ใส่ prompt</li>
+</ol>
+<p><strong>RRF</strong> ไม่ได้สนใจคะแนนดิบของแต่ละ retriever (ซึ่งคนละสเกลกัน) แต่ใช้ <em>อันดับ</em> แทน chunk ที่ติดอันดับต้นในทั้งสองรายการจะได้คะแนนรวมสูง ส่วน "weighted" หมายถึงให้น้ำหนักแต่ละ retriever ไม่เท่ากันได้</p>
+<pre><code>def weighted_rrf(sem_ranks, bm25_ranks, w_sem=0.8, w_bm25=0.2, k=60):
+    score = {}
+    for rank, cid in enumerate(sem_ranks):
+        score[cid] = score.get(cid, 0) + w_sem / (k + rank + 1)
+    for rank, cid in enumerate(bm25_ranks):
+        score[cid] = score.get(cid, 0) + w_bm25 / (k + rank + 1)
+    return sorted(score, key=score.get, reverse=True)</code></pre>
+<ul>
+  <li>ค่าเริ่มต้นใน reference คือ <strong>semantic 80% / BM25 20%</strong> และ <strong>ปรับได้</strong> ถ้า corpus อัดแน่นไปด้วยรหัสและ identifier แล้วผู้ใช้หารหัสไม่เจอ ให้ <strong>เพิ่มน้ำหนัก BM25</strong></li>
+  <li>อย่าคิดว่า 20% แปลว่า BM25 แทบไม่มีบทบาท ในการทดสอบกับ codebase พบว่าหลัง fusion แล้ว BM25 ยังเป็นแหล่งของผลลัพธ์สุดท้ายราว <strong>39–45%</strong></li>
+  <li>ก่อนจะเพิ่ม retriever ตัวที่สอง ให้ดูก่อนว่ามี <strong>embedding model เฉพาะโดเมน</strong> ไหม เช่น <code>voyage-code-4</code> (โค้ด), <code>voyage-law-2</code> (กฎหมาย), <code>voyage-finance-2</code> (การเงิน) บางทีเปลี่ยนโมเดลอย่างเดียวก็แก้ปัญหาได้</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Hybrid = ดึงจากสอง retriever (ตัวละ 150) → รวมด้วย weighted RRF (เริ่ม 80/20) → dedupe → top-K หารหัสไม่เจอให้เพิ่มน้ำหนัก BM25 และลองโมเดลเฉพาะโดเมนก่อนเพิ่มของ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>ระบบค้นเอกสารของโรงงานใช้ hybrid search ที่น้ำหนัก 80/20 (semantic/BM25) วิศวกรบ่นว่าพิมพ์รหัสแม่พิมพ์ <code>MD-7731</code> แล้วผลที่ได้เป็นแม่พิมพ์รุ่นคล้ายๆ กันแต่ไม่ใช่ตัวนั้น ควรแก้ที่ไหนก่อน?</p>
+  <ol type="A">
+    <li>เพิ่มน้ำหนัก BM25 ใน fusion เพราะ corpus นี้เต็มไปด้วยรหัส</li>
+    <li>ตัด BM25 ออกเพื่อลดสัญญาณรบกวน</li>
+    <li>เพิ่มขนาด chunk เป็นสองเท่า</li>
+    <li>เปลี่ยน <code>input_type</code> ของ query เป็น <code>document</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> อาการคือ semantic ดึง "ของที่ความหมายใกล้" มาแทน "ของที่ตรงเป๊ะ" corpus ที่หนักไปทาง identifier ควรให้ BM25 มีเสียงมากขึ้น D ทำให้แย่ลงเพราะ query ต้องใช้ <code>query</code></p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. เลือก stack ให้ครบ: contextual embeddings, hybrid, reranking</h3>
+<p>นอกจาก retriever ยังมีอีกสองชั้นที่ซ้อนเพิ่มได้ แต่ละชั้นมีต้นทุนต่างกัน</p>
+<ul>
+  <li><strong>Contextual embeddings:</strong> ก่อน index ให้ Claude เขียนบริบทสั้นๆ ของ chunk นั้น (เช่น "ข้อความนี้มาจากรายงานไตรมาส 2 ของบริษัท X ส่วนรายได้") แล้วแปะไว้หน้า chunk ก่อน embed จ่ายครั้งเดียวตอน ingest ราว <strong>$1.02 ต่อล้าน token ของเอกสาร</strong> (ชุดข้อมูล codebase ใช้ราว $3) เหมาะที่สุดกับ chunk ที่ <strong>หลุดบริบทแล้วอ่านไม่รู้เรื่อง</strong> เช่นย่อหน้าในเอกสาร SEC ที่เขียนว่า "รายได้เพิ่มขึ้น 3%" โดยไม่บอกว่าของบริษัทไหน ไตรมาสไหน</li>
+  <li><strong>Hybrid search:</strong> ต้องรันและดูแล <strong>Elasticsearch</strong> (หรือ engine BM25 อื่น) เพิ่มเข้ามา เป็นภาระด้าน ops</li>
+  <li><strong>Reranking:</strong> เอา candidate จาก retrieval ไปให้โมเดล rerank จัดอันดับใหม่ เพิ่ม latency ราว <strong>100–200 ms</strong> และราว <strong>$0.002 ต่อ query</strong> ตัว <code>rerank-3</code> แม่นที่สุด ส่วน <code>rerank-3-lite</code> เน้นเร็วและถูก ยิ่งส่ง candidate ไป rerank มาก ยิ่งแม่น แต่ก็ยิ่งช้าและแพง</li>
+</ul>
+
+<p>ผลการทดสอบกับ codebase (248 query) วัดด้วย Pass@k คือสัดส่วน query ที่ chunk ที่ถูกต้องติดอยู่ใน k อันดับแรก:</p>
+<div class="table-wrap"><table>
+  <tr><th>วิธี</th><th>Pass@5</th><th>Pass@10</th><th>Pass@20</th></tr>
+  <tr><td>Baseline RAG</td><td>80.92%</td><td>87.15%</td><td>90.06%</td></tr>
+  <tr><td>+ Contextual Embeddings</td><td>88.12%</td><td>92.34%</td><td>94.29%</td></tr>
+  <tr><td>+ Hybrid Search (BM25)</td><td>86.43%</td><td>93.21%</td><td>94.99%</td></tr>
+  <tr><td>+ Reranking</td><td>92.15%</td><td>95.26%</td><td>97.45%</td></tr>
+</table></div>
+<p>อ่านตารางนี้ให้ออก: <strong>contextual embeddings ให้กระโดดใหญ่ที่สุดในขั้นเดียว</strong> (Pass@10 จาก 87 ไป 92) ชั้นที่ซ้อนตามมาแต่ละชั้นเพิ่มแค่ราว 1–3 จุด สังเกตด้วยว่าเพิ่ม hybrid แล้ว Pass@5 ลดลงนิดหน่อย แต่ Pass@10/20 ดีขึ้น</p>
+
+<div class="table-wrap"><table>
+  <tr><th>สถานการณ์</th><th>Stack ที่แนะนำ</th><th>Pass@10 คร่าวๆ</th></tr>
+  <tr><td>Traffic เยอะ งบตึง</td><td>Contextual embeddings อย่างเดียว (ไม่มีค่าใช้จ่ายต่อ query)</td><td>~92%</td></tr>
+  <tr><td>Production ทั่วไปแบบสมดุล</td><td>+ hybrid search</td><td>~93%</td></tr>
+  <tr><td>ต้องการแม่นสุด รับ latency เพิ่มได้</td><td>+ reranking</td><td>~95%</td></tr>
+</table></div>
+<p>สำหรับระบบ production ส่วนใหญ่ <strong>contextual embeddings คุ้มค่าเงินที่สุด</strong> เพราะจ่ายครั้งเดียวตอน ingest แล้วได้ผลมากที่สุด</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>เริ่มที่ contextual embeddings (จ่ายครั้งเดียว ได้มากสุด) เพิ่ม hybrid ถ้ารับภาระดูแล Elasticsearch ได้ เพิ่ม reranking เมื่อแม่นยำสำคัญกว่า 100–200 ms และ $0.002/query</p></div>
+
+<div class="checkpoint">
+  <span class="tag">ลองเดาก่อน</span>
+  <p>จากตาราง codebase ถ้าเลือกเพิ่มได้แค่ชั้นเดียวจาก baseline ชั้นไหนให้ Pass@10 เพิ่มมากที่สุด?</p>
+  <ol type="A">
+    <li>Contextual embeddings</li>
+    <li>Hybrid search</li>
+    <li>Reranking</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> จาก 87.15% เป็น 92.34% เป็นการกระโดดใหญ่ที่สุดในขั้นเดียว ชั้นถัดไปเพิ่มทีละ 1–3 จุด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>แอปถามตอบสินค้าราคาถูกมี query หลายล้านครั้งต่อวัน มาร์จินต่ำมาก ทีมยอมรับความแม่นราว 92% ได้ ควรเลือก stack ไหน?</p>
+  <ol type="A">
+    <li>Contextual embeddings + hybrid + <code>rerank-3</code></li>
+    <li>ใส่ catalog ทั้งหมดลง prompt ทุก request</li>
+    <li>Baseline RAG + <code>rerank-3-lite</code></li>
+    <li>Contextual embeddings อย่างเดียว</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>D</strong> จ่ายครั้งเดียวตอน ingest ไม่มีค่าต่อ query ได้ Pass@10 ราว 92% พอดีเป้า reranking จะเพิ่มค่าใช้จ่ายและ latency ทุก query ซึ่งที่สเกลนี้หนักมาก</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Just-in-time retrieval: ไม่ index ล่วงหน้า ให้ agent ไปหยิบเอง</h3>
+<p>อีกแนวคิดหนึ่งคือไม่ต้องดึงข้อมูลมาเตรียมไว้เลย agent ถือแค่ <strong>reference เบาๆ</strong> เช่น path ของไฟล์, query ที่บันทึกไว้, ลิงก์ แล้วใช้ tool โหลดข้อมูลจริงเฉพาะตอนต้องใช้ Claude Code ทำแบบนี้อยู่แล้ว ด้วย <code>glob</code>, <code>grep</code> และ <code>head</code>/<code>tail</code></p>
+<ul>
+  <li><strong>เหมาะที่สุด</strong> เมื่อข้อมูลเปลี่ยนเร็วกว่าที่จะ rebuild index ทัน เช่น monorepo ที่มีคน rename ฟังก์ชันทุกชั่วโมง index ที่สร้างตอนกลางคืนจะเก่าตั้งแต่ออกแบบ</li>
+  <li>โครงสร้างโฟลเดอร์และการตั้งชื่อไฟล์ก็เป็นสัญญาณช่วย agent ตัดสินว่าจะเปิดอะไรต่อ (ไฟล์ชื่อ <code>test_payment.py</code> บอกอะไรได้เยอะโดยไม่ต้องเปิด)</li>
+  <li><strong>ราคาที่ต้องจ่าย:</strong> ช้ากว่าการดึงจากที่คำนวณไว้แล้ว, ต้องมี tool ดีๆ และคำแนะนำที่ชัด, และเสี่ยงเอาของไม่เกี่ยวมาเติม context จนรก</li>
+</ul>
+<p><strong>แบบผสม (hybrid):</strong> โหลดของที่นิ่งไว้ล่วงหน้า เช่นไฟล์ <code>CLAUDE.md</code> หรือเอกสารหลักด้านกฎหมาย/การเงินที่ไม่ค่อยเปลี่ยน แล้วให้ agent สำรวจส่วนที่เหลือตามต้องการ</p>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ข้อมูลเปลี่ยนเร็วกว่า index = ให้ agent ค้นเองตอนต้องใช้ ของนิ่งโหลดไว้ก่อน ของเยอะและเปลี่ยนบ่อยค่อยสำรวจ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>Agent ช่วยรีวิวโค้ดใน monorepo ที่มีคน merge วันละหลายร้อย PR ระบบใช้ vector index ที่ rebuild ทุกตีสอง ผลคือ agent ชอบอ้างถึงคลาสที่ถูกลบไปแล้วเมื่อบ่าย ควรแก้ยังไง?</p>
+  <ol type="A">
+    <li>Rebuild index ทุก 6 ชั่วโมงแทน</li>
+    <li>ให้ agent มี tool ค้นไฟล์ (เช่น glob/grep) เพื่อดูโค้ดปัจจุบันตอนต้องใช้</li>
+    <li>เพิ่ม reranking</li>
+    <li>ใส่โค้ดทั้ง repo ลง prompt</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> ปัญหาคือ index เก่าโดยธรรมชาติ ถี่ขึ้นก็ยังเก่า reranking จัดอันดับของเก่าให้ดีขึ้นเท่านั้น ส่วน repo ใหญ่ขนาดนี้ใส่ prompt ไม่ได้ just-in-time ดูของจริง ณ ตอนนั้นเสมอ</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>Agent ด้านภาษีมีชุดประมวลกฎหมายหลัก (ไม่ค่อยเปลี่ยน ใช้แทบทุกคำถาม) กับคลังคำวินิจฉัยเก่าหลายหมื่นฉบับ (ใช้บ้างไม่ใช้บ้าง) ควรจัดยังไง?</p>
+  <ol type="A">
+    <li>ใส่ทั้งสองส่วนลง prompt</li>
+    <li>ให้ agent ค้นทั้งสองส่วนเองทุกครั้ง</li>
+    <li>โหลดประมวลกฎหมายหลักไว้ล่วงหน้า แล้วให้ agent ใช้ tool สำรวจคลังคำวินิจฉัยเมื่อจำเป็น</li>
+    <li>Fine-tune ด้วยคำวินิจฉัย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>C</strong> นี่คือแบบผสม: ของนิ่งและใช้บ่อยโหลดก่อน ของเยอะที่ใช้เป็นครั้งคราวค่อยไปหยิบ</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. เมื่อสิ่งที่ต้อง "ค้น" คือ tool และเมื่อ session ยาวมาก</h3>
+<p>หลักคิดเดียวกันใช้กับ <strong>tool definition</strong> ได้ด้วย ถ้ามี tool เยอะ ไม่ต้องโหลดนิยามทั้งหมดตั้งแต่แรก (รายละเอียดเต็มในบท 3.8)</p>
+<ul>
+  <li><strong>Tool search:</strong> ใส่ <code>defer_loading: true</code> ให้ tool ที่ไม่ต้องโหลดทันที นิยามจะเข้า context เมื่อถูกค้นเจอ มี built-in สองแบบ: <code>tool_search_tool_regex_20251119</code> และ <code>tool_search_tool_bm25_20251119</code></li>
+  <li>คุ้มเมื่อ context ที่ประหยัดได้และความแม่นที่เพิ่มขึ้นมากกว่า latency ของขั้นค้นหาที่เพิ่มมา สัญญาณคือ <strong>นิยาม tool รวมเกินราว 10K token</strong> หรือ <strong>มีมากกว่า 10 tool</strong></li>
+  <li>เก็บ <strong>3–5 tool ที่ใช้บ่อยที่สุดไว้แบบไม่ defer</strong> ส่วนชุดเล็กที่ใช้บ่อยอยู่แล้ว โหลดตรงๆ ทั้งหมดไปเลย</li>
+  <li>ถ้าอยากค้น tool ด้วย <strong>ความหมาย</strong> (embeddings) ให้สร้าง <strong>custom search tool</strong> ที่คืน block แบบ <code>tool_reference</code> โดย tool ทุกตัวที่ถูกอ้างถึงยังต้องอยู่ใน array <code>tools</code> ระดับบนสุด (ปกติตั้ง <code>defer_loading: true</code>)</li>
+</ul>
+<pre><code>{"type": "tool_result", "tool_use_id": "toolu_01...",
+ "content": [{"type": "tool_reference", "tool_name": "refund_order"}]}</code></pre>
+
+<h3>Session ยาวหลายชั่วโมง</h3>
+<p>เมื่อ session ที่ดึงข้อมูลเยอะใกล้ชน context window <strong>วิธีหลักคือ server-side compaction</strong> (ให้ฝั่ง server ย่อประวัติเก่าลง) ไม่ใช่ทางเหล่านี้:</p>
+<ul>
+  <li><strong>เพิ่ม <code>max_tokens</code>:</strong> เป็นการจองที่ให้ output มากขึ้น เหลือที่ให้ประวัติน้อยลง ทำให้แย่กว่าเดิม</li>
+  <li><strong>อัปโหลดเอกสารซ้ำทุก turn:</strong> เติม window เร็วขึ้นอีก</li>
+</ul>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Tool search ประหยัด context เสมอ ก็ defer ทุก tool ไปเลย"</strong> ไม่ใช่ ทุกครั้งที่จะเรียก tool ที่ถูก defer ต้องเพิ่มขั้นค้นหาก่อน tool ที่ใช้บ่อยควรโหลดไว้ และชุดเล็กๆ ที่ใช้บ่อยควรโหลดตรงทั้งหมด</p>
+  <p><strong>"Tool search แบบ BM25 ที่ built-in มาก็เหมือน semantic search"</strong> ไม่ใช่ BM25 ดูตัวคำ ถ้าต้องการค้นด้วยความหมายจริง ต้องเขียน custom tool ที่ใช้ embeddings แล้วคืน <code>tool_reference</code></p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>Tool เกิน 10 ตัวหรือเกิน ~10K token: พิจารณา tool search แต่เก็บ 3–5 ตัวยอดฮิตไว้ ค้นด้วยความหมายต้องทำ custom tool session ยาวใช้ server-side compaction</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>Agent ฝ่าย IT มี tool 6 ตัว (รีเซ็ตรหัส, ปลดล็อกบัญชี, เช็กสถานะ VPN ฯลฯ) นิยามรวมราว 900 token และแทบทุก request ใช้ 2–3 ตัวในนี้ ควรทำยังไง?</p>
+  <ol type="A">
+    <li>โหลดทั้ง 6 ตัวตรงๆ ไม่ต้องใช้ tool search</li>
+    <li>เปิด tool search แล้ว defer ทั้ง 6 ตัว</li>
+    <li>เปิด tool search แบบ regex แล้ว defer 3 ตัว</li>
+    <li>สร้าง custom embeddings search tool</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ชุดเล็ก ใช้บ่อย ต่ำกว่าเกณฑ์ทั้งเรื่องจำนวนและ token การเพิ่มขั้นค้นหามีแต่เพิ่ม latency</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>Agent วิเคราะห์ตลาดทำงานต่อเนื่อง 4 ชั่วโมง ดึงรายงานเข้ามาเรื่อยๆ จน context ใกล้เต็ม ข้อไหนเหมาะที่สุด?</p>
+  <ol type="A">
+    <li>เปิด server-side compaction</li>
+    <li>เพิ่ม <code>max_tokens</code> เป็นค่าสูงสุด</li>
+    <li>ส่งรายงานทั้งหมดซ้ำทุก turn เพื่อไม่ให้ลืม</li>
+    <li>เริ่ม session ใหม่ทุก 30 นาทีโดยไม่ส่งอะไรต่อ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> compaction เป็นกลยุทธ์หลักสำหรับ session ยาว B ลดที่ว่างของประวัติ C เติม window เร็วขึ้น D ทิ้งงานที่ทำมาทั้งหมด</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9</span>
+  <p>แพลตฟอร์มมี tool 400 ตัว ผู้ใช้ชอบขอด้วยคำที่ไม่ตรงกับชื่อ tool (เช่นพิมพ์ "ยกเลิกแพ็กเกจ" แต่ tool ชื่อ <code>terminate_subscription</code>) และ built-in BM25 tool search หาไม่เจอบ่อย ควรทำยังไง?</p>
+  <ol type="A">
+    <li>สร้าง custom search tool ที่ใช้ embeddings แล้วคืน <code>tool_reference</code> โดยทุก tool ยังอยู่ใน <code>tools</code> พร้อม <code>defer_loading: true</code></li>
+    <li>เปลี่ยนไปใช้ regex variant</li>
+    <li>เลิก defer แล้วโหลดทั้ง 400 ตัว</li>
+    <li>ให้ custom tool คืนนิยาม tool เต็มเป็นข้อความ แล้วเอา tool ออกจาก <code>tools</code></li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ปัญหาคือการจับคู่ความหมาย ซึ่ง BM25 และ regex ทำไม่ได้ D ผิดเพราะ tool ที่ถูกอ้างถึงต้องมีนิยามอยู่ใน <code>tools</code> ระดับบนสุดเสมอ</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">Claude Docs: Prompt caching</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/context-windows">Claude Docs: Context windows</a></li>
+  <li><a href="https://www.anthropic.com/engineering/contextual-retrieval">Anthropic Engineering: Contextual retrieval</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/embeddings">Claude Docs: Embeddings</a></li>
+  <li><a href="https://platform.claude.com/cookbook/capabilities-contextual-embeddings-guide">Claude Cookbook: Contextual embeddings guide</a></li>
+  <li><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic Engineering: Effective context engineering for AI agents</a></li>
+  <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool">Claude Docs: Tool search tool</a></li>
+  <li><a href="https://www.anthropic.com/engineering/advanced-tool-use">Anthropic Engineering: Advanced tool use</a></li>
+</ul>
+</section>

@@ -1,0 +1,344 @@
+<section class="lesson" id="l-4-5">
+<h2>4.5 ลดต้นทุนและ latency ของ Claude: free wins, batching และ budget</h2>
+<p class="src">ต้นฉบับ: <a href="https://www.certsafari.com/anthropic/claude-architect-professional/learn/prompt-caching-and-free-cost-wins-on-claude">CertSafari 4.5</a></p>
+<div class="box">
+  <span class="tag">อ่านจบแล้วควรทำได้</span>
+  <ul>
+    <li>แยก "free wins" (ประหยัดโดยไม่เสียคุณภาพ) ออกจาก "trade-offs" (ประหยัดแลกกับอะไรบางอย่าง)</li>
+    <li>อธิบายได้ว่าทำไม prompt caching คือตัวคุมต้นทุนหลักของ agent loop และอ่านค่า cache hit ได้</li>
+    <li>เลือกระหว่าง cache 5 นาทีกับ 1 ชั่วโมงจากรูปแบบช่วงเวลาระหว่าง request</li>
+    <li>รู้ว่า Message Batches เหมาะกับงานแบบไหน และมีข้อจำกัดอะไร</li>
+    <li>ตั้งขอบเขตการใช้จ่ายด้วย <code>max_tokens</code>, session budget, spend limit และนโยบาย re-run</li>
+  </ul>
+</div>
+
+<div class="box key">
+  <span class="tag">แนวคิดหลัก: เก็บของฟรีก่อน แล้วค่อยต่อรอง</span>
+  <p>คันโยกลดต้นทุนมีสองกลุ่ม กลุ่มแรก <strong>ฟรี</strong> คือประหยัดได้โดยคุณภาพเท่าเดิม กลุ่มสอง <strong>trade-off</strong> คือได้ส่วนลดแต่ต้องแลกกับคุณภาพ ความเร็ว หรือความสำเร็จของ task ให้ใช้กลุ่มแรกให้หมดก่อน และทุกคันโยกต้องวัดผลกับ workload ของเราเอง</p>
+</div>
+
+<!-- ============ 1 ============ -->
+<h3>1. คันโยกสองแบบ</h3>
+<div class="table-wrap"><table>
+  <tr><th>กลุ่ม</th><th>คันโยก</th><th>แลกกับอะไร</th></tr>
+  <tr><td rowspan="5"><strong>Free wins</strong></td><td>Prompt caching</td><td>ไม่เสียคุณภาพ (มักเป็นคันโยกที่ใหญ่ที่สุดในการวัดของ Anthropic)</td></tr>
+  <tr><td>Token hygiene (ตัด token ที่ไม่จำเป็น)</td><td>ไม่เสียคุณภาพ</td></tr>
+  <tr><td>Audit prompt ให้เข้ากับโมเดลปัจจุบัน</td><td>ไม่เสียคุณภาพ</td></tr>
+  <tr><td>Batch processing (ลด 50%, ได้ผลภายใน 24 ชม.)</td><td>ยอมรอ (latency) แต่คุณภาพเท่าเดิม</td></tr>
+  <tr><td>Workspace spend limit</td><td>เป็นตาข่ายรองรับ ไม่ได้ลดต้นทุนต่อ request</td></tr>
+  <tr><td rowspan="6"><strong>Trade-offs</strong></td><td>เลือกรุ่นโมเดล</td><td>ความสามารถ</td></tr>
+  <tr><td>Effort</td><td>ความสามารถ/คะแนน</td></tr>
+  <tr><td>Output cap (<code>max_tokens</code>)</td><td>run ที่ถูกตัดกลางคัน</td></tr>
+  <tr><td>Session budget</td><td>run ที่ไม่จบ</td></tr>
+  <tr><td>บอกเวลาที่ผ่านไป (elapsed-time clock)</td><td>คะแนนนิดหน่อย</td></tr>
+  <tr><td>สถาปัตยกรรมหลายโมเดล</td><td>ความซับซ้อนและคุณภาพบางส่วน</td></tr>
+</table></div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>caching, hygiene, prompt audit, batch, spend limit = ฟรี · model, effort, cap, budget, clock, multi-model = trade-off · เริ่มที่ฟรีเสมอ และวัดกับงานจริง</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 1 (จัดกลุ่ม)</span>
+  <p>จัดคันโยกต่อไปนี้ว่าเป็น free win (F) หรือ trade-off (T):</p>
+  <ol>
+    <li>ใส่ <code>cache_control</code> บน system prompt ยาว</li>
+    <li>ลด effort จาก high เป็น low</li>
+    <li>ย้ายงานสรุปรายงานประจำคืนไป Batches API</li>
+    <li>เปลี่ยนจาก Sonnet 5.5 เป็น Haiku 5.5</li>
+    <li>ลด <code>max_tokens</code> ให้ต่ำลง</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>1-F, 2-T, 3-F, 4-T, 5-T</strong> batching ยอมรอแต่ไม่เสียคุณภาพ ส่วน effort, รุ่น และ cap แลกกับความสามารถหรือ run ที่ไม่จบ</p></details>
+</div>
+
+<!-- ============ 2 ============ -->
+<h3>2. ทำไม caching คุมต้นทุนของ agent loop</h3>
+<p>ใน agent loop ทุกรอบต้องส่ง history ทั้งหมดกลับไปใหม่ รอบที่ 10 ส่ง 10 รอบก่อนหน้า รอบที่ 20 ส่ง 20 รอบ ต้นทุนรวมจึงโตประมาณ <strong>กำลังสองของจำนวนรอบ</strong> caching ไม่ได้หยุดการส่งซ้ำ แต่ทำให้ส่วนที่ส่งซ้ำ <strong>ราคาถูกลงมาก</strong></p>
+<div class="table-wrap"><table>
+  <tr><th>รายการ</th><th>ราคาเทียบกับ input ปกติ</th></tr>
+  <tr><td>Cache read (โมเดลส่วนใหญ่)</td><td>ประมาณ 1/10</td></tr>
+  <tr><td>Cache read บน Claude Opus 5.5 และ Sonnet 5.5</td><td>1/20</td></tr>
+  <tr><td>Cache read บน Claude Fable 5.1 และ Mythos 5.1</td><td>1/40</td></tr>
+  <tr><td>Cache write (5 นาที)</td><td>1.25x</td></tr>
+</table></div>
+<p>ผลวัดจริงของต้นทุนเมื่อ <strong>ไม่ใช้</strong> caching เทียบกับใช้:</p>
+<div class="table-wrap"><table>
+  <tr><th>Workload</th><th>ไม่ cache แพงกว่า</th></tr>
+  <tr><td>SWE-bench Pro บน Opus 5.5</td><td>3.3x</td></tr>
+  <tr><td>SWE-bench Pro บน Sonnet 5.5</td><td>3.1x</td></tr>
+  <tr><td>Managed Agents session สั้นบน Haiku 5.5</td><td>1.7x</td></tr>
+  <tr><td>agent คัดแยก bug ขนาดเล็กบน Sonnet 5.5</td><td>7.3x</td></tr>
+</table></div>
+<div class="box key"><span class="tag">ตัวเลขสุขภาพ</span>
+  <p>agent loop ที่ปกติอ่าน input จาก cache ได้ค่ามัธยฐาน <strong>84%</strong> ถ้าต่ำกว่าราว <strong>80%</strong> แปลว่ามีอะไรบางอย่างทำให้ prefix ไม่ตรงกัน เช่น timestamp ใน system prompt, ลำดับ tool ที่สลับไปมา หรือเนื้อหาที่หมุนเวียน</p>
+</div>
+<p>หัวใจคือ <strong>prefix ต้องตรงกันทุก byte</strong> ดังนั้นวางของที่นิ่งไว้ข้างหน้า แล้ววาง breakpoint <code>cache_control</code> ไว้หลังส่วนที่นิ่ง:</p>
+<pre><code>system = [
+    {"type": "text",
+     "text": PRODUCT_MANUAL,                     # ~30,000 token ไม่เปลี่ยน
+     "cache_control": {"type": "ephemeral"}},
+]
+messages = [{"role": "user", "content": question}]   # ส่วนที่เปลี่ยนทุกครั้งอยู่หลัง breakpoint</code></pre>
+<p>สิ่งที่ <strong>ไม่ช่วย</strong>: ย้ายคู่มือไปไว้หลังเนื้อหาที่เปลี่ยน (prefix จะไม่ตรงทุกครั้ง), หมุนเวียนชิ้นส่วนของ prompt, หรือลด <code>max_tokens</code> (คุมแค่ output ไม่ได้ลดการประมวลผล input)</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"cache hit ต่ำ เพราะ cache หมดอายุ"</strong> ถ้าแต่ละรอบห่างกันแค่ไม่กี่วินาที อายุ cache ไม่ใช่ปัญหา ให้หาสิ่งที่ทำให้ prefix เปลี่ยน</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>agent loop ต้นทุนโตแบบกำลังสอง caching ทำให้ส่วนซ้ำถูกลง 10–40 เท่า · hit ปกติ ~84% ต่ำกว่า 80% = prefix พัง · ของนิ่งไว้หน้า + <code>cache_control</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 2</span>
+  <p>agent เขียนโค้ดของทีมอ่าน input จาก cache ได้แค่ 58% ทั้งที่แต่ละรอบห่างกันไม่กี่วินาที ควรสืบอะไรก่อน?</p>
+  <ol type="A">
+    <li>เปลี่ยนเป็น cache 1 ชั่วโมง</li>
+    <li>หาสิ่งที่ทำให้ prefix เปลี่ยนระหว่างรอบ เช่น timestamp หรือลำดับ tool ที่ไม่คงที่</li>
+    <li>ลด <code>max_tokens</code></li>
+    <li>ปิด caching เพราะไม่คุ้ม</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> รอบห่างกันไม่กี่วินาที cache ไม่ได้หมดอายุ hit rate ต่ำกว่า 80% ชี้ว่า prefix ไม่ตรงกัน ส่วน <code>max_tokens</code> ไม่เกี่ยวกับ cache</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 3</span>
+  <p>bot ซัพพอร์ตแนบคู่มือนโยบาย 25,000 token ที่ไม่เปลี่ยนเลยไปกับทุกคำถาม วิธีไหนลดต้นทุน input ได้จริง?</p>
+  <ol type="A">
+    <li>วาง breakpoint <code>cache_control</code> แบบ ephemeral หลังคู่มือ ให้ request ถัดไปอ่านจาก cache</li>
+    <li>แบ่งคู่มือเป็น 5 ชิ้นแล้วสุ่มส่งชิ้นละครั้ง</li>
+    <li>ย้ายคู่มือไปไว้หลังคำถามของผู้ใช้</li>
+    <li>ลด <code>max_tokens</code> เหลือ 300</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> B ทำให้ prefix เปลี่ยนตลอดและเสียข้อมูล C ทำให้ prefix ต่างกันทุกคำถาม D ไม่ได้ลดการประมวลผล input</p></details>
+</div>
+
+<!-- ============ 3 ============ -->
+<h3>3. เลือก cache 5 นาที หรือ 1 ชั่วโมง</h3>
+<ul>
+  <li><strong>ค่า default 5 นาที</strong> และนาฬิกาจะรีเฟรชฟรีทุกครั้งที่มีการอ่าน</li>
+  <li><strong>แบบ 1 ชั่วโมง</strong> ตั้งด้วย <code>"ttl": "1h"</code> ค่าเขียนแพงขึ้นเป็น <strong>2x</strong> ของ input (จาก 1.25x)</li>
+  <li>ถ้า miss ไม่ว่าแบบไหน จะโดนคิด prefix ทั้งก้อนในราคา write</li>
+</ul>
+<pre><code>{"type": "text", "text": KNOWLEDGE_BASE,
+ "cache_control": {"type": "ephemeral", "ttl": "1h"}}</code></pre>
+<p>เลือกจาก <strong>รูปแบบช่องว่างระหว่าง request</strong> ไม่ใช่ความยาวของ session:</p>
+<div class="table-wrap"><table>
+  <tr><th>สถานการณ์</th><th>ผลที่วัดได้</th></tr>
+  <tr><td>ราว 1 ใน 20 ของช่องว่างยาว 5 นาที–1 ชั่วโมง</td><td>cache 1 ชั่วโมงคุ้ม (จุดคุ้มทุนที่วัดได้ราว 1 ใน 30)</td></tr>
+  <tr><td>1 ใน 10 ของช่องว่างยาว 5 นาที–1 ชั่วโมง</td><td>ถ้ายังใช้ 5 นาที แพงกว่าถึง 54%</td></tr>
+  <tr><td>ทุกรอบห่างกันไม่กี่วินาที</td><td>5 นาทีถูกกว่า 1 ชั่วโมงราว 19% (บน Sonnet 5.5)</td></tr>
+</table></div>
+
+<h3>ทางเลือก: keep-alive</h3>
+<p>แทนที่จะจ่าย 1 ชั่วโมง อาจส่ง request เดิมซ้ำเพื่อต่ออายุ cache โดยตั้ง <code>max_tokens: 0</code> ไม่ใช้ <code>stream</code> prefix ตรงเดิมทุก byte และ header เดิม ส่งภายใน 4 นาที และทุก 4 นาทีหลังจากนั้น</p>
+<p>แต่จะถูก <strong>ปฏิเสธ</strong> ถ้า request ใช้ <code>thinking.type: "enabled"</code>, structured outputs, forced tool choice หรือ compaction ระดับบนสุด</p>
+<pre><code>keepalive = {**last_request, "max_tokens": 0}   # prefix และ header เดิมทุกอย่าง
+keepalive.pop("stream", None)
+# ส่งภายใน 4 นาที แล้วทุก 4 นาที</code></pre>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"session ยาวหลายชั่วโมง ต้องใช้ cache 1 ชั่วโมง"</strong> ไม่ใช่ สิ่งที่ตัดสินคือช่องว่างระหว่าง request ถ้าทุกรอบห่างกันไม่กี่วินาที 5 นาทีก็รีเฟรชตัวเองตลอดและถูกกว่า</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>5 นาที: write 1.25x รีเฟรชฟรีเมื่ออ่าน · 1 ชม.: write 2x · ดูสัดส่วนช่องว่าง 5 นาที–1 ชม. (คุ้มเมื่อเกินราว 1 ใน 30) · keep-alive ด้วย <code>max_tokens: 0</code> ทุก 4 นาที มีข้อห้ามหลายข้อ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 4</span>
+  <p>agent วิเคราะห์ข้อมูลรันต่อเนื่อง 3 ชั่วโมง แต่ละรอบห่างกัน 5–20 วินาที ไม่เคยหยุดนานกว่านั้น ควรใช้ cache แบบไหน?</p>
+  <ol type="A">
+    <li>คงค่า default 5 นาที</li>
+    <li>เปลี่ยนเป็น 1 ชั่วโมง เพราะ session ยาวกว่า 1 ชั่วโมง</li>
+    <li>ปิด cache แล้วใช้ keep-alive แทน</li>
+    <li>ใช้ 1 ชั่วโมงแล้วส่ง keep-alive ทุก 4 นาทีด้วย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> ช่องว่างสั้นมาก cache 5 นาทีถูกรีเฟรชทุกรอบอยู่แล้ว การจ่าย write 2x ไม่ได้อะไรเพิ่ม ความยาว session ไม่ใช่ตัวตัดสิน</p></details>
+</div>
+
+<!-- ============ 4 ============ -->
+<h3>4. Token hygiene</h3>
+<p>ตัดคำสั่งที่ซ้ำซ้อนและ output ที่เยิ่นเย้อ Claude จะ <strong>ไม่เดาเติม</strong> คำสั่งที่ไม่ชัด ดังนั้นให้เขียนชัดแต่กระชับ และ audit prompt ที่เขียนไว้สำหรับรุ่นเก่าใหม่ทุกครั้งที่ย้ายรุ่น</p>
+<p>การตัด input: ย่อขนาดรูปภาพ และเลื่อนการโหลด tool definition ด้วย <strong>tool search</strong> (ไม่ต้องแนบทุก tool ตั้งแต่แรก) ลดต้นทุนได้ <strong>26%</strong> (run 20 issue) และ <strong>21%</strong> (run ที่ยาวกว่า) <em>เพิ่มเติมจาก</em> caching</p>
+
+<h3>คันโยกสำหรับ session ยาว</h3>
+<div class="table-wrap"><table>
+  <tr><th>คันโยก</th><th>ทำอะไร</th><th>ตัวอย่างค่าที่ใช้</th></tr>
+  <tr><td><strong>Context editing</strong></td><td>ล้างผลของ tool เก่าๆ ทิ้งเมื่อเกิน threshold</td><td>เมื่อ prompt เกิน 20,000 token ให้ล้างอย่างน้อย 2,000 token โดยเก็บ tool use ล่าสุด 3 ครั้ง</td></tr>
+  <tr><td><strong>Compaction</strong></td><td>ย่อ history ให้สั้นลง</td><td>trigger ที่ 50,000 input token ในงานหนึ่ง</td></tr>
+  <tr><td><strong>Memory tool</strong></td><td>เก็บ state ที่ต้องอยู่รอดหลังการล้าง/ย่อ</td><td>บันทึกความคืบหน้าลงไฟล์</td></tr>
+</table></div>
+<div class="box key"><span class="tag">ข้อควรระวัง: context editing ไม่ได้ฟรีเสมอ</span>
+  <p>ใน run ที่ Anthropic วัดไว้ context editing <strong>แพงกว่าที่ประหยัดได้</strong> เพราะการล้างเนื้อหาทำให้ prompt เปลี่ยน cache ตั้งแต่จุดนั้นเป็นต้นไปจึงใช้ไม่ได้ ต้องวัด <strong>ต้นทุนต่อ task</strong> ทั้งแบบเปิดและปิดก่อนตัดสินใจ</p>
+</div>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ลด effort แล้ว context จะไม่เต็ม"</strong> ไม่ใช่ effort ไม่ได้หยุดการสะสมของ history</p>
+  <p><strong>"ย้าย session ยาวไป Batches ช่วยเรื่อง context"</strong> ไม่ใช่ batch ไม่ได้ถือ session ที่โต้ตอบสดๆ</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>คำสั่งชัดแต่สั้น · ย่อรูป + tool search ลดได้อีก 21–26% บนยอด caching · session ยาวใช้ context editing / compaction / memory tool แต่ context editing ทำ cache พัง ต้องวัดต้นทุนต่อ task</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 5</span>
+  <p>ทีมเปิด context editing ใน agent ที่ใช้ caching หนัก แล้วอยากรู้ว่าคุ้มไหม ควรทำอะไร?</p>
+  <ol type="A">
+    <li>ดูว่า context window เต็มช้าลงไหม ถ้าใช่ก็คุ้ม</li>
+    <li>วัดต้นทุนต่อ task ทั้งแบบเปิดและปิด context editing แล้วเทียบกัน</li>
+    <li>เปิดไว้เสมอ เพราะ token น้อยลงย่อมถูกลง</li>
+    <li>ลด effort ควบคู่ไปด้วย</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> การล้างเนื้อหาทำให้ cache หลังจุดนั้นใช้ไม่ได้ ต้นทุนรวมอาจสูงขึ้น ต้องวัดจริงด้วยต้นทุนต่อ task</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 6</span>
+  <p>agent รีวิวโค้ดทำงานยาวหลายชั่วโมงจน context ใกล้เต็ม เครื่องมือไหนช่วยจัดการ context ที่โตขึ้นได้ (เลือกทุกข้อที่ถูก)</p>
+  <ol type="A">
+    <li>Server-side compaction</li>
+    <li>Context editing</li>
+    <li>Memory tool</li>
+    <li>ลด effort เป็น low</li>
+    <li>ส่งงานผ่าน Message Batches</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, B, C</strong> compaction ย่อ history, context editing ล้างผล tool เก่า, memory tool เก็บ state ที่ต้องอยู่รอด ส่วน effort ไม่ได้หยุด context โต และ batch ไม่ได้ถือ session สด</p></details>
+</div>
+
+<!-- ============ 5 ============ -->
+<h3>5. Message Batches สำหรับงานที่รอได้</h3>
+<p>Batches API คิดราคา <strong>50%</strong> ของราคาปกติ ส่ง request เป็นชุด แต่ละตัวมี <code>custom_id</code> แล้ว poll ดูผล</p>
+<div class="table-wrap"><table>
+  <tr><th>หัวข้อ</th><th>รายละเอียด</th></tr>
+  <tr><td>เวลา</td><td>ส่วนใหญ่เสร็จภายใน 1 ชั่วโมง รับประกันภายใน 24 ชั่วโมง</td></tr>
+  <tr><td>เก็บผล</td><td>29 วัน</td></tr>
+  <tr><td>ขนาดต่อ batch</td><td>สูงสุด 100,000 request หรือ 256 MB</td></tr>
+  <tr><td>ไม่รองรับ</td><td><code>stream: true</code> และ Fast mode (<code>speed</code>)</td></tr>
+  <tr><td><code>max_tokens</code></td><td>ต้องอย่างน้อย 1 จึงใช้ <code>max_tokens: 0</code> pre-warm cache ไม่ได้</td></tr>
+  <tr><td>Spend limit</td><td>อาจเกินไปเล็กน้อย</td></tr>
+</table></div>
+<pre><code>client.messages.batches.create(requests=[
+    {"custom_id": f"ticket-{t.id}",
+     "params": {"model": MODEL, "max_tokens": 512,
+                "messages": [{"role": "user", "content": t.text}]}}
+    for t in archived_tickets
+])</code></pre>
+<p>งานที่เหมาะ: ให้คะแนน ticket เก่า 50,000 ใบตอนกลางคืนโดยไม่มีใครนั่งรอ งานที่ไม่เหมาะ: แชตสด หรืออะไรที่ผู้ใช้รอคำตอบ</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"Batch เร็วกว่าเพราะประมวลผลพร้อมกัน"</strong> ไม่ใช่ batch แลก latency กับราคา ไม่ได้เร็วขึ้น</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>ลด 50% · ส่วนใหญ่ &lt; 1 ชม. รับประกัน 24 ชม. · ผลเก็บ 29 วัน · 100,000 request / 256 MB · ห้าม stream, Fast mode, <code>max_tokens: 0</code></p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 7</span>
+  <p>ข้อไหน <strong>ถูกต้อง</strong> เกี่ยวกับ Message Batches? (เลือกทุกข้อที่ถูก)</p>
+  <ol type="A">
+    <li>request ที่ตั้ง <code>stream: true</code> จะถูกปฏิเสธ</li>
+    <li>ผลอาจใช้เวลาถึง 24 ชั่วโมง</li>
+    <li>ใช้ <code>max_tokens: 0</code> เพื่อ pre-warm cache ได้</li>
+    <li>Fast mode (<code>speed</code>) ใช้ร่วมกับ batch ไม่ได้</li>
+    <li>batch เร็วกว่าเรียก API ปกติ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A, B, D</strong> <code>max_tokens</code> ใน batch ต้องอย่างน้อย 1 (C ผิด) และ batch แลกความเร็วกับราคา (E ผิด)</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 8</span>
+  <p>ทุกคืนทีมต้องจัดหมวดรีวิวสินค้า 80,000 รายการเพื่อใช้ในรายงานตอนเช้า ไม่มีใครรอผลแบบ real-time วิธีไหนประหยัดที่สุดโดยไม่เสียคุณภาพ?</p>
+  <ol type="A">
+    <li>ส่งผ่าน Message Batches API</li>
+    <li>ใช้ Fast mode เพื่อให้เสร็จเร็ว</li>
+    <li>ลด effort เป็น low ทุก request</li>
+    <li>เปลี่ยนไปใช้รุ่นเล็กที่สุดโดยไม่ทดสอบ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> งานรอได้ ปริมาณอยู่ในขีดจำกัด ได้ส่วนลด 50% โดยคุณภาพเท่าเดิม C และ D เป็น trade-off ที่ยังไม่ได้วัด B ยิ่งแพงขึ้น</p></details>
+</div>
+
+<!-- ============ 6 ============ -->
+<h3>6. คันโยกแบบ trade-off: effort และรุ่นโมเดล</h3>
+<p>เมื่อเก็บ free wins หมดแล้ว ค่อยลอง <strong>ลด effort</strong> ตัวอย่างบน DRACO: Opus 5.5 ที่ effort low ใช้เวลาน้อยกว่า medium ถึง <strong>84%</strong> แต่คะแนนต่ำลง <strong>13.3 จุด</strong> ถ้าลดแล้วคุณภาพตก ให้คืน effort ก่อนลองวิธีอื่น</p>
+<p>สำหรับ <strong>รุ่นโมเดล</strong>:</p>
+<ul>
+  <li>เทียบด้วย <strong>ต้นทุนต่อ task ที่ทำสำเร็จ</strong> ไม่ใช่ราคาต่อ token รุ่นถูกที่ต้อง retry บ่อยอาจแพงกว่า</li>
+  <li>งานปริมาณสูงที่ตรวจผลได้ ลอง <strong>Haiku 5.5</strong> ก่อน</li>
+  <li>การอัปเกรดเป็นรุ่นใหม่กว่า <strong>แทบไม่มีต้นทุนเพิ่ม</strong> ในการวัดของ Anthropic ถ้ายังไม่ได้อยู่รุ่นล่าสุด ควรอัปเกรด</li>
+</ul>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p>effort low เร็วขึ้นมากแต่คะแนนลด (DRACO: −84% เวลา, −13.3 จุด) · คุณภาพตก → คืน effort · เทียบต้นทุนต่อ task สำเร็จ · งานตรวจได้ปริมาณสูง → Haiku 5.5 · อยู่รุ่นเก่า → อัปเกรด</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 9 (จับคู่)</span>
+  <p>จับคู่สถานการณ์กับการกระทำที่ถูก:</p>
+  <ol>
+    <li>ลด effort ไปเมื่อสัปดาห์ก่อน แล้วอัตรางานผ่านตกลง</li>
+    <li>รุ่น A ราคาต่อ token ถูกกว่ารุ่น B ครึ่งหนึ่ง แต่ต้อง retry บ่อยกว่ามาก</li>
+    <li>งานแท็กภาษาของข้อความหลายล้านรายการต่อวัน ตรวจผลด้วยโค้ดได้</li>
+    <li>ระบบยังใช้รุ่นที่ออกมาก่อนรุ่นปัจจุบันหนึ่งรุ่น</li>
+  </ol>
+  <p>ตัวเลือก: A) ลอง Haiku 5.5 พร้อม eval · B) อัปเกรดเป็นรุ่นล่าสุด · C) คืน effort เดิม · D) เทียบด้วยต้นทุนต่อ task ที่สำเร็จ</p>
+  <details><summary>ดูเฉลย</summary><p><strong>1-C, 2-D, 3-A, 4-B</strong></p></details>
+</div>
+
+<!-- ============ 7 ============ -->
+<h3>7. ตั้งขอบเขตการใช้จ่าย</h3>
+<p><code>max_tokens</code> คือ <strong>เพดานแข็ง</strong> ของ thinking + ข้อความตอบรวมกัน ไม่ใช่เป้าที่โมเดลพยายามเขียนให้ถึง ถ้าตั้งต่ำเกิน run จะถูกตัดกลางคันและเสียเงินฟรี คำแนะนำคือ <strong>ตั้งไว้ที่ 64,000</strong>: ในการทดสอบของ Anthropic มีเพียง 2 จากราว 14,000 turn ที่เกินค่านี้ และต้นทุนต่อ task ที่สำเร็จแทบไม่เปลี่ยน</p>
+<p>การคุมการใช้จ่ายของ agent ราคาแพงมีหลายชั้น:</p>
+<ul>
+  <li><strong>Session budget</strong> ของ Managed Agents จำกัดต่อ session</li>
+  <li><strong>Workspace spend limit</strong> เป็นตาข่ายรองรับระดับบัญชี</li>
+  <li><strong>Task budget</strong> (beta) สำหรับโมเดลรุ่นใหม่</li>
+  <li><strong>บอกเวลาที่ผ่านไปให้โมเดลรู้</strong> ลดเวลารันได้ 7%–47% แลกกับคะแนนลดลงไม่กี่จุด</li>
+</ul>
+
+<h3>นโยบาย re-run: low ก่อน แล้ว re-run ที่ high</h3>
+<p>รันทุก task ที่ effort low ก่อน แล้วเอาเฉพาะตัวที่ fail ไปรันใหม่ที่ high <strong>ใช้ได้ก็ต่อเมื่อมีการตรวจอัตโนมัติ</strong> (เทสต์ หรือ verifier) บอกได้ว่าตัวไหน fail</p>
+<div class="table-wrap"><table>
+  <tr><th>นโยบาย</th><th>อัตราสำเร็จ</th><th>ต้นทุนต่อ task</th></tr>
+  <tr><td>Low + re-run ตัวที่ fail ที่ high</td><td>~97%</td><td>~$0.17</td></tr>
+  <tr><td>High ทุกตัว</td><td>95.3%</td><td>$0.29</td></tr>
+  <tr><td>Medium + re-run ตัวที่ fail ที่ high</td><td>~97%</td><td>~$0.24</td></tr>
+</table></div>
+<pre><code>results = {t.id: run(t, effort="low") for t in tasks}
+failed = [t for t in tasks if not tests_pass(results[t.id])]   # ต้องมีตัวตรวจอัตโนมัติ
+for t in failed:
+    results[t.id] = run(t, effort="high")</code></pre>
+<p>งานปลายเปิดอย่างการเขียนข้อความการตลาดไม่มีตัวตรวจอัตโนมัติ นโยบายนี้จึงใช้ไม่ได้</p>
+
+<div class="box trap"><span class="tag">เข้าใจผิดบ่อย</span>
+  <p><strong>"ตั้ง <code>max_tokens</code> ต่ำๆ ไว้ ประหยัดเงิน"</strong> ไม่ใช่ มันเป็นเพดาน ไม่ใช่เป้า ตั้งต่ำเกินทำให้ run ถูกตัดและต้องรันใหม่ ตั้ง 64,000 แล้วต้นทุนต่อ task แทบเท่าเดิม</p>
+  <p><strong>"re-run ที่ high ใช้ได้กับทุกงาน"</strong> ไม่ใช่ ต้องมีตัวตรวจอัตโนมัติชี้ว่าอะไร fail</p>
+</div>
+
+<div class="box sum"><span class="tag">สรุปสั้นๆ</span><p><code>max_tokens</code> = เพดาน ตั้ง 64,000 · คุมด้วย session budget, spend limit, task budget, บอกเวลาที่ผ่านไป · low + re-run fail ที่ high ถูกและดีกว่า high ทั้งหมด แต่ต้องมีตัวตรวจอัตโนมัติ</p></div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 10</span>
+  <p>agent แก้ bug ของทีมตั้ง <code>max_tokens: 4096</code> พบว่าหลาย run ถูกตัดกลางทางขณะกำลัง thinking ต้องรันใหม่บ่อย ควรทำอะไร?</p>
+  <ol type="A">
+    <li>เพิ่ม <code>max_tokens</code> เป็น 64,000</li>
+    <li>ลด <code>max_tokens</code> ลงอีกเพื่อบังคับให้คิดสั้น</li>
+    <li>ปิด thinking ทั้งหมด</li>
+    <li>ย้ายไป Batches API</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>A</strong> <code>max_tokens</code> เป็นเพดานของ thinking + คำตอบ การตั้งต่ำทำให้ run เสียเปล่า ที่ 64,000 แทบไม่มี turn เกิน และต้นทุนต่อ task สำเร็จใกล้เดิม</p></details>
+</div>
+
+<div class="checkpoint">
+  <span class="tag">Checkpoint 11</span>
+  <p>ทีมมีงานสองแบบ: (1) แก้ bug ที่มี unit test ตรวจผล (2) เขียนคำโปรยสินค้า อยากใช้นโยบาย "รัน low ก่อน แล้ว re-run ตัวที่ fail ที่ high" ใช้กับงานไหนได้?</p>
+  <ol type="A">
+    <li>ทั้งสองงาน</li>
+    <li>เฉพาะงานแก้ bug เพราะมีเทสต์บอกว่าตัวไหน fail</li>
+    <li>เฉพาะงานคำโปรย เพราะงานสร้างสรรค์ต้องใช้ effort สูง</li>
+    <li>ไม่ได้ทั้งคู่ ต้องรัน high ทั้งหมดเสมอ</li>
+  </ol>
+  <details><summary>ดูเฉลย</summary><p><strong>B</strong> นโยบายนี้พึ่งตัวตรวจอัตโนมัติ งานคำโปรยไม่มีตัวตรวจว่า fail ส่วนการรัน high ทั้งหมดแพงกว่า ($0.29 เทียบ ~$0.17) และสำเร็จน้อยกว่า</p></details>
+</div>
+
+<h3>Sources</h3>
+<ul>
+  <li><a href="https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence">Claude Docs: Optimizing for cost and intelligence</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching">Claude Docs: Prompt caching</a></li>
+  <li><a href="https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency">Claude Docs: Reduce latency</a></li>
+  <li><a href="https://platform.claude.com/cookbook/tool-use-memory-cookbook">Claude Cookbook: Memory tool</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/effort">Claude Docs: Effort</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/batch-processing">Claude Docs: Batch processing</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/context-windows">Claude Docs: Context windows</a></li>
+</ul>
+</section>
